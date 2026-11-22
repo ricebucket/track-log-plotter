@@ -13,6 +13,8 @@ const STYLE = {
 
 /** Answers every request to another host locally, so no test touches a real server. */
 export async function stubNetwork(page: Page) {
+  // Asks the map to report how many track lines it drew (see MapView).
+  await page.addInitScript(() => { (window as unknown as { tlpTestHooks: boolean }).tlpTestHooks = true; });
   await page.route((url) => url.hostname !== 'localhost', async (route) => {
     const url = route.request().url();
     if (url.includes('/styles/')) return route.fulfill({ json: STYLE });

@@ -79,11 +79,18 @@ export function parseGpx(text: string): ParsedTrack {
   let voidCount = 0;
   let anyKnownSpeed = false;
   let anyVendorSpeed = false;
+  // How deep inside <extensions> (or a vendor container) and Garmin's
+  // TrackPointExtension we are; kept as counters so no tag rescans the stack.
+  let extDepth = 0;
+  let garminDepth = 0;
+  const isGarmin = (name: string) => name.startsWith('TrackPointExtension');
 
   const result = scanXml(text, {
     open(name, attrs, line) {
       stack.push(name);
       buf = '';
+      if (EXT_CONTAINERS.has(name)) extDepth++;
+      if (isGarmin(name)) garminDepth++;
       if (name === 'gpx' && stack.length === 1) creator = attrs.get('creator')?.trim() || null;
       else if (name === 'trk') b.breakSegment();
       else if (name === 'trkseg') b.breakSegment();
@@ -97,6 +104,11 @@ export function parseGpx(text: string): ParsedTrack {
         // Mismatched tag: recover by unwinding to the matching open tag.
         const at = stack.lastIndexOf(name);
         if (at >= 0) stack.length = at;
+        extDepth = stack.filter((s) => EXT_CONTAINERS.has(s)).length;
+        garminDepth = stack.filter(isGarmin).length;
+      } else {
+        if (EXT_CONTAINERS.has(name)) extDepth--;
+        if (isGarmin(name)) garminDepth--;
       }
       const parent = stack[stack.length - 1];
       const v = buf.trim();
@@ -125,8 +137,8 @@ export function parseGpx(text: string): ParsedTrack {
       }
       if (name === 'name' && parent === 'trk' && trkName === null && v) { trkName = v; return; }
       if (!p) return;
-      const inExt = stack.some((s) => EXT_CONTAINERS.has(s));
-      const garmin = stack.some((s) => s.startsWith('TrackPointExtension'));
+      const inExt = extDepth > 0;
+      const garmin = garminDepth > 0;
       const direct = parent === 'trkpt' || parent === 'wpt';
       switch (name) {
         case 'time': if (direct) { const r = parseIsoTime(v); p.t = r.t; if (!r.zoned) noZone = true; } break;
@@ -145,7 +157,7 @@ export function parseGpx(text: string): ParsedTrack {
           else if (inExt) { p.speedVendor = Number(v); anyVendorSpeed = true; }
           break;
         default:
-          if (inExt && !POINT_FIELDS.has(name) && !EXT_CONTAINERS.has(name) && !name.startsWith('TrackPointExtension') && v) {
+          if (inExt && !POINT_FIELDS.has(name) && !EXT_CONTAINERS.has(name) && !isGarmin(name) && v) {
             ignored.add(IGNORED_NAMES[name.toLowerCase()] ?? name);
           }
       }

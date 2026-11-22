@@ -1,15 +1,13 @@
 import { useEffect, useRef } from 'preact/hooks';
-import { effect } from '@preact/signals';
-import { Map as MlMap, setWorkerUrl, type GeoJSONSource, type StyleSpecification } from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
+import { effect, signal } from '@preact/signals';
+import type { GeoJSONSource, Map as MlMap, StyleSpecification } from 'maplibre-gl';
 // MapLibre looks for its worker next to its own module, which no longer holds
 // once Vite bundles it. Have Vite bundle the worker too, and say where it is.
 import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-
-setWorkerUrl(mapWorkerUrl);
 import * as S from '../state/store';
+import { trackUid, type TrackItem } from '../state/logic';
 import { BASEMAPS, TEXT_FONT, ZH_LABEL } from './basemaps';
-import { boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildPaths, buildRuns, type MapCtx } from './geojson';
+import { boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildPaths, buildRuns } from './geojson';
 import { CASING, GAP } from '../color/palettes';
 import { haversine } from '../derive/geo';
 import { mapApi, mapFailed, tipXY } from './bridge';
@@ -25,16 +23,23 @@ function plus(base: number, add: number | unknown[]) {
 
 const SOURCES = ['tlp-runs', 'tlp-paths', 'tlp-gaps', 'tlp-fixes', 'tlp-flags', 'tlp-cursors'] as const;
 const EMPTY = { type: 'FeatureCollection', features: [] } as const;
+/** Fix glyphs draw from zoom 17; their data is sent a little before that. */
+const FIX_GLYPH_ZOOM = 17;
+const FIX_DATA_ZOOM = 16.5;
+/** The selected track is drawn again on top of the others, picked by global state. */
+const SELECTED = ['==', ['get', 'id'], ['global-state', 'sel']];
 
-function ctx(): MapCtx {
-  return { dark: S.dark.value, single: S.single.value, selectedId: S.selected.value?.id ?? null, scaleFor: S.scaleFor };
-}
+const visKey = (vis: TrackItem[]) => vis.map((x) => `${x.id}:${trackUid(x.track)}:${x.fam}`).join('|');
 
+let arrow: ImageData | null = null;
+
+/** The heading-arrow icon, drawn once. A CPU-backed canvas keeps getImageData from forcing a GPU readback. */
 function arrowImage(): ImageData {
+  if (arrow) return arrow;
   const s = 32;
   const c = document.createElement('canvas');
   c.width = c.height = s;
-  const g = c.getContext('2d')!;
+  const g = c.getContext('2d', { willReadFrequently: true })!;
   g.beginPath();
   g.moveTo(9, 7); g.lineTo(24, 16); g.lineTo(9, 25); g.lineTo(13, 16); g.closePath();
   g.fillStyle = '#ffffff';
@@ -43,7 +48,8 @@ function arrowImage(): ImageData {
   g.lineJoin = 'round';
   g.fill();
   g.stroke();
-  return g.getImageData(0, 0, s, s);
+  arrow = g.getImageData(0, 0, s, s);
+  return arrow;
 }
 
 function addOwnLayers(map: MlMap) {
@@ -51,21 +57,25 @@ function addOwnLayers(map: MlMap) {
   if (!map.hasImage('tlp-arrow')) map.addImage('tlp-arrow', arrowImage(), { pixelRatio: 2 });
   map.addLayer({ id: 'tlp-fade', type: 'background', paint: { 'background-color': d ? '#000000' : '#ffffff', 'background-opacity': S.dim.value } });
   for (const id of SOURCES) map.addSource(id, { type: 'geojson', data: EMPTY as never });
-  const round = { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'z'] } as const;
-  map.addLayer({ id: 'tlp-halo', type: 'line', source: 'tlp-runs', layout: round as never, paint: { 'line-color': ['get', 'hc'], 'line-opacity': ['get', 'ho'], 'line-width': zoomed(['get', 'hx']) as never } });
+  const round = { 'line-cap': 'round', 'line-join': 'round' } as const;
+  const casing = { 'line-color': d ? CASING.dark : CASING.light, 'line-width': zoomed(2.6) as never };
+  const line = { 'line-color': ['get', 'c'], 'line-width': zoomed(0) as never };
+  map.addLayer({ id: 'tlp-halo', type: 'line', source: 'tlp-runs', layout: round, paint: { 'line-color': ['get', 'hc'], 'line-opacity': ['get', 'ho'], 'line-width': zoomed(['get', 'hx']) as never } });
   map.addLayer({ id: 'tlp-gap', type: 'line', source: 'tlp-gaps', layout: { 'line-cap': 'round' }, paint: { 'line-color': d ? GAP.dark : GAP.light, 'line-width': 2.4, 'line-dasharray': [0.2, 2] } });
-  map.addLayer({ id: 'tlp-casing', type: 'line', source: 'tlp-paths', layout: round as never, paint: { 'line-color': d ? CASING.dark : CASING.light, 'line-width': zoomed(2.6) as never } });
-  map.addLayer({ id: 'tlp-line', type: 'line', source: 'tlp-runs', layout: round as never, paint: { 'line-color': ['get', 'c'], 'line-width': zoomed(0) as never } });
+  map.addLayer({ id: 'tlp-casing', type: 'line', source: 'tlp-paths', layout: round, paint: casing as never });
+  map.addLayer({ id: 'tlp-line', type: 'line', source: 'tlp-runs', layout: round, paint: line as never });
+  map.addLayer({ id: 'tlp-casing-sel', type: 'line', source: 'tlp-paths', filter: SELECTED as never, layout: round, paint: casing as never });
+  map.addLayer({ id: 'tlp-line-sel', type: 'line', source: 'tlp-runs', filter: SELECTED as never, layout: round, paint: line as never });
   map.addLayer({
     id: 'tlp-arrows', type: 'symbol', source: 'tlp-paths', minzoom: 14,
-    layout: { 'symbol-placement': 'line', 'symbol-spacing': 70, 'icon-image': 'tlp-arrow', 'icon-size': ['interpolate', ['linear'], ['zoom'], 14, 0.7, 18, 1], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': false, 'icon-padding': 1 },
+    layout: { 'symbol-placement': 'line', 'symbol-spacing': 70, 'icon-image': 'tlp-arrow', 'icon-size': ['interpolate', ['linear'], ['zoom'], 14, 0.7, 18, 1], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': false, 'icon-padding': 1, visibility: S.showArrows.value ? 'visible' : 'none' },
   });
-  map.addLayer({ id: 'tlp-fix-ring', type: 'circle', source: 'tlp-fixes', minzoom: 17, paint: { 'circle-radius': 8, 'circle-color': '#ffffff', 'circle-stroke-color': ['get', 'r'], 'circle-stroke-width': 2.2 } });
-  map.addLayer({ id: 'tlp-fix-text', type: 'symbol', source: 'tlp-fixes', minzoom: 17, layout: { 'text-field': ['get', 's'], 'text-font': TEXT_FONT, 'text-size': 9, 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#101820' } });
+  map.addLayer({ id: 'tlp-fix-ring', type: 'circle', source: 'tlp-fixes', minzoom: FIX_GLYPH_ZOOM, paint: { 'circle-radius': 8, 'circle-color': '#ffffff', 'circle-stroke-color': ['get', 'r'], 'circle-stroke-width': 2.2 } });
+  map.addLayer({ id: 'tlp-fix-text', type: 'symbol', source: 'tlp-fixes', minzoom: FIX_GLYPH_ZOOM, layout: { 'text-field': ['get', 's'], 'text-font': TEXT_FONT, 'text-size': 9, 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#101820' } });
   map.addLayer({ id: 'tlp-flag', type: 'circle', source: 'tlp-flags', paint: { 'circle-radius': 10, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } });
   map.addLayer({ id: 'tlp-flag-text', type: 'symbol', source: 'tlp-flags', layout: { 'text-field': ['get', 'label'], 'text-font': TEXT_FONT, 'text-size': 10, 'text-allow-overlap': true }, paint: { 'text-color': '#ffffff' } });
-  map.addLayer({ id: 'tlp-cursor-ring', type: 'circle', source: 'tlp-cursors', paint: { 'circle-radius': 10, 'circle-color': '#ffffff' } });
-  map.addLayer({ id: 'tlp-cursor', type: 'circle', source: 'tlp-cursors', paint: { 'circle-radius': 7, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#101820', 'circle-stroke-width': 3 } });
+  map.addLayer({ id: 'tlp-cursor-ring', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 10, 'circle-color': '#ffffff' } });
+  map.addLayer({ id: 'tlp-cursor', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 7, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#101820', 'circle-stroke-width': 3 } });
 }
 
 /** Vector basemaps label places in Chinese when the app is in Chinese. */
@@ -82,169 +92,219 @@ function setData(map: MlMap, id: (typeof SOURCES)[number], data: unknown) {
   (map.getSource(id) as GeoJSONSource | undefined)?.setData(data as never);
 }
 
+type MapLibre = typeof import('maplibre-gl');
+
+/** Creates the map and keeps it in step with the app. Returns the cleanup. */
+function start(ml: MapLibre, container: HTMLDivElement): () => void {
+  ml.setWorkerUrl(mapWorkerUrl);
+  let map: MlMap;
+  try {
+    map = new ml.Map({
+      container,
+      style: BASEMAPS[S.basemap.value].style as string | StyleSpecification,
+      center: [-73.9655, 40.7705],
+      zoom: 12,
+      attributionControl: false,
+      maxPitch: 0,
+      localIdeographFontFamily: "'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Noto Sans SC', sans-serif",
+    });
+  } catch {
+    mapFailed.value = true;
+    return () => {};
+  }
+  // Becomes true each time a style (and our layers) is ready; effects wait for it.
+  const ready = signal(false);
+  const zoomedIn = signal(false);
+  // Last data sent to each source, so unchanged data is never sent again.
+  const sent: Record<string, string> = {};
+  // Whether the drawn-lines count (for the browser tests) needs refreshing.
+  let countStale = true;
+  const disposers: (() => void)[] = [];
+
+  // Keep fitted tracks clear of whatever covers the map: the side panel (or
+  // the bottom sheet on a phone), the timeline and the map buttons.
+  const padding = () => {
+    const W = window.innerWidth, H = window.innerHeight;
+    const p = { top: 70, right: W <= 720 ? 70 : 80, bottom: 40, left: 40 };
+    const panel = document.querySelector('.panel')?.getBoundingClientRect();
+    const tl = document.querySelector('.timeline')?.getBoundingClientRect();
+    if (panel) {
+      if (panel.width < W * 0.8) p.left = Math.max(p.left, panel.right + 24);
+      else p.bottom = Math.max(p.bottom, H - panel.top + 24);
+    }
+    if (tl) p.bottom = Math.max(p.bottom, H - tl.top + 24);
+    // Never pad more than the map can give.
+    const shrink = (a: 'left' | 'right' | 'top' | 'bottom', b: 'left' | 'right' | 'top' | 'bottom', size: number) => {
+      const over = p[a] + p[b] - (size - 80);
+      if (over > 0) { const k = (size - 80) / (p[a] + p[b]); p[a] = Math.floor(p[a] * k); p[b] = Math.floor(p[b] * k); }
+    };
+    shrink('left', 'right', W);
+    shrink('top', 'bottom', H);
+    return p;
+  };
+  const fit = () => {
+    const b = boundsOf(S.visible.value);
+    if (!b) return;
+    map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: padding(), maxZoom: 16, duration: 500 });
+  };
+  mapApi.zoomIn = () => map.zoomIn();
+  mapApi.zoomOut = () => map.zoomOut();
+  mapApi.north = () => map.resetNorth();
+  mapApi.fit = fit;
+
+  /** Sends data to a source only when its key changed since the last send. */
+  const send = (id: (typeof SOURCES)[number], key: string, build: () => unknown) => {
+    if (sent[id] === key) return;
+    sent[id] = key;
+    setData(map, id, build());
+    countStale = true;
+  };
+
+  const placeTip = () => {
+    const sel = S.selected.value;
+    const t = S.cursorT.value;
+    if (!sel || !sel.vis || t === null) { tipXY.value = null; return; }
+    const cols = sel.track.cols;
+    const tt = S.trackTime(sel.id, t);
+    if (tt < cols.t[0] - 5000 || tt > cols.t[cols.n - 1] + 5000) { tipXY.value = null; return; }
+    let lo = 0, hi = cols.n - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cols.t[m] <= tt) lo = m; else hi = m; }
+    const i = tt - cols.t[lo] <= cols.t[hi] - tt ? lo : hi;
+    const p = map.project([cols.lon[i], cols.lat[i]]);
+    tipXY.value = { x: p.x, y: p.y };
+  };
+
+  map.on('style.load', () => {
+    addOwnLayers(map);
+    applyLabels(map);
+    for (const k of Object.keys(sent)) delete sent[k];
+    countStale = true;
+    ready.value = true;
+  });
+  map.on('move', placeTip);
+  map.on('zoomend', () => { zoomedIn.value = map.getZoom() >= FIX_DATA_ZOOM; });
+  map.on('moveend', () => {
+    countStale = true;
+    const c = map.getCenter();
+    S.mapView.value = { lat: c.lat, lon: c.lng, zoom: map.getZoom(), bearing: map.getBearing() };
+  });
+  map.on('error', () => { /* a tile failed to load; the map keeps going */ });
+  // How many track lines are drawn, for the browser tests only (they set
+  // window.tlpTestHooks). Counting queries every drawn feature, so it runs only
+  // after the data, view or selection changed.
+  const counting = !!(window as unknown as { tlpTestHooks?: boolean }).tlpTestHooks;
+  map.on('idle', () => {
+    if (!counting || !ready.peek() || !countStale) return;
+    countStale = false;
+    try {
+      container.dataset.lines = String(map.queryRenderedFeatures({ layers: ['tlp-line'] }).length);
+      container.dataset.selLines = String(map.queryRenderedFeatures({ layers: ['tlp-line-sel'] }).length);
+    } catch { /* style changing */ }
+  });
+
+  // Clicking a track line selects it and moves the cursor to the nearest fix.
+  map.on('click', (e) => {
+    if (!ready.peek()) return;
+    const hit = map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers: ['tlp-line', 'tlp-casing'] });
+    const id = hit[0]?.properties?.id as string | undefined;
+    const it = id ? S.items.peek().find((x) => x.id === id) : undefined;
+    if (!it) return;
+    S.select(it.id);
+    const c = it.track.cols;
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < c.n; i++) {
+      const dd = haversine(e.lngLat.lat, e.lngLat.lng, c.lat[i], c.lon[i]);
+      if (dd < bd) { bd = dd; best = i; }
+    }
+    S.seek(it.id, c.t[best]);
+  });
+  // Hover listeners query features on every mouse move, so listen on one layer only.
+  map.on('mouseenter', 'tlp-line', () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'tlp-line', () => { map.getCanvas().style.cursor = ''; });
+
+  let lastStyle = S.basemap.peek() + S.lang.peek();
+  disposers.push(effect(() => {
+    const key = S.basemap.value + S.lang.value;
+    if (key === lastStyle) return;
+    lastStyle = key;
+    ready.value = false;
+    map.setStyle(BASEMAPS[S.basemap.peek()].style as string | StyleSpecification, { diff: false });
+  }));
+
+  // Each source has its own effect, reading only what it depends on, so a
+  // change to one input never rebuilds data for the others.
+  disposers.push(effect(() => {
+    if (!ready.value) return;
+    const vis = S.visible.value, single = S.single.value, dark = S.dark.value;
+    const scaleKey = vis.map((x) => [x.color, x.halo].map((k) => (k === 'none' || k === 'off' ? k : `${k}=${S.scaleFor(x.track, k).edges.join(',')}`)).join('/')).join('|');
+    send('tlp-runs', `${visKey(vis)}#${scaleKey}#${single}#${dark}`, () => buildRuns(vis, { dark, single, selectedId: null, scaleFor: S.scaleFor }));
+  }));
+  disposers.push(effect(() => {
+    if (!ready.value) return;
+    const vis = S.visible.value;
+    send('tlp-paths', visKey(vis), () => buildPaths(vis, { dark: false, single: false, selectedId: null, scaleFor: S.scaleFor }));
+    send('tlp-flags', visKey(vis), () => buildFlags(vis, { dark: false, single: false, selectedId: null, scaleFor: S.scaleFor }));
+  }));
+  disposers.push(effect(() => {
+    if (!ready.value) return;
+    const vis = S.visible.value, on = S.showGaps.value;
+    send('tlp-gaps', `${visKey(vis)}#${on}`, () => (on ? buildGaps(vis) : EMPTY));
+  }));
+  disposers.push(effect(() => {
+    if (!ready.value) return;
+    // Up to 100,000s of points: only send them when zoomed in enough to draw them.
+    const vis = S.visible.value, on = S.showFixes.value && zoomedIn.value;
+    send('tlp-fixes', on ? visKey(vis) : 'off', () => (on ? buildFixPoints(vis, { dark: false, single: false, selectedId: null, scaleFor: S.scaleFor }) : EMPTY));
+  }));
+  disposers.push(effect(() => {
+    if (!ready.value) return;
+    map.setLayoutProperty('tlp-arrows', 'visibility', S.showArrows.value ? 'visible' : 'none');
+  }));
+  disposers.push(effect(() => {
+    if (!ready.value) return;
+    map.setGlobalStateProperty('sel', S.selected.value?.id ?? '');
+    countStale = true;
+  }));
+  disposers.push(effect(() => {
+    if (!ready.value) return;
+    const ctx = { dark: S.dark.value, single: S.single.value, selectedId: S.selected.value?.id ?? null, scaleFor: S.scaleFor };
+    setData(map, 'tlp-cursors', buildCursors(S.visible.value, S.offsets.value, S.cursorT.value, ctx));
+    placeTip();
+  }));
+  disposers.push(effect(() => {
+    const v = S.dim.value;
+    if (ready.value && map.getLayer('tlp-fade')) map.setPaintProperty('tlp-fade', 'background-opacity', v);
+  }));
+  let lastFit = S.fitRequest.peek();
+  disposers.push(effect(() => {
+    const f = S.fitRequest.value;
+    if (f === lastFit) return;
+    lastFit = f;
+    // Fit after the panel and timeline have rendered, so the padding sees them.
+    if (ready.peek()) requestAnimationFrame(() => requestAnimationFrame(fit)); else map.once('idle', fit);
+  }));
+
+  const ro = new ResizeObserver(() => map.resize());
+  ro.observe(container);
+
+  return () => {
+    ro.disconnect();
+    disposers.forEach((d) => d());
+    map.remove();
+  };
+}
+
 export function MapView() {
   const el = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let map: MlMap;
-    try {
-      map = new MlMap({
-        container: el.current!,
-        style: BASEMAPS[S.basemap.value].style as string | StyleSpecification,
-        center: [-73.9655, 40.7705],
-        zoom: 12,
-        attributionControl: false,
-        maxPitch: 0,
-        localIdeographFontFamily: "'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Noto Sans SC', sans-serif",
-      });
-    } catch {
-      mapFailed.value = true;
-      return;
-    }
-    let ready = false;
-    const disposers: (() => void)[] = [];
-
-    // Keep fitted tracks clear of whatever covers the map: the side panel (or
-    // the bottom sheet on a phone), the timeline and the map buttons.
-    const padding = () => {
-      const W = window.innerWidth, H = window.innerHeight;
-      const p = { top: 70, right: W <= 720 ? 70 : 80, bottom: 40, left: 40 };
-      const panel = document.querySelector('.panel')?.getBoundingClientRect();
-      const tl = document.querySelector('.timeline')?.getBoundingClientRect();
-      if (panel) {
-        if (panel.width < W * 0.8) p.left = Math.max(p.left, panel.right + 24);
-        else p.bottom = Math.max(p.bottom, H - panel.top + 24);
-      }
-      if (tl) p.bottom = Math.max(p.bottom, H - tl.top + 24);
-      // Never pad more than the map can give.
-      const shrink = (a: 'left' | 'right' | 'top' | 'bottom', b: 'left' | 'right' | 'top' | 'bottom', size: number) => {
-        const over = p[a] + p[b] - (size - 80);
-        if (over > 0) { const k = (size - 80) / (p[a] + p[b]); p[a] = Math.floor(p[a] * k); p[b] = Math.floor(p[b] * k); }
-      };
-      shrink('left', 'right', W);
-      shrink('top', 'bottom', H);
-      return p;
-    };
-    const fit = () => {
-      const b = boundsOf(S.visible.value);
-      if (!b) return;
-      map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: padding(), maxZoom: 16, duration: 500 });
-    };
-    mapApi.zoomIn = () => map.zoomIn();
-    mapApi.zoomOut = () => map.zoomOut();
-    mapApi.north = () => map.resetNorth();
-    mapApi.fit = fit;
-
-    const pushTracks = () => {
-      if (!ready) return;
-      const c = ctx();
-      const vis = S.visible.value;
-      setData(map, 'tlp-runs', buildRuns(vis, c));
-      setData(map, 'tlp-paths', buildPaths(vis, c));
-      setData(map, 'tlp-gaps', S.showGaps.value ? buildGaps(vis) : EMPTY);
-      setData(map, 'tlp-fixes', S.showFixes.value ? buildFixPoints(vis, c) : EMPTY);
-      setData(map, 'tlp-flags', buildFlags(vis, c));
-      map.setLayoutProperty('tlp-arrows', 'visibility', S.showArrows.value ? 'visible' : 'none');
-    };
-    const pushCursor = () => {
-      if (!ready) return;
-      setData(map, 'tlp-cursors', buildCursors(S.visible.value, S.offsets.value, S.cursorT.value, ctx()));
-      placeTip();
-    };
-    const placeTip = () => {
-      const sel = S.selected.value;
-      const t = S.cursorT.value;
-      if (!sel || !sel.vis || t === null) { tipXY.value = null; return; }
-      const cols = sel.track.cols;
-      const tt = S.trackTime(sel.id, t);
-      if (tt < cols.t[0] - 5000 || tt > cols.t[cols.n - 1] + 5000) { tipXY.value = null; return; }
-      let lo = 0, hi = cols.n - 1;
-      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cols.t[m] <= tt) lo = m; else hi = m; }
-      const i = tt - cols.t[lo] <= cols.t[hi] - tt ? lo : hi;
-      const p = map.project([cols.lon[i], cols.lat[i]]);
-      tipXY.value = { x: p.x, y: p.y };
-    };
-
-    map.on('style.load', () => {
-      addOwnLayers(map);
-      applyLabels(map);
-      ready = true;
-      pushTracks();
-      pushCursor();
-    });
-    map.on('move', placeTip);
-    map.on('moveend', () => {
-      const c = map.getCenter();
-      S.mapView.value = { lat: c.lat, lon: c.lng, zoom: map.getZoom(), bearing: map.getBearing() };
-    });
-    map.on('error', () => { /* a tile failed to load; the map keeps going */ });
-    // How many track lines are drawn, for the browser tests.
-    map.on('idle', () => {
-      if (!ready || !el.current) return;
-      try { el.current.dataset.lines = String(map.queryRenderedFeatures({ layers: ['tlp-line'] }).length); } catch { /* style changing */ }
-    });
-
-    // Clicking a track line selects it and moves the cursor to the nearest fix.
-    map.on('click', (e) => {
-      if (!ready) return;
-      const hit = map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers: ['tlp-line', 'tlp-casing'] });
-      const id = hit[0]?.properties?.id as string | undefined;
-      const it = id ? S.items.value.find((x) => x.id === id) : undefined;
-      if (!it) return;
-      S.select(it.id);
-      const c = it.track.cols;
-      let best = 0, bd = Infinity;
-      for (let i = 0; i < c.n; i++) {
-        const dd = haversine(e.lngLat.lat, e.lngLat.lng, c.lat[i], c.lon[i]);
-        if (dd < bd) { bd = dd; best = i; }
-      }
-      S.seek(it.id, c.t[best]);
-    });
-    for (const layer of ['tlp-line', 'tlp-casing']) {
-      map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
-    }
-
-    let lastStyle = S.basemap.value + S.lang.value;
-    disposers.push(effect(() => {
-      const key = S.basemap.value + S.lang.value;
-      if (key === lastStyle) return;
-      lastStyle = key;
-      ready = false;
-      map.setStyle(BASEMAPS[S.basemap.value].style as string | StyleSpecification, { diff: false });
-    }));
-    disposers.push(effect(() => {
-      // Read every input so the effect re-runs when any of them changes.
-      void S.visible.value; void S.scales.value; void S.single.value; void S.dark.value; void S.selected.value;
-      void S.showArrows.value; void S.showFixes.value; void S.showGaps.value;
-      pushTracks();
-      pushCursor();
-    }));
-    disposers.push(effect(() => {
-      void S.cursorT.value; void S.offsets.value;
-      pushCursor();
-    }));
-    disposers.push(effect(() => {
-      const v = S.dim.value;
-      if (ready && map.getLayer('tlp-fade')) map.setPaintProperty('tlp-fade', 'background-opacity', v);
-    }));
-    let lastFit = S.fitRequest.value;
-    disposers.push(effect(() => {
-      const f = S.fitRequest.value;
-      if (f === lastFit) return;
-      lastFit = f;
-      // Fit after the panel and timeline have rendered, so the padding sees them.
-      if (ready) requestAnimationFrame(() => requestAnimationFrame(fit)); else map.once('idle', fit);
-    }));
-
-    const ro = new ResizeObserver(() => map.resize());
-    ro.observe(el.current!);
-
-    return () => {
-      ro.disconnect();
-      disposers.forEach((d) => d());
-      map.remove();
-    };
+    // MapLibre is large: load it after the interface has rendered.
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+    Promise.all([import('maplibre-gl'), import('maplibre-gl/dist/maplibre-gl.css')])
+      .then(([ml]) => { if (!cancelled && el.current) stop = start(ml, el.current); })
+      .catch(() => { mapFailed.value = true; });
+    return () => { cancelled = true; stop?.(); };
   }, []);
 
   return <div ref={el} class="map" />;

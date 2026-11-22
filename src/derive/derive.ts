@@ -1,5 +1,5 @@
 import type { Columns, Derived, ParsedTrack, TrackStats } from '../model/types';
-import { haversine, median, quantile } from './geo';
+import { haversine, median, quantileSorted, sortedFinite } from './geo';
 import { hdopIsRelative } from './hdop';
 
 /** Half of the distance window used for grade, in meters (120 m in total). */
@@ -59,10 +59,11 @@ export function derive(p: ParsedTrack): Derived {
   const eleS = smoothEle(c, gap);
   const grade = gradeOf(c, eleS, dist, gap);
   const hdopRelative = hdopIsRelative(c.hdop, c.sats);
-  const q1 = quantile(c.hdop, 0.25), q2 = quantile(c.hdop, 0.5), q3 = quantile(c.hdop, 0.75);
+  const hs = sortedFinite(c.hdop);
+  const q1 = quantileSorted(hs, 0.25), q2 = quantileSorted(hs, 0.5), q3 = quantileSorted(hs, 0.75);
   const hdopQ: [number, number, number] | null = Number.isFinite(q2) ? [q1, q2, q3] : null;
 
-  return { dist, kmh, speedFromFile, grade, gap, hdopRelative, hdopQ, stats: statsOf(c, eleS, dist, gap, kmh, intervalS) };
+  return { dist, kmh, speedFromFile, grade, gap, hdopRelative, hdopQ, stats: statsOf(c, eleS, dist, gap, kmh, intervalS, q2) };
 }
 
 /**
@@ -113,7 +114,7 @@ function gradeOf(c: Columns, ele: Float32Array, dist: Float64Array, gap: Uint8Ar
   return out;
 }
 
-function statsOf(c: Columns, eleS: Float32Array, dist: Float64Array, gap: Uint8Array, kmh: Float32Array, intervalS: number): TrackStats {
+function statsOf(c: Columns, eleS: Float32Array, dist: Float64Array, gap: Uint8Array, kmh: Float32Array, intervalS: number, mh: number): TrackStats {
   const n = c.n;
   let distanceM = 0, movingS = 0, maxKmh = 0;
   let w = 180, s = 90, e = -180, nn = -90;
@@ -153,7 +154,7 @@ function statsOf(c: Columns, eleS: Float32Array, dist: Float64Array, gap: Uint8A
   for (let i = 0; i < n; i++) { if (c.fixq[i] > 0) fixKnown++; if (c.fixq[i] === 2) corrected++; }
   const start = n ? c.t[0] : 0;
   const end = n ? c.t[n - 1] : 0;
-  const mh = median(c.hdop), ms = median(c.sats);
+  const ms = median(c.sats);
   return {
     distanceM, start, end, durationS: (end - start) / 1000, movingS,
     avgKmh: movingS > 0 ? (distanceM / movingS) * 3.6 : 0, maxKmh,

@@ -22,13 +22,17 @@ export function median(values: ArrayLike<number>): number {
   return quantile(values, 0.5);
 }
 
+/** The finite values, sorted ascending, in a typed array (numeric sort, no comparator). */
+export function sortedFinite(values: ArrayLike<number>): Float64Array {
+  const a = new Float64Array(values.length);
+  let k = 0;
+  for (let i = 0; i < values.length; i++) { const v = values[i]; if (Number.isFinite(v)) a[k++] = v; }
+  return a.subarray(0, k).sort();
+}
+
 /** Linear-interpolated quantile of the finite values (q in 0..1). */
 export function quantile(values: ArrayLike<number>, q: number): number {
-  const a: number[] = [];
-  for (let i = 0; i < values.length; i++) { const v = values[i]; if (Number.isFinite(v)) a.push(v); }
-  if (a.length === 0) return NaN;
-  a.sort((x, y) => x - y);
-  return quantileSorted(a, q);
+  return quantileSorted(sortedFinite(values), q);
 }
 
 export function quantileSorted(a: ArrayLike<number>, q: number): number {

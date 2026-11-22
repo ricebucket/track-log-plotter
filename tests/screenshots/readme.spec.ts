@@ -13,6 +13,7 @@ async function open(browser: Browser, lang: Lang, options: BrowserContextOptions
   const ctx = await browser.newContext(options);
   const page = await ctx.newPage();
   await page.addInitScript((l) => {
+    (window as unknown as { tlpTestHooks: boolean }).tlpTestHooks = true;
     localStorage.setItem('tlp.prefs.v1', JSON.stringify({ lang: l, basemap: 'light', zone: 'America/New_York', timelineMin: false }));
   }, lang);
   await page.goto('./');

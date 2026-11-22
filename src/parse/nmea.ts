@@ -47,6 +47,17 @@ function dopOf(s: string | undefined): number {
   return v > 0 ? v : NaN;
 }
 
+const BAD_BYTE = /[^\x20-\x7e]/;
+const BAD_BYTES = /[^\x20-\x7e]/g;
+
+/** Value of a hex digit's character code, or -1. */
+function hexDigit(c: number): number {
+  if (c >= 48 && c <= 57) return c - 48;
+  if (c >= 65 && c <= 70) return c - 55;
+  if (c >= 97 && c <= 102) return c - 87;
+  return -1;
+}
+
 function num(s: string | undefined): number {
   if (s === undefined || s === '') return NaN;
   const v = Number(s);
@@ -125,23 +136,29 @@ export function parseNmea(text: string): ParsedTrack {
     const lineNo = li + 1;
 
     // Strip bytes that can never appear in NMEA.
-    let clean = raw.replace(/[^\x20-\x7e]/g, '');
+    let clean = BAD_BYTE.test(raw) ? raw.replace(BAD_BYTES, '') : raw;
     let hadGarbage = clean.length !== raw.length;
     const first = clean.indexOf('$');
     if (first < 0) { garbage++; if (!garbageLine) garbageLine = lineNo; continue; }
     if (first > 0) { hadGarbage = true; clean = clean.slice(first); }
     if (hadGarbage) { garbage++; if (!garbageLine) garbageLine = lineNo; }
 
-    const parts = clean.split('$').filter((p) => p.length > 0);
+    // Almost every line holds exactly one sentence.
+    const parts = clean.indexOf('$', 1) < 0 ? [clean.slice(1)] : clean.split('$').filter((p) => p.length > 0);
     if (parts.length > 1) { glued += parts.length - 1; if (!gluedLine) gluedLine = lineNo; }
 
     for (let pi = 0; pi < parts.length; pi++) {
-      let body = parts[pi].trimEnd();
+      let body = parts[pi];
+      if (body.length && body.charCodeAt(body.length - 1) <= 32) body = body.trimEnd();
       const star = body.lastIndexOf('*');
       const isLastSentence = li === lastContent && pi === parts.length - 1;
-      if (star >= 0 && /^[0-9A-Fa-f]{2}$/.test(body.slice(star + 1))) {
+      const hi = star >= 0 && body.length === star + 3 ? hexDigit(body.charCodeAt(star + 1)) : -1;
+      const lo = hi >= 0 ? hexDigit(body.charCodeAt(star + 2)) : -1;
+      if (lo >= 0) {
         withSum++;
-        if (nmeaChecksum(body.slice(0, star)) !== body.slice(star + 1).toUpperCase()) {
+        let x = 0;
+        for (let k = 0; k < star; k++) x ^= body.charCodeAt(k);
+        if (x !== hi * 16 + lo) {
           if (!hadGarbage) { checksumBad++; if (!checksumLine) checksumLine = lineNo; }
           continue;
         }
@@ -182,9 +199,9 @@ export function parseNmea(text: string): ParsedTrack {
       if (type !== 'RMC' && type !== 'GGA' && type !== 'GLL' && type !== 'ZDA') continue;
 
       const todField = type === 'GLL' ? f[5] : f[1];
-      const tod = parseTod(todField);
-      if (Number.isNaN(tod)) continue;
       if (!cur || cur.todKey !== todField) {
+        const tod = parseTod(todField);
+        if (Number.isNaN(tod)) continue;
         if (cur) epochs.push(cur);
         cur = newEpoch(todField, tod, lineNo);
       }

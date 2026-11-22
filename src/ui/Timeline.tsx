@@ -161,13 +161,22 @@ export function Timeline() {
     return () => cancelAnimationFrame(raf);
   }, [playing, t0, t1]);
 
+  // Pointer events can come faster than frames: apply at most one per frame.
+  const pendingT = useRef<number | null>(null);
+  const frame = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
   const onPointer = (e: PointerEvent) => {
     const el = lanesRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
     const f = (e.clientX - r.left - LW) / Math.max(1, r.width - LW);
     if (f < 0 || f > 1) return;
-    S.cursorT.value = t0 + f * (t1 - t0);
+    pendingT.current = t0 + f * (t1 - t0);
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      if (pendingT.current !== null) S.cursorT.value = pendingT.current;
+    });
   };
 
   const selFix = sel && sel.vis ? fixAt(sel.track, S.trackTime(sel.id, cursor)) : null;

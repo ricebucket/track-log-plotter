@@ -16,8 +16,22 @@ export interface TrackItem {
   fam: number;
 }
 
-export function measuresOf(track: LoadedTrack): Set<MeasureKey> {
-  return new Set(MEASURES.filter((k) => hasMeasure(track, k)));
+// Tracks never change after loading, so a number per track identifies its data.
+const uids = new WeakMap<LoadedTrack, number>();
+let nextUid = 1;
+export function trackUid(t: LoadedTrack): number {
+  let id = uids.get(t);
+  if (!id) { id = nextUid++; uids.set(t, id); }
+  return id;
+}
+
+const measureSets = new WeakMap<LoadedTrack, ReadonlySet<MeasureKey>>();
+
+/** Measures a track has values for. Tracks don't change after loading, so this is worked out once. */
+export function measuresOf(track: LoadedTrack): ReadonlySet<MeasureKey> {
+  let m = measureSets.get(track);
+  if (!m) { m = new Set(MEASURES.filter((k) => hasMeasure(track, k))); measureSets.set(track, m); }
+  return m;
 }
 
 /** New tracks start with speed for the color and HDOP for the halo. */

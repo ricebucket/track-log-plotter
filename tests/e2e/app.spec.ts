@@ -32,6 +32,11 @@ test('loads the sample ride and draws the tracks', async ({ page }) => {
   expect(await page.locator('.maplibregl-canvas').evaluate((c) => [c.clientWidth, c.clientHeight])).toEqual([size.width, size.height]);
   // The map reports how many track lines it drew once it settles.
   await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  // The selected track is drawn again on top, picked by MapLibre global state.
+  await expect(page.locator('.map')).toHaveAttribute('data-sel-lines', /^[1-9]\d*$/);
+  await page.locator('.track-row[data-track="C"] .track-main').click();
+  await page.getByRole('button', { name: 'Fit the tracks' }).click();
+  await expect(page.locator('.map')).toHaveAttribute('data-sel-lines', /^[1-9]\d*$/);
   expect(errors).toEqual([]);
 });
 

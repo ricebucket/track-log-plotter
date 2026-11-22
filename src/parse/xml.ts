@@ -43,10 +43,12 @@ export function localName(name: string): string {
 }
 
 const ATTR = /([^\s=/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+/** Shared by every tag without attributes; never modified. */
+const NO_ATTRS: Map<string, string> = new Map();
 
 function parseAttrs(s: string): Map<string, string> {
+  if (s.indexOf('=') < 0) return NO_ATTRS;
   const m = new Map<string, string>();
-  if (!s) return m;
   ATTR.lastIndex = 0;
   let a: RegExpExecArray | null;
   while ((a = ATTR.exec(s))) m.set(localName(a[1]), decodeEntities(a[2] ?? a[3] ?? ''));
@@ -66,63 +68,77 @@ function tagEnd(src: string, i: number): number {
   return -1;
 }
 
+const isSpace = (c: number) => c === 32 || c === 10 || c === 13 || c === 9;
+
 export function scanXml(src: string, sink: XmlSink): XmlScanResult {
   const n = src.length;
   let i = 0;
+  // Line numbers are counted lazily by jumping from newline to newline, so
+  // the text is never walked character by character just to count lines.
   let line = 1;
-  const advance = (to: number) => {
-    for (let k = i; k < to; k++) if (src.charCodeAt(k) === 10) line++;
-    i = to;
+  let nl = src.indexOf('\n');
+  const lineAt = (pos: number) => {
+    while (nl !== -1 && nl < pos) { line++; nl = src.indexOf('\n', nl + 1); }
+    return line;
+  };
+  /** Passes text between tags to the sink unless it is only whitespace. */
+  const text = (a: number, b: number) => {
+    for (let k = a; k < b; k++) {
+      if (!isSpace(src.charCodeAt(k))) { sink.text(decodeEntities(src.slice(a, b))); return; }
+    }
   };
   while (i < n) {
     const lt = src.indexOf('<', i);
-    if (lt < 0) {
-      const t = src.slice(i);
-      if (t.trim()) sink.text(decodeEntities(t));
-      advance(n);
-      break;
-    }
-    if (lt > i) {
-      const t = src.slice(i, lt);
-      if (t.trim()) sink.text(decodeEntities(t));
-      advance(lt);
-    }
-    if (src.startsWith('<!--', i)) {
-      const e = src.indexOf('-->', i + 4);
-      if (e < 0) return { complete: false, wellFormed: true, line };
-      advance(e + 3);
-      continue;
-    }
-    if (src.startsWith('<![CDATA[', i)) {
-      const e = src.indexOf(']]>', i + 9);
-      if (e < 0) return { complete: false, wellFormed: true, line };
-      sink.text(src.slice(i + 9, e));
-      advance(e + 3);
-      continue;
-    }
-    if (src.startsWith('<?', i) || src.startsWith('<!', i)) {
+    if (lt < 0) { text(i, n); break; }
+    if (lt > i) text(i, lt);
+    i = lt;
+    const c1 = src.charCodeAt(i + 1);
+    if (c1 === 33 /* ! */ || c1 === 63 /* ? */) {
+      if (src.startsWith('<!--', i)) {
+        const e = src.indexOf('-->', i + 4);
+        if (e < 0) return { complete: false, wellFormed: true, line: lineAt(i) };
+        i = e + 3;
+        continue;
+      }
+      if (src.startsWith('<![CDATA[', i)) {
+        const e = src.indexOf(']]>', i + 9);
+        if (e < 0) return { complete: false, wellFormed: true, line: lineAt(i) };
+        sink.text(src.slice(i + 9, e));
+        i = e + 3;
+        continue;
+      }
       const e = src.indexOf('>', i + 2);
-      if (e < 0) return { complete: false, wellFormed: true, line };
-      advance(e + 1);
+      if (e < 0) return { complete: false, wellFormed: true, line: lineAt(i) };
+      i = e + 1;
       continue;
     }
     const gt = tagEnd(src, i + 1);
-    if (gt === -1) return { complete: false, wellFormed: true, line };
-    if (gt === -2) return { complete: true, wellFormed: false, line };
-    const tag = src.slice(i + 1, gt);
-    const tagLine = line;
-    advance(gt + 1);
-    if (tag[0] === '/') {
-      sink.close(localName(tag.slice(1).trim()));
+    if (gt === -1) return { complete: false, wellFormed: true, line: lineAt(i) };
+    if (gt === -2) return { complete: true, wellFormed: false, line: lineAt(i) };
+    if (c1 === 47 /* / */) {
+      let a = i + 2, b = gt;
+      while (a < b && isSpace(src.charCodeAt(a))) a++;
+      while (b > a && isSpace(src.charCodeAt(b - 1))) b--;
+      sink.close(localName(src.slice(a, b)));
+      i = gt + 1;
       continue;
     }
-    const selfClose = tag.endsWith('/');
-    const body = selfClose ? tag.slice(0, -1) : tag;
-    const m = /^\s*([^\s/>]+)/.exec(body);
-    if (!m) return { complete: true, wellFormed: false, line: tagLine };
-    const name = localName(m[1]);
-    sink.open(name, parseAttrs(body.slice(m[0].length)), tagLine);
+    const tagLine = lineAt(i);
+    const selfClose = src.charCodeAt(gt - 1) === 47;
+    const end = selfClose ? gt - 1 : gt;
+    let a = i + 1;
+    while (a < end && isSpace(src.charCodeAt(a))) a++;
+    let b = a;
+    while (b < end) {
+      const c = src.charCodeAt(b);
+      if (isSpace(c) || c === 47) break;
+      b++;
+    }
+    if (b === a) return { complete: true, wellFormed: false, line: tagLine };
+    const name = localName(src.slice(a, b));
+    sink.open(name, b < end ? parseAttrs(src.slice(b, end)) : NO_ATTRS, tagLine);
     if (selfClose) sink.close(name);
+    i = gt + 1;
   }
-  return { complete: true, wellFormed: true, line };
+  return { complete: true, wellFormed: true, line: lineAt(n) };
 }

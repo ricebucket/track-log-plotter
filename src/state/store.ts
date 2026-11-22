@@ -1,7 +1,7 @@
 import { batch, computed, effect, signal } from '@preact/signals';
 import type { ColorKey, HaloKey, LoadedTrack, MeasureKey, ParseResult } from '../model/types';
 import { initialLang, LOCALE, translate, type Lang, type Params } from '../i18n/i18n';
-import { addTracks, alignOffsets, applyToAll, removeTrack, setColor, setHalo, setVisible, type TrackItem } from './logic';
+import { addTracks, alignOffsets, applyToAll, removeTrack, setColor, setHalo, setVisible, trackUid, type TrackItem } from './logic';
 import { buildScale, type Scale } from '../color/scale';
 import { eleFactor, speedFactor, type Units } from '../format';
 import { isValidZone, type ZoneSel } from '../time/zones';
@@ -65,11 +65,16 @@ export const offsets = computed(() => alignOffsets(visible.value, selected.value
  * the shown tracks (or the selected one when none is shown), so they change
  * when tracks are shown or hidden.
  */
+let lastScales: { key: string; value: Record<MeasureKey, Scale> } | null = null;
 export const scales = computed(() => {
   const shown = visible.value.length ? visible.value : selected.value ? [selected.value] : [];
   const all = shown.map((x) => x.track);
+  // Changing a color or halo makes new track items, but the same shown tracks
+  // give the same steps: keep the previous scales instead of re-sorting.
+  const key = `${all.map(trackUid).join(',')}|${units.value}`;
+  if (lastScales?.key === key) return lastScales.value;
   const sf = speedFactor(units.value), ef = eleFactor(units.value);
-  return {
+  const value = {
     speed: buildScale('speed', all, sf),
     ele: buildScale('ele', all, ef),
     grade: buildScale('grade', all),
@@ -77,11 +82,20 @@ export const scales = computed(() => {
     sats: buildScale('sats', all),
     fix: buildScale('fix', all),
   } satisfies Record<MeasureKey, Scale>;
+  lastScales = { key, value };
+  return value;
 });
+
+const relativeScales = new WeakMap<LoadedTrack, Scale>();
 
 /** The scale a track uses for a measure; non-standard HDOP gets the track's own quartiles. */
 export function scaleFor(track: LoadedTrack, key: MeasureKey): Scale {
-  if (key === 'hdop' && track.derived.hdopRelative) return buildScale('hdop', [track], 1, track);
+  if (key === 'hdop' && track.derived.hdopRelative) {
+    // Built once per track, so lanes and legends see the same object on every render.
+    let s = relativeScales.get(track);
+    if (!s) { s = buildScale('hdop', [track], 1, track); relativeScales.set(track, s); }
+    return s;
+  }
   return scales.value[key];
 }
 
@@ -136,9 +150,10 @@ export function addLoaded(loaded: LoadedTrack[]) {
 export async function openFiles(files: File[]) {
   if (!files.length) return;
   loadingCount.value += files.length;
-  const results: ParseResult[] = [];
+  let results: ParseResult[] = [];
   try {
-    for (const f of files) results.push(await parseFile(f));
+    // Files are read in parallel by a pool of workers; results keep their order.
+    results = await Promise.all(files.map((f) => parseFile(f)));
   } finally {
     loadingCount.value -= files.length;
   }
