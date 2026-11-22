@@ -155,3 +155,20 @@ vite.config.ts.timestamp-*
 .nx/cache
 .nx/workspace-data
 .nx/migrate-runs
+
+# --- Track Log Plotter ---
+# Build and test output
+dist/
+coverage/
+playwright-report/
+test-results/
+.vite/
+.env*
+
+# Your own track logs: keep them here and they never get committed.
+local-tracks/
+
+# The Node template's "*.log" rule above would also drop NMEA .log
+# fixtures. All fixtures are synthetic New York City data.
+!tests/fixtures/
+!tests/fixtures/**

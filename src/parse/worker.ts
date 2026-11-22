@@ -1,0 +1,19 @@
+// Parses files off the main thread, so a large log never freezes the page.
+import { MAX_BYTES, parseText, transferables } from './index';
+import type { ParseResult } from '../model/types';
+
+interface Job { id: number; file: File }
+
+const post = (self as unknown as { postMessage(m: unknown, t: Transferable[]): void }).postMessage.bind(self);
+
+self.addEventListener('message', async (e: MessageEvent<Job>) => {
+  const { id, file } = e.data;
+  let res: ParseResult;
+  try {
+    if (file.size > MAX_BYTES) res = { ok: false, file: file.name, error: 'tooBig' };
+    else res = parseText(await file.text(), file.name, file.size);
+  } catch {
+    res = { ok: false, file: file.name, error: 'unreadable' };
+  }
+  post({ id, res }, transferables(res));
+});

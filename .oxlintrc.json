@@ -1,0 +1,36 @@
+{
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "jsx-a11y",
+    "vitest"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "no-unused-vars": "error",
+    "eqeqeq": [
+      "error",
+      "smart"
+    ],
+    "jsx-a11y/prefer-tag-over-role": "off",
+    "vitest/valid-expect": [
+      "error",
+      {
+        "maxArgs": 2
+      }
+    ],
+    "unicorn/no-array-sort": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/require-post-message-target-origin": "off",
+    "eslint/no-unmodified-loop-condition": "off"
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "coverage/**",
+    "playwright-report/**",
+    "test-results/**"
+  ]
+}
