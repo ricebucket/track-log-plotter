@@ -32,6 +32,7 @@
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm run check` | 依次运行代码检查、类型检查、测试、构建和浏览器测试 |
 | `npm run fixtures` | 重新生成测试数据和示例骑行 |
+| `npm run screenshots` | 重新生成 README 中的截图（见[截图](#截图)） |
 
 ## 每次推送之前
 
@@ -82,11 +83,36 @@
 
 - **单元测试：** `tests/unit/`。
 - **组件测试：** `tests/component/`。在 happy-dom 中运行，地图用替身代替。
-- **测试数据：** `tests/fixtures/`。都是由 `scripts/make-fixtures.mjs` 生成的纽约市合成轨迹。
+- **测试数据：** `tests/fixtures/`。都是由 `scripts/make-fixtures.mjs` 生成的纽约市合成轨迹，`public/sample/` 中的示例骑行也是。如果仓库中有任何坐标落在纽约市以外，隐私测试就会失败。
 - **浏览器测试：** `tests/e2e/`。针对 http://localhost:4173/track-log-plotter/ 上构建好的网站运行，分为两个 Playwright 项目：`desktop`（Desktop Chrome）和 `phone`（Pixel 7）。
   - 对其他主机的请求（瓦片、样式、字体）都在本地应答，所以测试不会访问真实的服务器。
   - Chromium 通过 SwiftShader 使用 WebGL，相关参数已在 `playwright.config.ts` 中设置。
   - 测试失败后，`npx playwright show-report` 会显示出错的地方，跟踪记录保存在 `test-results/` 中。
+
+## 截图
+
+每个 README 都展示一张电脑截图，存放在 `docs/screenshots/`，语言与该 README 相同。截图只展示合成的示例骑行。
+
+界面有明显变化时：
+
+1. 运行 `npm run screenshots`。它会构建网站，并在 4175 端口提供服务。与浏览器测试不同，它会加载真实的底图瓦片和字体，因此需要联网。
+2. 提交之前，先查看这两个 PNG 文件。
+
+## 部署
+
+GitHub 上运行两个 GitHub Actions 工作流：
+
+- **CI**（`.github/workflows/ci.yml`）在每次推送和拉取请求时运行：安装依赖、代码检查、类型检查、带覆盖率的测试、构建，然后运行浏览器测试。
+- **Deploy to GitHub Pages**（`.github/workflows/pages.yml`）在每次推送到 `main` 时运行：安装依赖、单元测试和组件测试、构建，然后发布 `dist/`。
+
+发布流程不会等待 CI。正因如此，推送前必须先在本地通过全部检查（见[每次推送之前](#每次推送之前)）。
+
+发布需要两项仓库设置：
+
+- 在 Settings → Pages 中，把来源设为 “GitHub Actions”。
+- 在 GitHub 免费版中，Pages 只能发布公开仓库。
+
+网站发布在 https://ricebucket.github.io/track-log-plotter/。基础路径 `/track-log-plotter/` 在 `vite.config.ts` 中设置。
 
 ## 你自己的记录
 

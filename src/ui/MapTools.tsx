@@ -61,8 +61,8 @@ export function MapTools() {
         <IconChevronDown size={16} />
       </button>
       <div class="zoom-stack">
-        <button type="button" aria-label={t('map.zoomIn')} title={t('map.zoomIn')} onClick={() => mapApi.zoomIn()}><IconZoomIn /></button>
-        <button type="button" aria-label={t('map.zoomOut')} title={t('map.zoomOut')} onClick={() => mapApi.zoomOut()}><IconZoomOut /></button>
+        <button type="button" class="zoom-btn" aria-label={t('map.zoomIn')} title={t('map.zoomIn')} onClick={() => mapApi.zoomIn()}><IconZoomIn /></button>
+        <button type="button" class="zoom-btn" aria-label={t('map.zoomOut')} title={t('map.zoomOut')} onClick={() => mapApi.zoomOut()}><IconZoomOut /></button>
         <button type="button" aria-label={t('map.fit')} title={t('map.fit')} onClick={() => mapApi.fit()}><IconFit /></button>
         <button type="button" aria-label={t('map.north')} title={t('map.north')} onClick={() => mapApi.north()}><IconNorth /></button>
       </div>

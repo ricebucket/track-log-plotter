@@ -6,16 +6,21 @@
 
 **在线使用：** https://ricebucket.github.io/track-log-plotter/
 
+![轨迹绘图器：浅色底图上显示曼哈顿和罗斯福岛的三条轨迹，左侧是带速度图例和 HDOP 光晕说明的轨迹列表，地图上有定位点信息卡，下方是每条轨迹一条通道的时间轴](docs/screenshots/desktop-zh.png)
+
+截图展示的是应用首页提供的纽约市合成示例骑行。
+
 ## 功能
 
 - **多条轨迹。** 最多载入 10 条，同时显示 3 条。只显示一条时使用多色渐变；显示多条时，每条轨迹各有一个色系，便于区分。
 - **颜色与光晕。** 每条轨迹都可以分别选择颜色和光晕所表示的数据。光晕越接近数据的另一端越宽，一眼可以看出两项数据。
 - **时间轴。** 每条显示的轨迹一条通道，共用一个光标。同时记录的轨迹按时钟对齐（例如一起携带的两个记录器）；其他时间记录的轨迹按起点对齐。
 - **定位点检查。** 光标处显示该时刻的所有数值：速度、海拔、椭球高、坡度、HDOP、VDOP、PDOP、参与定位的卫星数、定位类型、航向、按键标记以及在文件中的行号。
+- **计算值都有标注。** 应用自己计算出的数值（例如坡度、距离或根据位置推算的速度）旁边都有计算器图标，说明是怎样计算的。
 - **损坏的记录也能载入。** 最后一行被截断、校验和不符、语句粘连、杂乱字节、时间倒退或不可能的跳变都会被跳过，并在轨迹详情页中列出。
 - **无需密钥的底图。** OpenStreetMap、OpenFreeMap 浅色与深色、OpenTopoMap 以及 Esri 卫星影像（影像与影像 + 地名），并可在 Google 地图中打开同一位置。
 - **时区。** 本地时间、UTC 或任意时区。
-- **English 和简体中文**，一键切换。
+- **English 和简体中文**，一键切换，电脑和手机都适用。
 
 支持 GPX 和 NMEA。
 
@@ -41,48 +46,14 @@
 
 ## 开发
 
-每次推送之前，请按照 [DEVELOPMENT.zh-CN.md](DEVELOPMENT.zh-CN.md) 操作：其中按顺序列出了需要运行的检查和步骤。
-
-需要 Node.js 20 或更新版本。
+在自己的电脑上运行（需要 Node.js 20 或更新版本）：
 
 ```sh
-npm install        # 在此文件夹中安装全部依赖
-npm run dev        # http://localhost:5173/track-log-plotter/
+npm install
+npm run dev
 ```
 
-构建、测试和代码检查工具也可以放在上级文件夹中，Node 会自动找到。这种情况下，在此处只需用 `npm install --omit=dev` 安装应用本身的库。
-
-| 命令 | 作用 |
-| --- | --- |
-| `npm run dev` | 开发服务器 |
-| `npm run build` | 生成正式版本到 `dist/` |
-| `npm run preview` | 预览正式版本 |
-| `npm test` | 单元测试和组件测试（Vitest） |
-| `npm run test:coverage` | 同上，并统计覆盖率 |
-| `npm run test:e2e` | 浏览器测试（Playwright，Chromium） |
-| `npm run lint` | oxlint 代码检查 |
-| `npm run typecheck` | TypeScript 类型检查 |
-| `npm run check` | 以上全部 |
-| `npm run fixtures` | 重新生成测试数据和示例骑行 |
-
-### 测试数据
-
-所有测试文件以及 `public/sample/` 中的示例骑行都是纽约市内的合成轨迹，由 `scripts/make-fixtures.mjs` 生成。如果仓库中有任何坐标落在纽约市以外，测试就会失败。
-
-你自己的记录请放在 `local-tracks/` 中。Git 会忽略该文件夹，开发服务器也不会提供其中的文件。
-
-### 添加语言
-
-1. 复制 `src/i18n/en-US.json` 为新文件并翻译。
-2. 在 `src/i18n/i18n.ts` 中注册（`LANGS`、`LOCALE` 和 `MESSAGES`）。
-3. 添加该语言的 README。
-
-测试会检查每条消息在每种语言中都存在，且占位符一致。
-
-## 部署
-
-- `.github/workflows/ci.yml` 在每次推送和拉取请求时运行代码检查、类型检查、测试、构建和浏览器测试。
-- `.github/workflows/pages.yml` 把 `main` 分支发布到 GitHub Pages。请在仓库设置中把 Pages 设为通过 GitHub Actions 部署。
+准备工作、命令、测试、部署以及每次推送前需要运行的检查，请见 [DEVELOPMENT.zh-CN.md](DEVELOPMENT.zh-CN.md)。
 
 ## 许可证
 

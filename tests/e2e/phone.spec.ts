@@ -24,6 +24,8 @@ test('docks the panel as a bottom sheet and the timeline above it', async ({ pag
     expect(b.y + b.height).toBeLessThanOrEqual(tl.y + tl.height);
   }
   await expect(page.locator('.tl-values')).toContainText('km/h');
+  await expect(page.getByRole('button', { name: 'Fit the tracks' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Zoom in' })).toBeHidden();
   await expect(page.getByRole('button', { name: 'UTC' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(vp.width);
 });

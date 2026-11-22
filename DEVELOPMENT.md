@@ -32,6 +32,7 @@ You need Node.js 20 or newer.
 | `npm run typecheck` | TypeScript |
 | `npm run check` | Lint, type check, tests, build and browser tests, in that order |
 | `npm run fixtures` | Regenerates the test fixtures and the sample ride |
+| `npm run screenshots` | Regenerates the README screenshots (see [Screenshots](#screenshots)) |
 
 ## Before every push
 
@@ -82,11 +83,36 @@ GitHub runs the same checks on every push to `main`. The Pages deploy, though, r
 
 - **Unit tests:** `tests/unit/`.
 - **Component tests:** `tests/component/`. They run in happy-dom, with a stand-in for the map.
-- **Fixtures:** `tests/fixtures/`. They are synthetic New York City tracks made by `scripts/make-fixtures.mjs`.
+- **Fixtures:** `tests/fixtures/`. They are synthetic New York City tracks made by `scripts/make-fixtures.mjs`, as is the sample ride in `public/sample/`. A privacy test fails the run if any coordinate in the repository falls outside New York City.
 - **Browser tests:** `tests/e2e/`. They run against the built site at http://localhost:4173/track-log-plotter/, in two Playwright projects: `desktop` (Desktop Chrome) and `phone` (Pixel 7).
   - Every request to another host (tiles, styles, fonts) is answered locally, so no test touches a real server.
   - Chromium gets WebGL through SwiftShader; `playwright.config.ts` sets the flags.
   - After a failure, `npx playwright show-report` shows what went wrong, and traces are saved in `test-results/`.
+
+## Screenshots
+
+Each README shows a desktop screenshot from `docs/screenshots/`, in its own language. Screenshots always show the synthetic sample ride.
+
+When the interface changes visibly:
+
+1. Run `npm run screenshots`. It builds the site and serves it on port 4175. Unlike the browser tests, it loads real basemap tiles and fonts, so it needs a network connection.
+2. Look at the two PNG files before committing them.
+
+## Deployment
+
+Two GitHub Actions workflows run on GitHub:
+
+- **CI** (`.github/workflows/ci.yml`) runs on every push and pull request: install, lint, type check, tests with coverage, build, then the browser tests.
+- **Deploy to GitHub Pages** (`.github/workflows/pages.yml`) runs on every push to `main`: install, unit and component tests, build, then publishes `dist/`.
+
+The deploy doesn't wait for CI. That's why every check has to pass locally first (see [Before every push](#before-every-push)).
+
+Publishing needs two repository settings:
+
+- Under Settings → Pages, set the source to "GitHub Actions".
+- On GitHub's free plan, Pages only publishes public repositories.
+
+The site is published at https://ricebucket.github.io/track-log-plotter/. The base path `/track-log-plotter/` is set in `vite.config.ts`.
 
 ## Your own logs
 

@@ -104,14 +104,26 @@ export function MapView() {
     let ready = false;
     const disposers: (() => void)[] = [];
 
+    // Keep fitted tracks clear of whatever covers the map: the side panel (or
+    // the bottom sheet on a phone), the timeline and the map buttons.
     const padding = () => {
-      const narrow = window.innerWidth <= 720;
-      return {
-        top: 80,
-        right: narrow ? 24 : 80,
-        left: narrow || S.panelMin.value || S.items.value.length === 0 ? 40 : 420,
-        bottom: narrow ? Math.round(window.innerHeight * 0.5) : S.timelineMin.value ? 80 : 270,
+      const W = window.innerWidth, H = window.innerHeight;
+      const p = { top: 70, right: W <= 720 ? 70 : 80, bottom: 40, left: 40 };
+      const panel = document.querySelector('.panel')?.getBoundingClientRect();
+      const tl = document.querySelector('.timeline')?.getBoundingClientRect();
+      if (panel) {
+        if (panel.width < W * 0.8) p.left = Math.max(p.left, panel.right + 24);
+        else p.bottom = Math.max(p.bottom, H - panel.top + 24);
+      }
+      if (tl) p.bottom = Math.max(p.bottom, H - tl.top + 24);
+      // Never pad more than the map can give.
+      const shrink = (a: 'left' | 'right' | 'top' | 'bottom', b: 'left' | 'right' | 'top' | 'bottom', size: number) => {
+        const over = p[a] + p[b] - (size - 80);
+        if (over > 0) { const k = (size - 80) / (p[a] + p[b]); p[a] = Math.floor(p[a] * k); p[b] = Math.floor(p[b] * k); }
       };
+      shrink('left', 'right', W);
+      shrink('top', 'bottom', H);
+      return p;
     };
     const fit = () => {
       const b = boundsOf(S.visible.value);
@@ -221,7 +233,8 @@ export function MapView() {
       const f = S.fitRequest.value;
       if (f === lastFit) return;
       lastFit = f;
-      if (ready) fit(); else map.once('idle', fit);
+      // Fit after the panel and timeline have rendered, so the padding sees them.
+      if (ready) requestAnimationFrame(() => requestAnimationFrame(fit)); else map.once('idle', fit);
     }));
 
     const ro = new ResizeObserver(() => map.resize());
