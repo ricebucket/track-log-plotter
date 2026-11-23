@@ -34,10 +34,13 @@ export function measuresOf(track: LoadedTrack): ReadonlySet<MeasureKey> {
   return m;
 }
 
-/** New tracks start with speed for the color and HDOP for the halo. */
+/**
+ * New tracks start with speed for the color and HDOP for the halo; a track
+ * with motion data but no fix quality shows acceleration in the halo instead.
+ */
 export function defaultsFor(track: LoadedTrack): { color: ColorKey; halo: HaloKey } {
   const m = measuresOf(track);
-  return { color: 'speed', halo: m.has('hdop') ? 'hdop' : m.has('sats') ? 'sats' : 'off' };
+  return { color: 'speed', halo: m.has('hdop') ? 'hdop' : m.has('sats') ? 'sats' : m.has('accel') ? 'accel' : 'off' };
 }
 
 /** The first color range no other shown track uses, preferring the track's own. */

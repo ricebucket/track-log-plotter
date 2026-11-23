@@ -25,7 +25,7 @@ test('loads the sample ride and draws the tracks', async ({ page }) => {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|pbf|glyph/i.test(m.text())) errors.push(m.text()); });
   await page.getByRole('button', { name: 'Try the sample ride' }).click();
-  await expect(page.getByText('3 of 3 shown · 3 loaded')).toBeVisible();
+  await expect(page.getByText('2 of 3 shown · 2 loaded')).toBeVisible();
   await expect(page.locator('.maplibregl-canvas')).toBeVisible();
   // The map fills the window (MapLibre's own stylesheet must not shrink it).
   const size = page.viewportSize()!;
@@ -34,7 +34,7 @@ test('loads the sample ride and draws the tracks', async ({ page }) => {
   await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
   // The selected track is drawn again on top, picked by MapLibre global state.
   await expect(page.locator('.map')).toHaveAttribute('data-sel-lines', /^[1-9]\d*$/);
-  await page.locator('.track-row[data-track="C"] .track-main').click();
+  await page.locator('.track-row[data-track="B"] .track-main').click();
   await page.getByRole('button', { name: 'Fit the tracks' }).click();
   await expect(page.locator('.map')).toHaveAttribute('data-sel-lines', /^[1-9]\d*$/);
   expect(errors).toEqual([]);
@@ -141,7 +141,10 @@ test('dragging along a track moves the cursor and the fix card with it', async (
   await page.mouse.down();
   await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 5 });
   await page.mouse.move(b.x, b.y, { steps: 5 });
-  await expect(page.locator('.tooltip .tip-time')).toHaveText(b.time!);
+  // At this zoom a pixel covers a few seconds of riding: the nearest fix may be a neighbor.
+  const secs = (s: string) => { const m = /(\d+):(\d+):(\d+)\s*([AP]M)/.exec(s.replace(/\s/g, ' '))!; return ((Number(m[1]) % 12) + (m[4] === 'PM' ? 12 : 0)) * 3600 + Number(m[2]) * 60 + Number(m[3]); };
+  await expect.poll(async () => Math.abs(secs((await page.locator('.tooltip .tip-time').textContent())!) - secs(b.time!))).toBeLessThanOrEqual(5);
+  await expect.poll(async () => Math.abs(secs((await page.locator('.tooltip .tip-time').textContent())!) - secs(a.time!))).toBeGreaterThan(30);
   await page.mouse.up();
   // The map didn't pan: the fix is still where it was on screen.
   const after = await cardFix(page);
@@ -191,6 +194,41 @@ test('shows dates on the timeline for a log over two days', async ({ page }) => 
   const lanes = (await page.locator('.tl-lanes').boundingBox())!;
   await page.mouse.move(lanes.x + 150 + (lanes.width - 150) * 0.9, lanes.y + 20);
   await expect(page.locator('.tl-time')).toContainText('Jul 12,');
+});
+
+test('opens a Columbus Fusion log with motion data and shows its acceleration', async ({ page }) => {
+  await open(page, 'central-park-loop-motion.csv');
+  await expect(page.getByText(/· Columbus Fusion$/)).toBeVisible();
+  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  await page.getByRole('button', { name: /^Color/ }).click();
+  await page.getByRole('dialog', { name: 'Color track A by' }).getByRole('radio', { name: /Acceleration/ }).click();
+  await expect(page.getByRole('button', { name: 'Color Acceleration (g)' })).toBeVisible();
+});
+
+test('snaps the cursor to a fix when hovering a gap', async ({ page }) => {
+  await open(page, 'hudson-overnight.gpx');
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  // The middle of the timeline is the night's gap.
+  await page.mouse.move(lanes.x + 150 + (lanes.width - 150) * 0.5, lanes.y + 20);
+  await expect(page.locator('.tl-values')).toContainText('km/h');
+});
+
+test('zooms into a dragged range and back out with Show all', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  const x = (f: number) => lanes.x + 150 + (lanes.width - 150) * f;
+  const first = await page.locator('.tl-ticks span').first().textContent();
+  await page.mouse.move(x(0.4), lanes.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(x(0.5), lanes.y + 20, { steps: 4 });
+  await page.mouse.move(x(0.6), lanes.y + 20, { steps: 4 });
+  await page.mouse.up();
+  const showAll = page.getByRole('button', { name: 'Show all' });
+  await expect(showAll).toBeVisible();
+  await expect(page.locator('.tl-ticks span').first()).not.toHaveText(first!);
+  await showAll.click();
+  await expect(showAll).toHaveCount(0);
+  await expect(page.locator('.tl-ticks span').first()).toHaveText(first!);
 });
 
 test('shows at most three tracks', async ({ page }) => {

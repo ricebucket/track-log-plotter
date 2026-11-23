@@ -62,6 +62,13 @@ function fixQuality(s: string): FixQuality | -1 {
 
 export function parseGpx(text: string): ParsedTrack {
   const b = new ColumnBuilder();
+  // Route points (<rtept>) go here. Some converters save a recorded track as
+  // a route, with a time at every point; it's read as the track when the file
+  // has no track points.
+  const rb = new ColumnBuilder();
+  let ptRoute = false;
+  let rteName: string | null = null;
+  let routePoints = 0;
   const stack: string[] = [];
   const flags: Flag[] = [];
   const ignored = new Set<string>();
@@ -94,7 +101,9 @@ export function parseGpx(text: string): ParsedTrack {
       if (name === 'gpx' && stack.length === 1) creator = attrs.get('creator')?.trim() || null;
       else if (name === 'trk') b.breakSegment();
       else if (name === 'trkseg') b.breakSegment();
-      else if (name === 'trkpt') { pt = newPoint(attrs, line); points++; }
+      else if (name === 'trkpt') { pt = newPoint(attrs, line); ptRoute = false; points++; }
+      else if (name === 'rte') rb.breakSegment();
+      else if (name === 'rtept') { pt = newPoint(attrs, line); ptRoute = true; routePoints++; }
       else if (name === 'wpt' && stack.length === 2) wpt = newPoint(attrs, line);
     },
     text(s) { buf += s; },
@@ -114,14 +123,14 @@ export function parseGpx(text: string): ParsedTrack {
       const v = buf.trim();
       buf = '';
       const p = pt ?? wpt;
-      if (name === 'trkpt') {
+      if (name === 'trkpt' || name === 'rtept') {
         const q = pt;
         pt = null;
         if (!q) return;
-        if (q.fixq === -1) { voidCount++; return; }
-        if (!Number.isFinite(q.t)) { timeless++; return; }
+        if (q.fixq === -1) { if (!ptRoute) voidCount++; return; }
+        if (!Number.isFinite(q.t)) { if (!ptRoute) timeless++; return; }
         const speed = Number.isFinite(q.speedKnown) ? q.speedKnown : q.speedVendor;
-        b.push({
+        (ptRoute ? rb : b).push({
           t: q.t, lat: q.lat, lon: q.lon, ele: q.ele, hdop: q.hdop, vdop: q.vdop, pdop: q.pdop, sats: q.sats,
           fixq: q.fixq as FixQuality, geoid: q.geoid, speed, course: q.course, line: q.line,
         });
@@ -136,10 +145,11 @@ export function parseGpx(text: string): ParsedTrack {
         return;
       }
       if (name === 'name' && parent === 'trk' && trkName === null && v) { trkName = v; return; }
+      if (name === 'name' && parent === 'rte' && rteName === null && v) { rteName = v; return; }
       if (!p) return;
       const inExt = extDepth > 0;
       const garmin = garminDepth > 0;
-      const direct = parent === 'trkpt' || parent === 'wpt';
+      const direct = parent === 'trkpt' || parent === 'rtept' || parent === 'wpt';
       switch (name) {
         case 'time': if (direct) { const r = parseIsoTime(v); p.t = r.t; if (!r.zoned) noZone = true; } break;
         case 'ele': if (direct) p.ele = Number(v); break;
@@ -164,7 +174,10 @@ export function parseGpx(text: string): ParsedTrack {
     },
   });
 
-  const cols = b.build();
+  const useRoute = b.n === 0 && rb.n > 0;
+  const src = useRoute ? rb : b;
+  const cols = src.build();
+  if (useRoute) notes.push({ kind: 'route' });
 
   // Vendor speeds come without a unit: infer it from the positions.
   if (!anyKnownSpeed && anyVendorSpeed) {
@@ -178,14 +191,14 @@ export function parseGpx(text: string): ParsedTrack {
 
   if (!result.wellFormed) problems.push({ kind: 'badXml', line: result.line, kept: cols.n });
   else if (!result.complete || stack.length > 0) problems.push({ kind: 'unclosed', kept: cols.n });
-  if (b.counts.backwards) problems.push({ kind: 'backwards', count: b.counts.backwards, line: b.counts.backwardsLine });
-  if (b.counts.jumps) problems.push({ kind: 'jump', count: b.counts.jumps, line: b.counts.jumpLine });
+  if (src.counts.backwards) problems.push({ kind: 'backwards', count: src.counts.backwards, line: src.counts.backwardsLine });
+  if (src.counts.jumps) problems.push({ kind: 'jump', count: src.counts.jumps, line: src.counts.jumpLine });
   if (cols.n === 0) problems.push({ kind: 'noFixes' });
 
   if (noZone) notes.push({ kind: 'noZone' });
   if (voidCount) notes.push({ kind: 'void', count: voidCount });
   if (timeless) notes.push({ kind: 'void', count: timeless });
-  if (b.counts.duplicates) notes.push({ kind: 'duplicates', count: b.counts.duplicates });
+  if (src.counts.duplicates) notes.push({ kind: 'duplicates', count: src.counts.duplicates });
   if (timelessWpt) notes.push({ kind: 'timelessWaypoints', count: timelessWpt });
   if (ignored.size) notes.push({ kind: 'ignored', fields: [...ignored].sort() });
 
@@ -201,5 +214,5 @@ export function parseGpx(text: string): ParsedTrack {
   if (present(cols, 'geoid')) fields.push('geoid');
   if (flags.length) fields.push('flags');
 
-  return { format: 'gpx', creator, name: trkName, cols, flags, problems, notes, fields, lines: points };
+  return { format: 'gpx', creator, name: useRoute ? rteName : trkName, cols, flags, problems, notes, fields, lines: useRoute ? routePoints : points, ...(noZone ? { clock: 'utc' } : {}) };
 }

@@ -16,7 +16,8 @@ export const IconChevronRight = ({ size = 14 }: P) => svg(size, <path d="M7 5l4 
 export const IconChevronUp = ({ size = 14 }: P) => svg(size, <path d="M5 11l4-4 4 4" />, 2);
 export const IconBack = ({ size = 16 }: P) => svg(size, <path d="M11 4.5L6.5 9l4.5 4.5" />, 2);
 export const IconClose = ({ size = 15 }: P) => svg(size, <path d="M4.5 4.5l9 9M13.5 4.5l-9 9" />, 1.9);
-export const IconSettings = ({ size = 18 }: P) => svg(size, [<path key="a" d="M3 5.5h6M13 5.5h2M3 9h1.5M8 9h7M3 12.5h8.5M15 12.5h0" />, <circle key="b" cx="11" cy="5.5" r="1.7" />, <circle key="c" cx="6.2" cy="9" r="1.7" />, <circle key="d" cx="13.3" cy="12.5" r="1.7" />]);
+/** A gear: eight teeth around a ring. */
+export const IconGear = ({ size = 20 }: P) => svg(size, [<path key="a" d="M14.45 7.32 L16.39 7.73 L16.39 10.27 L14.45 10.68 L14.04 11.66 L15.12 13.33 L13.33 15.12 L11.66 14.04 L10.68 14.45 L10.27 16.39 L7.73 16.39 L7.32 14.45 L6.34 14.04 L4.67 15.12 L2.88 13.33 L3.96 11.66 L3.55 10.68 L1.61 10.27 L1.61 7.73 L3.55 7.32 L3.96 6.34 L2.88 4.67 L4.67 2.88 L6.34 3.96 L7.32 3.55 L7.73 1.61 L10.27 1.61 L10.68 3.55 L11.66 3.96 L13.33 2.88 L15.12 4.67 L14.04 6.34Z" />, <circle key="b" cx="9" cy="9" r="2.3" />], 1.5);
 export const IconPanelHide = ({ size = 18 }: P) => svg(size, [<rect key="a" x="2.5" y="3.5" width="13" height="11" rx="2" />, <path key="b" d="M7 3.5v11M12.4 7.2L10.6 9l1.8 1.8" />]);
 export const IconPanelShow = ({ size = 18 }: P) => svg(size, [<rect key="a" x="2.5" y="3.5" width="13" height="11" rx="2" />, <path key="b" d="M7 3.5v11M10.6 7.2L12.4 9l-1.8 1.8" />]);
 export const IconTimeline = ({ size = 18 }: P) => svg(size, [<path key="a" d="M2.5 13.5h13" />, <path key="b" d="M3.5 10.5l3-3.5 3 2 4.5-5" />]);

@@ -29,6 +29,7 @@ export function Tooltip() {
   if (Number.isFinite(f.sats)) rows.push([t('measure.sats'), fmtNum(f.sats, loc, 0, 0), false]);
   if (f.fixq > 0) rows.push([t('measure.fix'), valueText('fix', f.fixq), false]);
   if (Number.isFinite(f.course)) rows.push([t('inspect.course'), `${fmtNum(f.course, loc, 0, 0)}°`, false]);
+  if (Number.isFinite(f.accel)) rows.push([t('measure.accel'), valueText('accel', f.accel), true]);
   const anyComputed = rows.some((r) => r[2]);
 
   const others = S.visible.value.filter((x) => x.id !== sel.id).flatMap((x) => {

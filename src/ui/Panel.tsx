@@ -5,6 +5,7 @@ import { LOAD_LIMIT, SHOW_LIMIT } from '../state/logic';
 import { googleBaseFor, googleViewUrl, streetViewUrl } from '../links/google';
 import { fixAt } from '../state/inspect';
 import { CASING, GAP } from '../color/palettes';
+import { hintHandlers, useHintId } from './Computed';
 import { TrackRow } from './TrackRow';
 import { Details } from './Details';
 import { IconExternal, IconPanelHide, IconPanelShow, IconPlus, IconTrash } from './icons';
@@ -80,6 +81,8 @@ function GoogleLinks() {
   const ct = S.cursorT.value;
   // Street View needs a point: the selected track's fix at the cursor.
   const fix = sel && sel.vis && ct !== null ? fixAt(sel.track, S.trackTime(sel.id, ct)) : null;
+  const hid = useHintId();
+  const how = t('google.myMapsHow');
   return (
     <section class="panel-sec" aria-labelledby="google-h">
       <h2 class="eyebrow" id="google-h">{t('google.title')}</h2>
@@ -92,10 +95,11 @@ function GoogleLinks() {
             {t('google.street')}<IconExternal />
           </a>
         )}
-      </div>
-      <div class="my-maps">
-        <a class="link-chip" href={MY_MAPS} target="_blank" rel="noopener noreferrer">{t('google.myMaps')}<IconExternal /></a>
-        <p class="muted small">{t('google.myMapsHow')}</p>
+        {/* How to bring the track in shows on hover or focus, not in the panel. */}
+        <a class="link-chip" href={MY_MAPS} target="_blank" rel="noopener noreferrer" aria-describedby="my-maps-how" {...hintHandlers(hid, how, t('google.myMaps'))}>
+          {t('google.myMaps')}<IconExternal />
+        </a>
+        <span id="my-maps-how" class="sr-only">{how}</span>
       </div>
     </section>
   );

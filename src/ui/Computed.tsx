@@ -5,9 +5,29 @@ import { signal } from '@preact/signals';
 import { t } from '../state/store';
 import { IconCalc } from './icons';
 
-export interface Hint { id: number; text: string; x: number; y: number; bottom: number; pinned: boolean }
+export interface Hint { id: number; text: string; x: number; y: number; bottom: number; pinned: boolean; title?: string }
 export const hint = signal<Hint | null>(null);
 let nextId = 1;
+
+/** A stable id for an element that shows hints. */
+export function useHintId(): number {
+  return useRef(nextId++).current;
+}
+
+/** Hover and focus handlers that show a hint (with its own title) for any element, such as a link. */
+export function hintHandlers(id: number, text: string, title: string) {
+  const show = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    hint.value = { id, text, title, x: r.left + r.width / 2, y: r.top, bottom: r.bottom, pinned: false };
+  };
+  const hide = () => { if (hint.value?.id === id) hint.value = null; };
+  return {
+    onMouseEnter: (e: MouseEvent) => show(e.currentTarget as HTMLElement),
+    onMouseLeave: hide,
+    onFocus: (e: FocusEvent) => show(e.currentTarget as HTMLElement),
+    onBlur: hide,
+  };
+}
 
 /** A small calculator button beside a computed value. */
 export function Computed({ text }: { text: string }) {
@@ -54,7 +74,7 @@ export function HintLayer() {
       class="hint" role="tooltip"
       style={{ left: `${left}px`, width: `${W}px`, ...(above ? { bottom: `${(typeof window === 'undefined' ? 900 : window.innerHeight) - h.y + 8}px` } : { top: `${h.bottom + 8}px` }) }}
     >
-      <span class="hint-title">{t('computed.label')}</span>
+      <span class="hint-title">{h.title ?? t('computed.label')}</span>
       {h.text}
     </div>
   );

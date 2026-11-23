@@ -6,7 +6,7 @@ import { palette, haloExtra, haloStyle, CASING, FAMILIES, HIDDEN_BADGE } from '.
 import { timeShares, type Scale } from '../color/scale';
 import { fmtDistance, fmtDuration, fmtPercent, fmtSpeed } from '../format';
 import { differentDays, fmtShortDate } from '../time/zones';
-import { measureName, measureTitle, stepLabels, unitOf } from './labels';
+import { formatName, measureName, measureTitle, stepLabels, unitOf } from './labels';
 import { IconChevronRight, IconCopy, IconDoc, IconEye, IconEyeOff, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
@@ -28,7 +28,7 @@ export function TrackRow({ item }: { item: TrackItem }) {
       ? `${fmtShortDate(st.start, S.zone.value, loc)} – ${fmtShortDate(st.end, S.zone.value, loc)}`
       : fmtShortDate(st.start, S.zone.value, loc),
     `${fmtDistance(st.distanceM, u, loc)} ${u === 'imperial' ? t('unit.mi') : t('unit.km')}`,
-    tr.format.toUpperCase(),
+    formatName(tr.format),
   ].join(' · ');
 
   return (
@@ -172,6 +172,7 @@ export function measureHint(item: TrackItem, key: MeasureKey, scale: Scale): str
     return item.track.derived.speedFromFile ? steps : `${explain.speedDerived()} ${steps}`;
   }
   if (key === 'ele') return explain.steps();
+  if (key === 'accel') return `${explain.accel()} ${explain.steps()}`;
   return null;
 }
 

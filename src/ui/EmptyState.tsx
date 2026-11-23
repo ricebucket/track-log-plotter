@@ -26,6 +26,7 @@ export function EmptyState() {
             <span class="eyebrow">{t('empty.supports')}</span>
             <span class="pill">GPX</span>
             <span class="pill">NMEA</span>
+            <span class="pill">Columbus Fusion</span>
           </div>
           <div class="privacy"><IconLock /><span>{t('empty.privacy')}</span></div>
         </main>

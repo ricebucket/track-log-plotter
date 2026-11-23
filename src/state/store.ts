@@ -4,7 +4,7 @@ import { initialLang, LOCALE, translate, type Lang, type Params } from '../i18n/
 import { addTracks, alignOffsets, applyToAll, removeTrack, setColor, setHalo, setVisible, trackUid, type TrackItem } from './logic';
 import { buildScale, type Scale } from '../color/scale';
 import { eleFactor, speedFactor, type Units } from '../format';
-import { isValidZone, type ZoneSel } from '../time/zones';
+import { clockShift, isValidZone, type ZoneSel } from '../time/zones';
 import type { BasemapId } from '../map/basemaps';
 import { BASEMAP_IDS, isDarkBasemap } from '../map/basemaps';
 import { parseFile } from '../parse/client';
@@ -36,7 +36,7 @@ export const units = signal<Units>(saved.units === 'imperial' ? 'imperial' : 'me
 export const panelMin = signal(saved.panelMin ?? false);
 export const timelineMin = signal(saved.timelineMin ?? narrow);
 export const showArrows = signal(saved.arrows ?? true);
-export const showFixes = signal(saved.fixes ?? true);
+export const showFixes = signal(saved.fixes ?? false);
 export const showGaps = signal(saved.gaps ?? true);
 
 effect(() => {
@@ -80,6 +80,7 @@ export const scales = computed(() => {
     grade: buildScale('grade', all),
     hdop: buildScale('hdop', all),
     sats: buildScale('sats', all),
+    accel: buildScale('accel', all),
     fix: buildScale('fix', all),
   } satisfies Record<MeasureKey, Scale>;
   lastScales = { key, value };
@@ -117,6 +118,10 @@ export const page = signal<Page>({ kind: 'tracks' });
 export const picker = signal<{ which: 'color' | 'halo'; anchorTop: number } | null>(null);
 export const basemapOpen = signal(false);
 export const zoneOpen = signal(false);
+/** The part of the timeline shown when zoomed in, or null for all of it. */
+export const timelineView = signal<[number, number] | null>(null);
+/** The track whose file time zone is being picked (details page), or null. */
+export const clockPicker = signal<string | null>(null);
 export const limitNotice = signal<string | null>(null);
 
 export interface LoadNotice { id: string; file: string; problems: number }
@@ -163,7 +168,7 @@ export async function openFiles(files: File[]) {
   addLoaded(ok);
 }
 
-export const SAMPLE_FILES = ['central-park-loop.nmea', 'central-park-loop.gpx', 'roosevelt-island-run.gpx'];
+export const SAMPLE_FILES = ['central-park-loop.nmea', 'roosevelt-island-run.gpx'];
 
 export async function loadSample(base = import.meta.env.BASE_URL) {
   const files = await Promise.all(SAMPLE_FILES.map(async (name) => {
@@ -218,6 +223,28 @@ export function openDetails(id: string) {
   });
 }
 
+/**
+ * Reads a track's zoneless times in another time zone. The clock readings stay
+ * the same, so the whole track moves by the difference between the zones.
+ */
+export function setClock(id: string, z: ZoneSel) {
+  const it = items.value.find((x) => x.id === id);
+  const tr = it?.track;
+  if (!it || !tr?.clock || tr.clock === z) return;
+  const delta = clockShift(tr.cols.t[0], tr.clock, z);
+  const track: LoadedTrack = {
+    ...tr,
+    clock: z,
+    cols: { ...tr.cols, t: tr.cols.t.map((v) => v + delta) },
+    flags: tr.flags.map((f) => ({ ...f, t: f.t + delta })),
+    derived: { ...tr.derived, stats: { ...tr.derived.stats, start: tr.derived.stats.start + delta, end: tr.derived.stats.end + delta } },
+  };
+  batch(() => {
+    items.value = items.value.map((x) => (x.id === id ? { ...x, track } : x));
+    if (cursorT.value !== null && selectedId.value === id) cursorT.value += delta;
+  });
+}
+
 /** Removes the cursor, which closes the fix card on the map. */
 export function clearCursor() {
   cursorT.value = null;
@@ -231,6 +258,8 @@ export function clearAll() {
     page.value = { kind: 'tracks' };
     picker.value = null;
     zoneOpen.value = false;
+    clockPicker.value = null;
+    timelineView.value = null;
     limitNotice.value = null;
     loadNotice.value = null;
     loadErrors.value = [];
@@ -253,6 +282,8 @@ export function resetForTests() {
     picker.value = null;
     basemapOpen.value = false;
     zoneOpen.value = false;
+    clockPicker.value = null;
+    timelineView.value = null;
     limitNotice.value = null;
     loadNotice.value = null;
     loadErrors.value = [];

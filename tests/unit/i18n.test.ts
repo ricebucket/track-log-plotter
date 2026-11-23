@@ -59,7 +59,7 @@ describe('translations', () => {
   it('keeps interface text out of the components', () => {
     // Text between tags in JSX must come from the message files. Allowed: the
     // format names, the language names and symbols.
-    const allowed = new Set(['GPX', 'NMEA', 'EN', '中文', 'UTC', 'HDOP', 'VDOP', 'PDOP', '#', '×', '✓', '–', '9']);
+    const allowed = new Set(['GPX', 'NMEA', 'Columbus Fusion', 'EN', '中文', 'UTC', 'HDOP', 'VDOP', 'PDOP', '#', '×', '✓', '–', '9']);
     const bad: string[] = [];
     let scanned = 0;
     for (const f of files(join(ROOT, 'src', 'ui'))) {

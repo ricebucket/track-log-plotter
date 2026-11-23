@@ -13,7 +13,7 @@ import { IconUpload } from './icons';
 import { HintLayer, hint } from './Computed';
 import { ZonePicker } from './ZonePicker';
 
-const ACCEPT = '.gpx,.GPX,.nmea,.NMEA,.nma,.log,.LOG,.txt';
+const ACCEPT = '.gpx,.GPX,.nmea,.NMEA,.nma,.log,.LOG,.txt,.csv,.CSV';
 
 export function App({ Map }: { Map: ComponentType }) {
   const [dragging, setDragging] = useState(false);
@@ -47,6 +47,7 @@ export function App({ Map }: { Map: ComponentType }) {
   }, []);
 
   const loaded = S.items.value.length > 0;
+  const clockItem = S.clockPicker.value ? S.items.value.find((x) => x.id === S.clockPicker.value) : undefined;
   const cls = ['app', S.panelMin.value || !loaded ? 'panel-min' : '', S.timelineMin.value || !loaded ? 'timeline-min' : ''].filter(Boolean).join(' ');
   return (
     <div class={cls}>
@@ -57,7 +58,18 @@ export function App({ Map }: { Map: ComponentType }) {
           {S.timelineMin.value ? <TimelineButton /> : <Timeline />}
           <Tooltip />
           {S.picker.value && <MeasurePicker />}
-          {S.zoneOpen.value && <ZonePicker at={S.cursorT.value ?? S.selected.value?.track.derived.stats.start ?? 0} />}
+          {S.zoneOpen.value && (
+            <ZonePicker
+              at={S.cursorT.value ?? S.selected.value?.track.derived.stats.start ?? 0} value={S.zone.value} title={t('zone.pick')}
+              onPick={(z) => { S.zone.value = z; }} onClose={() => { S.zoneOpen.value = false; }} trigger="[data-zone-trigger]"
+            />
+          )}
+          {clockItem?.track.clock && (
+            <ZonePicker
+              at={clockItem.track.cols.t[0]} value={clockItem.track.clock} title={t('clock.pick', { id: clockItem.id })} quick className="clock"
+              onPick={(z) => S.setClock(clockItem.id, z)} onClose={() => { S.clockPicker.value = null; }} trigger="[data-clock-trigger]"
+            />
+          )}
         </>
       ) : (
         <EmptyState />

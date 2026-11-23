@@ -79,6 +79,17 @@ export function offsetMinutes(t: number, zone: ZoneSel): number {
   return m[1] === '−' ? -v : v;
 }
 
+/**
+ * How far (ms) to move times that were read in zone `from` so they read in
+ * zone `to` instead: the same clock readings, near time t.
+ */
+export function clockShift(t: number, from: ZoneSel, to: ZoneSel): number {
+  const wall = t + offsetMinutes(t, from) * 60_000;
+  let u = wall - offsetMinutes(wall, to) * 60_000;
+  u = wall - offsetMinutes(u, to) * 60_000; // again, in case a daylight-saving change lies between
+  return u - t;
+}
+
 /** "America/New_York" → "New York". */
 export function zoneCity(id: string): string {
   if (id === 'UTC' || id === 'utc') return 'UTC';

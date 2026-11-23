@@ -8,13 +8,14 @@ const SKETCH = 512;
 export const RUNNING_KMH = 20;
 
 /** Number of color steps per measure. */
-export const STEPS: Record<MeasureKey, number> = { speed: 5, ele: 5, grade: 5, hdop: 4, sats: 4, fix: 2 };
+export const STEPS: Record<MeasureKey, number> = { speed: 5, ele: 5, grade: 5, hdop: 4, sats: 4, fix: 2, accel: 5 };
 
 /** Fixed step edges where the measure has a natural scale. */
 const FIXED: Partial<Record<MeasureKey, number[]>> = {
   grade: [1, 2, 4, 6], // percent, uphill or downhill
   hdop: [2, 5, 10],
   sats: [10, 7, 5], // more satellites is better: step 0 is 10 or more
+  accel: [0.1, 0.25, 0.5, 1], // g: smooth, light, firm, hard, a jolt
 };
 
 export interface Scale {
@@ -30,7 +31,7 @@ export interface Scale {
   log: boolean;
 }
 
-/** The value of a measure at fix i (km/h, m, |%|, HDOP, count, fix quality); NaN when missing. */
+/** The value of a measure at fix i (km/h, m, |%|, HDOP, count, fix quality, g); NaN when missing. */
 export function valueAt(tr: LoadedTrack, key: MeasureKey, i: number): number {
   switch (key) {
     case 'speed': return tr.derived.kmh[i];
@@ -39,6 +40,7 @@ export function valueAt(tr: LoadedTrack, key: MeasureKey, i: number): number {
     case 'hdop': return tr.cols.hdop[i];
     case 'sats': return tr.cols.sats[i];
     case 'fix': return tr.cols.fixq[i] > 0 ? tr.cols.fixq[i] : NaN;
+    case 'accel': return tr.cols.accel[i];
   }
 }
 

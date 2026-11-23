@@ -13,6 +13,8 @@ export interface FixInfo {
   ellipsoid: number;
   grade: number;
   hdop: number;
+  /** Strongest acceleration in g during the fix's second (motion sensor), or NaN. */
+  accel: number;
   vdop: number;
   pdop: number;
   sats: number;
@@ -32,6 +34,6 @@ export function fixAt(tr: LoadedTrack, t: number, slackMs = 5000): FixInfo | nul
   return {
     i, t: c.t[i], lat: c.lat[i], lon: c.lon[i], kmh: tr.derived.kmh[i], ele: c.ele[i],
     ellipsoid: c.ele[i] + c.geoid[i], grade: tr.derived.grade[i], hdop: c.hdop[i], vdop: c.vdop[i], pdop: c.pdop[i],
-    sats: c.sats[i], fixq: c.fixq[i], course: c.course[i], line: c.line[i], lineEnd: c.lineEnd[i], flag: flag ? flag.n : null,
+    sats: c.sats[i], fixq: c.fixq[i], course: c.course[i], accel: c.accel[i], line: c.line[i], lineEnd: c.lineEnd[i], flag: flag ? flag.n : null,
   };
 }

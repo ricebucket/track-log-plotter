@@ -8,7 +8,7 @@ import { mapApi } from '../map/bridge';
 import { fmtNum } from '../format';
 import { useDismiss } from './hooks';
 import { scaleBar } from './scaleBar';
-import { IconCheck, IconClose, IconCompass, IconFit, IconSettings, IconZoomIn, IconZoomOut } from './icons';
+import { IconCheck, IconClose, IconCompass, IconFit, IconGear, IconZoomIn, IconZoomOut } from './icons';
 
 function Thumb({ id, size = 64 }: { id: BasemapId; size?: number }) {
   const c = BASEMAPS[id].thumb;
@@ -98,7 +98,7 @@ export function MapTools() {
       <button ref={btn} type="button" class="bm-button" aria-haspopup="dialog" aria-expanded={S.basemapOpen.value ? 'true' : 'false'} title={t('options.hint')} onClick={() => { S.basemapOpen.value = !S.basemapOpen.value; }}>
         <span class="bm-mini"><Thumb id={id} size={40} /></span>
         <span class="bm-button-text"><span class="eyebrow">{t('basemap.title')}</span><span class="bm-current">{t(`basemap.${id}`)}</span></span>
-        <span class="bm-opts"><IconSettings size={18} /><span class="bm-opts-label">{t('options.title')}</span></span>
+        <span class="bm-opts"><IconGear size={21} /><span class="sr-only">{t('options.title')}</span></span>
       </button>
       <div class="zoom-stack">
         <button type="button" class="zoom-btn" aria-label={t('map.zoomIn')} title={t('map.zoomIn')} onClick={() => mapApi.zoomIn()}><IconZoomIn /></button>

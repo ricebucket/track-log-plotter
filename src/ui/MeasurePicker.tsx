@@ -7,8 +7,8 @@ import { measureName } from './labels';
 import { useDismiss } from './hooks';
 import { IconCalc, IconClose } from './icons';
 
-const COLOR_KEYS: ColorKey[] = ['speed', 'ele', 'grade', 'hdop', 'sats', 'fix', 'none'];
-const HALO_KEYS: HaloKey[] = ['speed', 'ele', 'grade', 'hdop', 'sats', 'fix', 'off'];
+const COLOR_KEYS: ColorKey[] = ['speed', 'ele', 'grade', 'hdop', 'sats', 'fix', 'accel', 'none'];
+const HALO_KEYS: HaloKey[] = ['speed', 'ele', 'grade', 'hdop', 'sats', 'fix', 'accel', 'off'];
 
 /** A pane beside the panel listing every measure with a full explanation. */
 export function MeasurePicker() {
@@ -23,8 +23,9 @@ export function MeasurePicker() {
   if (!p || !item) return null;
 
   const which = p.which;
-  const keys = which === 'color' ? COLOR_KEYS : HALO_KEYS;
   const avail = measuresOf(item.track);
+  // Acceleration needs a motion sensor, which few loggers have: list it only for tracks that have it.
+  const keys = (which === 'color' ? COLOR_KEYS : HALO_KEYS).filter((k) => k !== 'accel' || avail.has('accel'));
   const current = which === 'color' ? item.color : item.halo;
   const relative = item.track.derived.hdopRelative;
   const vh = typeof window === 'undefined' ? 900 : window.innerHeight;
@@ -56,7 +57,7 @@ export function MeasurePicker() {
               <span class="opt-text">
                 <span class="opt-title">
                   <span class="opt-name">{measureName(k)}</span>
-                  {(k === 'grade' || (k === 'speed' && !item.track.derived.speedFromFile)) && <span class="computed-tag"><IconCalc size={11} />{t('computed.tag')}</span>}
+                  {(k === 'grade' || k === 'accel' || (k === 'speed' && !item.track.derived.speedFromFile)) && <span class="computed-tag"><IconCalc size={11} />{t('computed.tag')}</span>}
                 </span>
                 <span class="opt-desc">{t(`measure.${k}.long`)}</span>
                 {k === 'hdop' && relative && ok && <span class="opt-note">{t('measure.hdop.relativeNote')}</span>}

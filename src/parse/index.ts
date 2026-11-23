@@ -2,17 +2,24 @@ import type { Format, LoadedTrack, ParsedTrack, ParseResult } from '../model/typ
 import { derive, gapSummary } from '../derive/derive';
 import { parseGpx } from './gpx';
 import { parseNmea } from './nmea';
+import { parseFusion } from './fusion';
 
 /** Largest file the app will read (bytes). */
 export const MAX_BYTES = 300 * 1024 * 1024;
 
 const NMEA_LINE = /^\s*\$(GP|GN|GL|GA|GB|BD|GQ|GI)[A-Z]{3},/m;
+// Columbus Fusion (and older Columbus CSV) logs: a "# Format=" line, or a
+// header that starts with tag,date,time (optionally after INDEX) and the position.
+const CSV_HEADER = /^\s*(?:index\s*,\s*)?tag\s*,\s*date\s*,\s*time\s*,\s*lat/im;
+const CSV_FORMAT = /^\s*#\s*format\s*=/im;
 
 /** Decides the format from the content, falling back to the file extension. */
 export function detectFormat(text: string, file: string): Format | null {
   const head = text.slice(0, 4096);
   if (/<gpx[\s>]/.test(head)) return 'gpx';
   if (NMEA_LINE.test(head)) return 'nmea';
+  const plain = head.includes('\0') ? head.replace(/\0/g, '') : head;
+  if (CSV_HEADER.test(plain) || (CSV_FORMAT.test(plain) && /\blat/i.test(plain))) return 'fusion';
   const ext = file.toLowerCase().split('.').pop() ?? '';
   if (ext === 'gpx' && head.includes('<')) return 'gpx';
   if (['nmea', 'nma', 'log', 'txt'].includes(ext) && head.includes('$')) return 'nmea';
@@ -25,7 +32,7 @@ export function parseText(text: string, file: string, sizeBytes = text.length): 
   if (!src.trim()) return { ok: false, file, error: 'empty' };
   const format = detectFormat(src, file);
   if (!format) return { ok: false, file, error: 'unknownFormat' };
-  const parsed = format === 'gpx' ? parseGpx(src) : parseNmea(src);
+  const parsed = format === 'gpx' ? parseGpx(src) : format === 'fusion' ? parseFusion(src) : parseNmea(src);
   if (parsed.cols.n === 0) return { ok: false, file, error: 'empty' };
   checkPlaceholders(parsed);
   const derived = derive(parsed);

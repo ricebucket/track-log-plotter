@@ -155,12 +155,15 @@ function statsOf(c: Columns, eleS: Float32Array, dist: Float64Array, gap: Uint8A
   const start = n ? c.t[0] : 0;
   const end = n ? c.t[n - 1] : 0;
   const ms = median(c.sats);
+  let maxAccel = -Infinity;
+  for (let i = 0; i < n; i++) if (c.accel[i] > maxAccel) maxAccel = c.accel[i];
   return {
     distanceM, start, end, durationS: (end - start) / 1000, movingS,
     avgKmh: movingS > 0 ? (distanceM / movingS) * 3.6 : 0, maxKmh,
     climbM: anyEle ? climb : null, minEle: anyEle ? minEle : null, maxEle: anyEle ? maxEle : null,
     intervalS, correctedShare: fixKnown ? corrected / fixKnown : null,
     medianHdop: Number.isFinite(mh) ? mh : null, medianSats: Number.isFinite(ms) ? ms : null,
+    maxAccel: Number.isFinite(maxAccel) ? maxAccel : null,
     bbox: n ? [w, s, e, nn] : [0, 0, 0, 0],
   };
 }

@@ -33,22 +33,34 @@ function bearing(a, b) {
 }
 
 // Routes (approximate public paths, New York City).
+// Waypoints along real places, checked against OpenStreetMap outlines so every
+// 10 m stays on land: the ride on Central Park's drives, the run around
+// Roosevelt Island's shore, the evening ride along Manhattan's Hudson edge.
+// Derived from map data © OpenStreetMap contributors (ODbL).
 const ROUTES = {
   centralPark: [
-    [40.7681, -73.9812], [40.7722, -73.9787], [40.7769, -73.9757], [40.7818, -73.9722], [40.7866, -73.9688],
-    [40.7912, -73.9655], [40.7951, -73.9625], [40.7983, -73.9588], [40.7994, -73.9548], [40.7975, -73.9520],
-    [40.7930, -73.9530], [40.7880, -73.9562], [40.7830, -73.9598], [40.7779, -73.9634], [40.7730, -73.9668],
-    [40.7686, -73.9700], [40.7660, -73.9745], [40.7664, -73.9790], [40.7681, -73.9812],
+    [40.76856, -73.98010], [40.76566, -73.97343], [40.76916, -73.97114], [40.77257, -73.96864], [40.77590, -73.96595],
+    [40.77923, -73.96326], [40.78264, -73.96077], [40.78613, -73.95848], [40.78963, -73.95618], [40.79304, -73.95369],
+    [40.79637, -73.95100], [40.79928, -73.95769], [40.79578, -73.95998], [40.79237, -73.96247], [40.78904, -73.96516],
+    [40.78571, -73.96785], [40.78230, -73.97034], [40.77880, -73.97263], [40.77530, -73.97492], [40.77189, -73.97741],
+    [40.76856, -73.98010],
   ],
   rooseveltIsland: [
-    [40.7531, -73.9634], [40.7570, -73.9598], [40.7612, -73.9561], [40.7655, -73.9522], [40.7697, -73.9472],
-    [40.7718, -73.9431], [40.7703, -73.9418], [40.7664, -73.9461], [40.7622, -73.9503], [40.7580, -73.9545],
-    [40.7543, -73.9592], [40.7524, -73.9625], [40.7531, -73.9634],
+    [40.75002, -73.96107], [40.74999, -73.96101], [40.75111, -73.95977], [40.75159, -73.95935], [40.75218, -73.95841],
+    [40.75292, -73.95751], [40.75492, -73.95558], [40.75661, -73.95347], [40.75697, -73.95325], [40.75748, -73.95272],
+    [40.75859, -73.95215], [40.75899, -73.95160], [40.76004, -73.95070], [40.76078, -73.94974], [40.76396, -73.94706],
+    [40.76601, -73.94518], [40.76742, -73.94419], [40.76845, -73.94326], [40.76923, -73.94218], [40.76956, -73.94151],
+    [40.77096, -73.94058], [40.77200, -73.94064], [40.77253, -73.94036], [40.77258, -73.94046], [40.77227, -73.94070],
+    [40.77186, -73.94179], [40.77030, -73.94340], [40.76956, -73.94440], [40.76898, -73.94479], [40.76860, -73.94491],
+    [40.76858, -73.94502], [40.76812, -73.94536], [40.76801, -73.94557], [40.76404, -73.94874], [40.76407, -73.94889],
+    [40.76338, -73.94971], [40.76152, -73.95126], [40.76064, -73.95175], [40.75979, -73.95263], [40.75987, -73.95278],
+    [40.75961, -73.95305], [40.75956, -73.95297], [40.75773, -73.95470], [40.75687, -73.95533], [40.75376, -73.95811],
+    [40.75314, -73.95893], [40.75166, -73.95967], [40.75055, -73.96080], [40.75006, -73.96114], [40.75002, -73.96107],
   ],
   hudson: [
-    [40.7046, -74.0166], [40.7110, -74.0168], [40.7203, -74.0129], [40.7305, -74.0108], [40.7420, -74.0093],
-    [40.7535, -74.0068], [40.7640, -73.9985], [40.7740, -73.9915], [40.7860, -73.9840], [40.7975, -73.9760],
-    [40.8085, -73.9682], [40.8190, -73.9600],
+    [40.70460, -74.01660], [40.71100, -74.01644], [40.72030, -74.01236], [40.73050, -74.01062], [40.74200, -74.00930],
+    [40.75350, -74.00680], [40.76400, -73.99850], [40.77400, -73.99150], [40.78600, -73.98400], [40.79750, -73.97600],
+    [40.80850, -73.96820], [40.81900, -73.96000],
   ],
 };
 
@@ -153,6 +165,40 @@ function toGpx(fixes, { creator, name, rand, mode, flags = [], gapIdx = -1 }) {
   return lines.join('\n');
 }
 
+/**
+ * A Columbus Fusion log (CSV): a "# Format=" line, a header row, then
+ * one row per fix, with the tag and the date only where they change. After a
+ * pause in logging the first fix is tagged G and the next T. With motion data,
+ * each fix row carries an accelerometer reading (in g) and is followed by nine
+ * rows of readings alone: ten a second. The clock is the logger's local time,
+ * `clockH` hours from UTC, with no zone in the file.
+ */
+function toCsv(fixes, { rand, clockH, motion = false, pauseAfter = -1, pauseS = 0, marks = [], bumps = [] }) {
+  const out = [`# Format=ColumbusFusion; Version=1.0; Type=${motion ? 'GNSS+IMU' : 'GNSS'}`, `tag,date,time,lat,lon,alt,speed,heading${motion ? ',ax,ay,az' : ''}`];
+  // Gravity as the logger sees it, tilted a little in its mount.
+  const g = [0.05, 0.12, 0.99];
+  const len = Math.hypot(...g);
+  for (let k = 0; k < 3; k++) g[k] /= len;
+  let lastDate = '';
+  fixes.forEach((f, i) => {
+    const d = new Date(f.t + clockH * 3600_000 + (i > pauseAfter && pauseAfter >= 0 ? pauseS * 1000 : 0));
+    const date = `${pad(d.getUTCFullYear() % 100)}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}`;
+    const time = `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+    const tag = i === 0 ? 'T' : i === pauseAfter + 1 ? 'G' : i === pauseAfter + 2 ? 'T' : marks.includes(i) ? 'C' : '';
+    const row = [tag, date !== lastDate ? date : '', time, f.lat.toFixed(7), f.lon.toFixed(7), f.ele.toFixed(1), (f.v * 3.6).toFixed(1), f.course.toFixed(1)];
+    lastDate = date;
+    if (!motion) { out.push(row.join(',')); return; }
+    // Speeding up or slowing down pushes along the logger's x axis; the road adds a little buzz, and a bump a jolt.
+    const along = ((fixes[Math.min(i + 1, fixes.length - 1)].v - f.v) / 9.81) * 0.5;
+    for (let k = 0; k < 10; k++) {
+      const jolt = bumps.includes(i) && k === 4 ? 0.9 : 0;
+      const a = [g[0] + along + (rand() - 0.5) * 0.04, g[1] + (rand() - 0.5) * 0.04, g[2] + (rand() - 0.5) * 0.06 + jolt].map((v) => v.toFixed(2));
+      out.push((k === 0 ? row : Array(8).fill('')).concat(a).join(','));
+    }
+  });
+  return out.join('\r\n') + '\r\n';
+}
+
 function write(rel, text) {
   const p = join(root, rel);
   mkdirSync(dirname(p), { recursive: true });
@@ -189,7 +235,6 @@ const gpxOvernight = toGpx([...eveningUp, ...morningBack], { creator: 'Synthetic
 // (The cut-off version below is a test fixture only.)
 const truncatedA = nmeaA.join('\n') + '\n' + nmeaA[4].slice(0, 28); // an RMC sentence cut after 28 characters
 write('public/sample/central-park-loop.nmea', nmeaA.join('\n') + '\n');
-write('public/sample/central-park-loop.gpx', gpxB);
 write('public/sample/roosevelt-island-run.gpx', gpxRun);
 
 // Test fixtures.
@@ -200,6 +245,10 @@ write('tests/fixtures/central-park-loop-garmin.gpx', gpxGarmin);
 write('tests/fixtures/roosevelt-island-run.gpx', gpxRun);
 write('tests/fixtures/hudson-greenway-evening.log', nmeaEvening.join('\n') + '\n');
 write('tests/fixtures/hudson-overnight.gpx', gpxOvernight);
+// CSV logs on a New York clock (UTC−4 in June): the ride with motion data
+// (six minutes, a 95-second pause, two bumps) and the run without.
+write('tests/fixtures/central-park-loop-motion.csv', toCsv(ride.slice(0, 360), { rand: rng(108), clockH: -4, motion: true, pauseAfter: 180, pauseS: 95, bumps: [60, 250] }));
+write('tests/fixtures/roosevelt-island-run.csv', toCsv(run, { rand: rng(109), clockH: -4, marks: [200] }));
 
 // A damaged NMEA log: every kind of damage the reader handles, in one file.
 const dmg = toNmea(ride.slice(0, 120), { rand: rng(106), gsv: false });

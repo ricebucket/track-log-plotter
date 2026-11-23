@@ -2,14 +2,43 @@ import type { FieldKey } from '../model/types';
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { fmtBytes, fmtDistance, fmtDuration, fmtEle, fmtNum, fmtPercent, fmtSpeed } from '../format';
-import { differentDays, fmtClock, fmtDate, fmtDateClock, offsetLabel } from '../time/zones';
-import { noteText, problemBody, problemTitle, unitOf } from './labels';
+import { differentDays, fmtClock, fmtDate, fmtDateClock, localZoneId, offsetLabel, zoneCity } from '../time/zones';
+import type { TrackItem } from '../state/logic';
+import { useEffect } from 'preact/hooks';
+import { formatName, noteText, problemBody, problemTitle, unitOf } from './labels';
 import { badgeOf } from './TrackRow';
-import { IconBack, IconFlag, IconTrash, IconWarn } from './icons';
+import { IconBack, IconChevronRight, IconFlag, IconTrash, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
 
-const FIELDS: FieldKey[] = ['time', 'position', 'ele', 'speed', 'course', 'hdop', 'vdop', 'pdop', 'sats', 'fix', 'geoid', 'flags'];
+/**
+ * For files whose times have no time zone: which zone they're read in. The
+ * clock readings stay as written; picking a zone moves the whole track.
+ */
+function ClockZone({ item }: { item: TrackItem }) {
+  const tr = item.track;
+  const z = tr.clock ?? 'utc';
+  const t0 = tr.cols.t[0];
+  const open = S.clockPicker.value === item.id;
+  useEffect(() => () => { if (S.clockPicker.peek() === item.id) S.clockPicker.value = null; }, [item.id]);
+  const label = z === 'local' ? t('clock.local', { zone: zoneCity(localZoneId()), offset: offsetLabel(t0, 'local') })
+    : z === 'utc' ? 'UTC' : `${zoneCity(z)} (${offsetLabel(t0, z)})`;
+  return (
+    <section class="details-sec" aria-labelledby="d-clock">
+      <h3 id="d-clock">{t('details.clock')}</h3>
+      <p class="muted small clock-note">{t('details.clockNote')}</p>
+      <button
+        type="button" class={`measure-btn${open ? ' is-open' : ''}`} data-clock-trigger aria-haspopup="dialog" aria-expanded={open ? 'true' : 'false'}
+        onClick={() => { S.clockPicker.value = open ? null : item.id; }}
+      >
+        <span class="measure-value">{label}</span>
+        <IconChevronRight />
+      </button>
+    </section>
+  );
+}
+
+const FIELDS: FieldKey[] = ['time', 'position', 'ele', 'speed', 'course', 'hdop', 'vdop', 'pdop', 'sats', 'fix', 'geoid', 'accel', 'flags'];
 
 /** The track's details page, inside the side panel. */
 export function Details({ id }: { id: string }) {
@@ -39,6 +68,7 @@ export function Details({ id }: { id: string }) {
   rows.push([t('details.fixes'), t('details.fixesValue', { n: fmtNum(tr.cols.n, loc, 0, 0), every: fmtNum(st.intervalS, loc, 1, 0) }), explain.interval()]);
   if (st.medianHdop !== null) rows.push([t('stat.medianHdop'), fmtNum(st.medianHdop, loc, 1, 1) + (tr.derived.hdopRelative ? t('measure.relativeSuffix') : ''), explain.medianHdop()]);
   if (st.medianSats !== null) rows.push([t('stat.medianSats'), fmtNum(st.medianSats, loc, 0, 0), explain.medianSats()]);
+  if (st.maxAccel !== null) rows.push([t('stat.maxAccel'), `${fmtNum(st.maxAccel, loc, 2, 2)} ${t('unit.g')}`, explain.accel()]);
   if (st.correctedShare !== null) rows.push([t('stat.corrected'), fmtPercent(st.correctedShare, loc), explain.corrected()]);
 
   return (
@@ -51,7 +81,7 @@ export function Details({ id }: { id: string }) {
         <span class="badge big" style={{ background: badgeOf(item) }}>{item.id}</span>
         <span class="details-name">
           <span class="track-name">{tr.file}</span>
-          <span class="track-sub">{[tr.format.toUpperCase(), fmtBytes(tr.sizeBytes, loc), tr.creator, tr.name].filter(Boolean).join(' · ')}</span>
+          <span class="track-sub">{[formatName(tr.format), fmtBytes(tr.sizeBytes, loc), tr.creator, tr.name].filter(Boolean).join(' · ')}</span>
         </span>
       </div>
 
@@ -66,6 +96,8 @@ export function Details({ id }: { id: string }) {
           ))}
         </section>
       )}
+
+      {tr.clock && <ClockZone item={item} />}
 
       <section class="details-sec" aria-labelledby="d-summary">
         <h3 id="d-summary">{t('details.summary')}</h3>

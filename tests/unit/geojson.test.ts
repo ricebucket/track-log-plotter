@@ -4,7 +4,7 @@ import { addTracks } from '../../src/state/logic';
 import { buildScale } from '../../src/color/scale';
 import type { LoadedTrack, MeasureKey } from '../../src/model/types';
 import { FAMILIES, SINGLE } from '../../src/color/palettes';
-import { columns, PLAY_SPEED, playStep, tickStep, ticks } from '../../src/ui/timelineMath';
+import { columns, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks } from '../../src/ui/timelineMath';
 import { scaleBar } from '../../src/ui/scaleBar';
 import { load } from '../helpers/fixtures';
 
@@ -91,6 +91,28 @@ describe('dots for tiny tracks', () => {
 });
 
 describe('timeline math', () => {
+  it('snaps the cursor to the nearest fix, also inside a gap', () => {
+    const tr = load('hudson-overnight.gpx');
+    const c = tr.cols;
+    const night = c.t.findIndex((t, i) => i > 0 && t - c.t[i - 1] > 3_600_000);
+    const tracks = [{ id: 'A', track: tr }];
+    // Early in the night's gap: the evening's last fix; late in it: the morning's first.
+    expect(snapTime(c.t[night - 1] + 60_000, tracks, {})).toBe(c.t[night - 1]);
+    expect(snapTime(c.t[night] - 60_000, tracks, {})).toBe(c.t[night]);
+    // Offsets move a track along the timeline.
+    expect(snapTime(c.t[10] + 5000 + 1200, tracks, { A: 5000 })).toBe(c.t[10] + 5000);
+  });
+
+  it('skips gaps during playback, and starts over after the last fix', () => {
+    const tr = load('hudson-overnight.gpx');
+    const c = tr.cols;
+    const night = c.t.findIndex((t, i) => i > 0 && t - c.t[i - 1] > 3_600_000);
+    const t0 = c.t[0], t1 = c.t[c.n - 1];
+    expect(skipGap(c.t[5] + 1000, tr, 0, t0, t1)).toBe(c.t[5] + 1000);
+    expect(skipGap(c.t[night - 1] + 600_000, tr, 0, t0, t1)).toBe(c.t[night]);
+    expect(skipGap(t1 + 600_000, tr, 0, t0, t1 + 3_600_000)).toBe(t0);
+  });
+
   it('plays at sixty times real time and loops at the end', () => {
     const t0 = 1_000_000, t1 = t0 + 600_000;
     expect(playStep(t0, 100, t0, t1)).toBe(t0 + 100 * PLAY_SPEED);

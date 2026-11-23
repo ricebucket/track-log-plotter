@@ -1,5 +1,5 @@
 // Text built from data: legend ranges, units and readout values.
-import type { ColorKey, HaloKey, MeasureKey, Note, Problem } from '../model/types';
+import type { ColorKey, HaloKey, MeasureKey, Note, Problem, Format } from '../model/types';
 import type { Scale } from '../color/scale';
 import { fmtEle, fmtNum, fmtSpeed } from '../format';
 import { locale, t, units } from '../state/store';
@@ -9,7 +9,13 @@ export function unitOf(key: MeasureKey): string {
   if (key === 'speed') return imp ? t('unit.mph') : t('unit.kmh');
   if (key === 'ele') return imp ? t('unit.ft') : t('unit.m');
   if (key === 'grade') return '%';
+  if (key === 'accel') return t('unit.g');
   return '';
+}
+
+/** A file format's name, as people know it. */
+export function formatName(f: Format): string {
+  return f === 'gpx' ? 'GPX' : f === 'nmea' ? 'NMEA' : 'Columbus Fusion';
 }
 
 export function measureName(key: ColorKey | HaloKey): string {
@@ -54,6 +60,7 @@ export function valueText(key: MeasureKey, v: number): string {
     case 'hdop': return fmtNum(v, loc, 1, 1);
     case 'sats': return t('readout.sats', { n: v });
     case 'fix': return v >= 2 ? t('fix.corrected') : t('fix.gps');
+    case 'accel': return `${fmtNum(v, loc, 2, 2)} ${t('unit.g')}`;
   }
 }
 
@@ -85,6 +92,7 @@ export function noteText(n: Note): string {
     case 'void': case 'duplicates': case 'timelessWaypoints': return t(`note.${n.kind}`, { n: n.count });
     case 'gaps': return t('note.gaps', { n: n.count, longest: Math.round(n.longestS) });
     case 'zeroSats': return t('note.zeroSats', { n: n.count, stale: n.stale });
+    case 'motion': return t('note.motion', { n: n.rate });
     default: return t(`note.${n.kind}`);
   }
 }

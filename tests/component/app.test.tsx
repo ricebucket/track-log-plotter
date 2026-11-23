@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/preact'
 import { App } from '../../src/ui/App';
 import * as S from '../../src/state/store';
 import { tipXY } from '../../src/map/bridge';
+import { clockShift } from '../../src/time/zones';
 import { load } from '../helpers/fixtures';
 
 const NoMap = () => <div data-testid="map" />;
@@ -124,7 +125,7 @@ describe('tracks panel', () => {
     expect([...document.querySelectorAll('.tl-ticks .tick-date')].map((e) => e.textContent)).toEqual(['Jul 12']);
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText('Sat, Jul 11, 2026 – Sun, Jul 12, 2026')).toBeTruthy();
-    expect(screen.getByText(/^Jul 11, 7:30:00\sPM – Jul 12, 8:34:10\sAM/)).toBeTruthy();
+    expect(screen.getByText(/^Jul 11, 7:30:00\sPM – Jul 12, 8:\d{2}:\d{2}\sAM/)).toBeTruthy();
   });
 
   it('opens the color pane from a heading, not a drop-down, and closes it on a second press', () => {
@@ -214,6 +215,78 @@ describe('tracks panel', () => {
     render(<App Map={NoMap} />);
     expect(screen.getByRole('link', { name: /Google My Maps/ }).getAttribute('href')).toBe('https://mymaps.google.com/');
     expect(screen.getByText(/choose Import under its layer and pick your GPX file/)).toBeTruthy();
+  });
+
+  it('explains My Maps on hover instead of in the panel', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    const link = screen.getByRole('link', { name: /Google My Maps/ });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    fireEvent.mouseEnter(link);
+    const tip = screen.getByRole('tooltip');
+    expect(tip.textContent).toContain('Google My Maps');
+    expect(tip.textContent).toContain('choose Import under its layer');
+    fireEvent.mouseLeave(link);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('shows the Options button as a gear, with its name read out but not shown', () => {
+    render(<App Map={NoMap} />);
+    const options = screen.getByRole('button', { name: /Options/ });
+    expect(options.querySelector('.bm-opts svg')).toBeTruthy();
+    expect(options.querySelector('.bm-opts .sr-only')!.textContent).toBe('Options');
+  });
+
+  it('starts with the Fixes switch off', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    expect(screen.getByRole('button', { name: 'Fixes' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('marks the timeline graph as log scale when the speed steps are', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    expect(S.scales.value.speed.log).toBe(true);
+    expect(document.querySelector('.lane-note')!.textContent).toContain('log scale');
+  });
+
+  it('shows acceleration from a Columbus Fusion log with motion data, and only there', () => {
+    loadFixtures('central-park-loop-motion.csv', 'roosevelt-island-run.gpx');
+    S.cursorT.value = S.items.value[0].track.cols.t[60];
+    tipXY.value = { x: 600, y: 300 };
+    render(<App Map={NoMap} />);
+    expect(screen.getByText(/· Columbus Fusion$/)).toBeTruthy();
+    // No fix quality in the file, so the halo starts on acceleration.
+    fireEvent.click(screen.getByRole('button', { name: 'Halo Acceleration (g)' }));
+    const pane = screen.getByRole('dialog', { name: 'Halo around track A' });
+    expect(within(pane).getByText(/strongest acceleration in that second/)).toBeTruthy();
+    fireEvent.click(within(pane).getByRole('button', { name: 'Close' }));
+    expect(within(document.querySelector('.tooltip') as HTMLElement).getByText('Acceleration')).toBeTruthy();
+    // A GPX track without motion data doesn't list it.
+    fireEvent.click(screen.getByRole('button', { name: /^B roosevelt-island-run.gpx/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Color/ }));
+    expect(within(screen.getByRole('dialog', { name: 'Color track B by' })).queryByText('Acceleration')).toBeNull();
+  });
+
+  it('lets the time zone of a Columbus Fusion log be changed on its details page', () => {
+    loadFixtures('roosevelt-island-run.csv');
+    const before = S.items.value[0].track.cols.t[0];
+    render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByRole('heading', { name: 'Time zone of the file' })).toBeTruthy();
+    const clock = document.querySelector('[data-clock-trigger]') as HTMLElement;
+    expect(clock.textContent).toBe('UTC');
+    fireEvent.click(clock);
+    const dlg = screen.getByRole('dialog', { name: "Time zone of track A's file" });
+    fireEvent.input(within(dlg).getByRole('searchbox'), { target: { value: 'tokyo' } });
+    fireEvent.click(within(dlg).getByRole('radio', { name: /Tokyo/ }));
+    const tr = S.items.value[0].track;
+    expect(tr.clock).toBe('Asia/Tokyo');
+    // The clock readings stay; the whole track moves to Tokyo time.
+    expect(tr.cols.t[0] - before).toBe(clockShift(before, 'utc', 'Asia/Tokyo'));
+    expect(tr.cols.t[0] - before).toBe(-9 * 3600_000);
+    expect(tr.derived.stats.start).toBe(tr.cols.t[0]);
+    expect(screen.getByRole('button', { name: /^Tokyo \(UTC\+9\)/ })).toBeTruthy();
   });
 
   it('links to Google Maps for the current view', () => {

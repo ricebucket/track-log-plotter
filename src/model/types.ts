@@ -1,14 +1,14 @@
 // Shared data model. Fixes are stored column-wise in typed arrays so a
 // 100,000-fix log moves from the parsing worker to the page without copying.
 
-export type Format = 'gpx' | 'nmea';
+export type Format = 'gpx' | 'nmea' | 'fusion';
 
 /** Measures a track can be colored or haloed by. */
-export type MeasureKey = 'speed' | 'ele' | 'grade' | 'hdop' | 'sats' | 'fix';
+export type MeasureKey = 'speed' | 'ele' | 'grade' | 'hdop' | 'sats' | 'fix' | 'accel';
 export type ColorKey = MeasureKey | 'none';
 export type HaloKey = MeasureKey | 'off';
 
-export const MEASURES: readonly MeasureKey[] = ['speed', 'ele', 'grade', 'hdop', 'sats', 'fix'];
+export const MEASURES: readonly MeasureKey[] = ['speed', 'ele', 'grade', 'hdop', 'sats', 'fix', 'accel'];
 
 /** Fix quality: 0 unknown, 1 plain GPS fix, 2 corrected (SBAS, DGPS or RTK). */
 export type FixQuality = 0 | 1 | 2;
@@ -33,6 +33,11 @@ export interface Columns {
   fixq: Int8Array;
   /** Geoid separation in meters (height of sea level above the ellipsoid). */
   geoid: Float32Array;
+  /**
+   * From a motion sensor: the strongest acceleration in g during the fix's
+   * second, with gravity taken out. NaN without motion data.
+   */
+  accel: Float32Array;
   /** First and last line of the file that this fix came from. */
   line: Int32Array;
   lineEnd: Int32Array;
@@ -75,12 +80,14 @@ export type Note =
   | { kind: 'timelessWaypoints'; count: number }
   | { kind: 'gaps'; count: number; longestS: number }
   | { kind: 'eleZero' }
-  | { kind: 'zeroSats'; count: number; stale: number };
+  | { kind: 'zeroSats'; count: number; stale: number }
+  | { kind: 'route' }
+  | { kind: 'motion'; rate: number };
 
 /** Fields a file can contain, for the details page. */
 export type FieldKey =
   | 'time' | 'position' | 'ele' | 'speed' | 'course' | 'hdop' | 'vdop' | 'pdop'
-  | 'sats' | 'fix' | 'geoid' | 'flags';
+  | 'sats' | 'fix' | 'geoid' | 'accel' | 'flags';
 
 export interface ParsedTrack {
   format: Format;
@@ -95,6 +102,11 @@ export interface ParsedTrack {
   fields: FieldKey[];
   /** Number of lines in the file (NMEA) or track points read (GPX). */
   lines: number;
+  /**
+   * For files whose times have no time zone: the zone they're read in
+   * ('local', 'utc' or an IANA id). The user can change it on the details page.
+   */
+  clock?: string;
 }
 
 export interface TrackStats {
@@ -116,6 +128,8 @@ export interface TrackStats {
   correctedShare: number | null;
   medianHdop: number | null;
   medianSats: number | null;
+  /** The strongest acceleration at any fix, in g, or null without motion data. */
+  maxAccel: number | null;
   bbox: [number, number, number, number];
 }
 

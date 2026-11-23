@@ -36,15 +36,15 @@ let arrow: ImageData | null = null;
 /** The heading-arrow icon, drawn once. A CPU-backed canvas keeps getImageData from forcing a GPU readback. */
 function arrowImage(): ImageData {
   if (arrow) return arrow;
-  const s = 32;
+  const s = 48;
   const c = document.createElement('canvas');
   c.width = c.height = s;
   const g = c.getContext('2d', { willReadFrequently: true })!;
   g.beginPath();
-  g.moveTo(9, 7); g.lineTo(24, 16); g.lineTo(9, 25); g.lineTo(13, 16); g.closePath();
+  g.moveTo(11, 8); g.lineTo(39, 24); g.lineTo(11, 40); g.lineTo(18, 24); g.closePath();
   g.fillStyle = '#ffffff';
   g.strokeStyle = '#0b1016';
-  g.lineWidth = 2;
+  g.lineWidth = 3.2;
   g.lineJoin = 'round';
   g.fill();
   g.stroke();
@@ -68,7 +68,7 @@ function addOwnLayers(map: MlMap) {
   map.addLayer({ id: 'tlp-line-sel', type: 'line', source: 'tlp-runs', filter: SELECTED as never, layout: round, paint: line as never });
   map.addLayer({
     id: 'tlp-arrows', type: 'symbol', source: 'tlp-paths', minzoom: 14,
-    layout: { 'symbol-placement': 'line', 'symbol-spacing': 70, 'icon-image': 'tlp-arrow', 'icon-size': ['interpolate', ['linear'], ['zoom'], 14, 0.7, 18, 1], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': false, 'icon-padding': 1, visibility: S.showArrows.value ? 'visible' : 'none' },
+    layout: { 'symbol-placement': 'line', 'symbol-spacing': 90, 'icon-image': 'tlp-arrow', 'icon-size': ['interpolate', ['linear'], ['zoom'], 14, 0.85, 18, 1.2], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': false, 'icon-padding': 1, visibility: S.showArrows.value ? 'visible' : 'none' },
   });
   map.addLayer({ id: 'tlp-fix-ring', type: 'circle', source: 'tlp-fixes', minzoom: FIX_GLYPH_ZOOM, paint: { 'circle-radius': 8, 'circle-color': '#ffffff', 'circle-stroke-color': ['get', 'r'], 'circle-stroke-width': 2.2 } });
   map.addLayer({ id: 'tlp-fix-text', type: 'symbol', source: 'tlp-fixes', minzoom: FIX_GLYPH_ZOOM, layout: { 'text-field': ['get', 's'], 'text-font': TEXT_FONT, 'text-size': 9, 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#101820' } });

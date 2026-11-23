@@ -68,8 +68,16 @@ describe('scales', () => {
     expect(logEdges(2.5, 95, 5)).toEqual([5, 10, 20, 50]);
   });
 
+  it('steps acceleration by fixed amounts in g, the same on every track', () => {
+    const s = buildScale('accel', [load('central-park-loop-motion.csv')]);
+    expect(s.edges).toEqual([0.1, 0.25, 0.5, 1]);
+    expect(stepOf(s, 0.05)).toBe(0);
+    expect(stepOf(s, 0.9)).toBe(3);
+    expect(stepOf(s, 1.4)).toBe(4);
+  });
+
   it('defines a step count for every measure', () => {
-    expect(STEPS).toEqual({ speed: 5, ele: 5, grade: 5, hdop: 4, sats: 4, fix: 2 });
+    expect(STEPS).toEqual({ speed: 5, ele: 5, grade: 5, hdop: 4, sats: 4, fix: 2, accel: 5 });
   });
 });
 

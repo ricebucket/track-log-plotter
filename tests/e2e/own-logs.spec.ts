@@ -6,7 +6,7 @@ import { localLogs } from '../helpers/own-logs';
 import { stubNetwork } from './helpers';
 
 // The file picker's extensions (App.tsx), and the app loads at most ten at once.
-const files = localLogs().filter((f) => /\.(gpx|nmea|nma|log|txt)$/i.test(f)).slice(0, 10);
+const files = localLogs().filter((f) => /\.(gpx|nmea|nma|log|txt|csv)$/i.test(f)).slice(0, 10);
 
 /** Shows only the track in row `i`. */
 async function showOnly(page: Page, i: number) {

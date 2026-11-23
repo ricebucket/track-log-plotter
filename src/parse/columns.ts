@@ -17,6 +17,7 @@ export interface FixInput {
   sats?: number;
   fixq?: FixQuality;
   geoid?: number;
+  accel?: number;
   line: number;
   lineEnd?: number;
   seg?: boolean;
@@ -30,7 +31,7 @@ export interface CleanCounts {
   jumpLine: number;
 }
 
-const F32 = ['ele', 'speed', 'course', 'hdop', 'vdop', 'pdop', 'sats', 'geoid'] as const;
+const F32 = ['ele', 'speed', 'course', 'hdop', 'vdop', 'pdop', 'sats', 'geoid', 'accel'] as const;
 
 /** Collects fixes into growable typed arrays, dropping fixes that go back in time. */
 export class ColumnBuilder {
@@ -128,7 +129,7 @@ export class ColumnBuilder {
       t: new Float64Array(m), lat: new Float64Array(m), lon: new Float64Array(m),
       ele: new Float32Array(m), speed: new Float32Array(m), course: new Float32Array(m),
       hdop: new Float32Array(m), vdop: new Float32Array(m), pdop: new Float32Array(m),
-      sats: new Float32Array(m), fixq: new Int8Array(m), geoid: new Float32Array(m),
+      sats: new Float32Array(m), fixq: new Int8Array(m), geoid: new Float32Array(m), accel: new Float32Array(m),
       line: new Int32Array(m), lineEnd: new Int32Array(m), seg: new Uint8Array(m),
     };
     let j = 0;
@@ -151,7 +152,7 @@ export class ColumnBuilder {
 }
 
 /** Which columns hold at least one value. */
-export function present(cols: Columns, k: 'ele' | 'speed' | 'course' | 'hdop' | 'vdop' | 'pdop' | 'sats' | 'geoid'): boolean {
+export function present(cols: Columns, k: (typeof F32)[number]): boolean {
   const a = cols[k];
   for (let i = 0; i < a.length; i++) if (!Number.isNaN(a[i])) return true;
   return false;

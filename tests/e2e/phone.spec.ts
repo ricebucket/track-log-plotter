@@ -20,7 +20,7 @@ test('opens the Options menu from the basemap button', async ({ page }) => {
 
 test('docks the panel as a bottom sheet and the timeline above it', async ({ page }) => {
   await page.getByRole('button', { name: 'Try the sample ride' }).click();
-  await expect(page.getByText('3 of 3 shown · 3 loaded')).toBeVisible();
+  await expect(page.getByText('2 of 3 shown · 2 loaded')).toBeVisible();
   const vp = page.viewportSize()!;
   const panel = (await page.locator('.panel').boundingBox())!;
   expect(Math.round(panel.y + panel.height)).toBe(vp.height);

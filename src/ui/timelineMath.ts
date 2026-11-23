@@ -2,10 +2,44 @@
 // per-pixel summary each lane draws.
 import type { LoadedTrack, MeasureKey } from '../model/types';
 import { stepOf, valueAt, type Scale } from '../color/scale';
+import { nearestIndex } from '../state/logic';
 
 const STEPS_S = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400];
 
 /** Tick spacing (ms) that keeps labels at least minPx apart. */
+/** The shortest stretch of time the timeline zooms to. */
+export const MIN_ZOOM_MS = 10_000;
+
+/**
+ * The time of the fix nearest to t (timeline time) on any of the tracks, so
+ * the cursor never rests in a gap. Offsets shift each track onto the timeline.
+ */
+export function snapTime(t: number, tracks: { id: string; track: LoadedTrack }[], offsets: Record<string, number>): number {
+  let best = t, bd = Infinity;
+  for (const it of tracks) {
+    const c = it.track.cols;
+    if (!c.n) continue;
+    const off = offsets[it.id] ?? 0;
+    const v = c.t[nearestIndex(c.t, t - off)] + off;
+    if (Math.abs(v - t) < bd) { bd = Math.abs(v - t); best = v; }
+  }
+  return best;
+}
+
+/**
+ * During playback, the next cursor time once a track's gap is reached: the
+ * first fix after it, or the start of the range when the track has ended.
+ */
+export function skipGap(t: number, tr: LoadedTrack, offset: number, t0: number, t1: number): number {
+  const c = tr.cols;
+  if (!c.n) return t;
+  const i = nearestIndex(c.t, t - offset);
+  const slack = Math.max(5000, tr.derived.stats.intervalS * 3000);
+  if (Math.abs(c.t[i] + offset - t) <= slack) return t;
+  const j = c.t[i] + offset > t ? i : i + 1;
+  return j < c.n && c.t[j] + offset <= t1 ? c.t[j] + offset : t0;
+}
+
 /** Playback speed: track time runs this many times faster than real time. */
 export const PLAY_SPEED = 60;
 
