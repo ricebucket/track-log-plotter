@@ -10,6 +10,8 @@ import { Badge } from './Badge';
 import { IconBack, IconChevronRight, IconFlag, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
+import { isCombined, type ComboTrack } from '../combine/combine';
+import { LogNumber } from './Combined';
 
 /**
  * For files whose times have no time zone: which zone they're read in. The
@@ -61,7 +63,7 @@ export function Details({ id }: { id: string }) {
     [t('stat.moving'), fmtDuration(st.movingS), explain.moving()],
     [t('stat.distance'), `${fmtDistance(st.distanceM, u, loc)} ${km}`, explain.distance()],
     [t('stat.avgSpeed'), `${fmtSpeed(st.avgKmh, u, loc)} ${unitOf('speed')}`, explain.avgSpeed()],
-    [t('stat.maxSpeed'), `${fmtSpeed(st.maxKmh, u, loc)} ${unitOf('speed')}`, explain.maxSpeed(!tr.derived.speedFromFile)],
+    [t('stat.maxSpeed'), `${fmtSpeed(st.maxKmh, u, loc)} ${unitOf('speed')}`, isCombined(tr) ? t('computed.combinedSpeed') : explain.maxSpeed(!tr.derived.speedFromFile)],
   ];
   if (st.climbM !== null) rows.push([t('stat.climb'), `${fmtEle(st.climbM, u, loc)} ${unitOf('ele')}`, explain.climb()]);
   if (st.minEle !== null && st.maxEle !== null) rows.push([t('stat.eleRange'), `${fmtEle(st.minEle, u, loc)}–${fmtEle(st.maxEle, u, loc)} ${unitOf('ele')}`, explain.eleRange()]);
@@ -81,7 +83,7 @@ export function Details({ id }: { id: string }) {
         <Badge item={item} size="big" />
         <span class="details-name">
           <span class="track-name">{tr.file}</span>
-          <span class="track-sub">{[formatName(tr.format), fmtBytes(tr.sizeBytes, loc), tr.creator, tr.name].filter(Boolean).join(' · ')}</span>
+          <span class="track-sub">{(isCombined(tr) ? [formatName(tr.format), t('combine.logs', { n: tr.combo.sources.length })] : [formatName(tr.format), fmtBytes(tr.sizeBytes, loc), tr.creator, tr.name]).filter(Boolean).join(' · ')}</span>
         </span>
       </div>
 
@@ -104,7 +106,10 @@ export function Details({ id }: { id: string }) {
         <dl class="kv">
           {rows.map(([k, v, h]) => (<div key={k}><dt>{k}{h && <Computed text={h} />}</dt><dd>{v}</dd></div>))}
         </dl>
+        {/* Next to the elevation figures: a steady difference between the logs' heights, not applied. */}
+        {isCombined(tr) && tr.combo.eleOffset && <p class="amber-note">{eleOffsetNote(tr.combo.eleOffset)}</p>}
       </section>
+      {isCombined(tr) && <CombinedSections track={tr} />}
 
       <section class="details-sec" aria-labelledby="d-fields">
         <h3 id="d-fields">{t('details.fields')}</h3>
@@ -139,5 +144,42 @@ export function Details({ id }: { id: string }) {
       )}
 
     </div>
+  );
+}
+
+function eleOffsetNote(o: { from: number; to: number; m: number }): string {
+  return t('details.eleOffset', { a: o.from + 1, b: o.to + 1, m: `${fmtEle(Math.abs(o.m), S.units.value, S.locale.value)} ${unitOf('ele')}`, dir: o.m < 0 ? t('details.lower') : t('details.higher') });
+}
+
+/** A combined track's logs, and how far each clock was moved to line up with the one that kept its own. */
+function CombinedSections({ track }: { track: ComboTrack }) {
+  const loc = S.locale.value;
+  const { sources, ref } = track.combo;
+  const clock = (k: number, s: number) => {
+    const p = { k: k + 1, r: ref + 1, s: fmtNum(Math.abs(s), loc, 1, 1) };
+    return s > 0 ? t('details.clockFast', p) : s < 0 ? t('details.clockSlow', p) : t('details.clockSame', p);
+  };
+  return (
+    <>
+      <section class="details-sec" aria-labelledby="d-logs">
+        <h3 id="d-logs">{t('details.logs')}</h3>
+        <ul class="combo-logs details-logs">
+          {sources.map((s, k) => (
+            <li key={k} data-log={k + 1}>
+              <LogNumber k={k} />
+              <span class="combo-log">
+                <span class="combo-file">{s.track.file}</span>
+                <span class="combo-sub">{[formatName(s.track.format), t('details.fixesValue', { n: fmtNum(s.track.cols.n, loc, 0, 0), every: fmtNum(s.track.derived.stats.intervalS, loc, 1, 0) })].join(' · ')}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p class="muted small">{t('details.logsNote')}</p>
+      </section>
+      <section class="details-sec" aria-labelledby="d-clocks">
+        <h3 id="d-clocks">{t('details.clocks')}</h3>
+        <ul class="note-list">{sources.map((s, k) => (k === ref ? null : <li key={k}>{clock(k, s.clockS)}</li>))}</ul>
+      </section>
+    </>
   );
 }

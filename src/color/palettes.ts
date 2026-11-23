@@ -73,4 +73,8 @@ export function haloExtra(steps: number): number[] {
 
 export const CASING = { light: 'rgba(10,16,22,0.55)', dark: 'rgba(0,0,0,0.72)' };
 export const UNKNOWN = { light: '#a3a9ae', dark: '#7d858c' };
+/** A combined track's logs 1 to 3: each in its color range's badge color, so log lines and numbers match. */
+export const LOG_COLORS = FAMILIES.map((f) => f.badge);
+/** A log left out for a large error: its stretch of line, its ring at the cursor, its timeline mark. */
+export const LEFT_OUT = '#d92636';
 export const GAP = { light: '#47525d', dark: '#d5dbe0' };

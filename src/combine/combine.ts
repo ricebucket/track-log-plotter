@@ -9,7 +9,8 @@
 //  2. Points on whole seconds; each log placed there from its own fixes,
 //     interpolated between fixes at most 10 s apart.
 //  3. Each fix's accuracy (HDOP, else satellites, against the log's own
-//     median; corrected fixes count double) averaged over 10 s.
+//     median; corrected fixes count double) averaged over 10 s: worked out
+//     when the log loaded (derived.accuracy), as are its held positions.
 //  4. Held positions (the third or later identical fix in a row) don't count
 //     while another log moves more than 10 m.
 //  5. Each logger's typical error from the spread between the logs.
@@ -21,13 +22,13 @@
 //     Where the logs giving the height change, grade and climb don't reach
 //     across (the height may jump there by that offset).
 import type { Columns, FieldKey, LoadedTrack } from '../model/types';
-import { derive } from '../derive/derive';
+import { ACCURACY_SMOOTH_S, derive } from '../derive/derive';
 
 export const MAX_LOGS = 3;
 /** Fixes further apart than this are not interpolated across (ms). */
 export const MAX_SPAN_MS = 10_000;
-/** Each fix's accuracy is averaged over this many seconds. */
-export const SMOOTH_S = 10;
+/** Each fix's accuracy is averaged over this many seconds (when the log loads). */
+export const SMOOTH_S = ACCURACY_SMOOTH_S;
 /** Held fixes stop counting once another log has moved this far (m). */
 export const HOLD_MOVE_M = 10;
 /** Expected errors never go below this (m). */
@@ -103,34 +104,10 @@ interface Src {
   runStart: Int32Array; standard: boolean; medH: number; n: number;
 }
 
-/** The median of the values `keep` accepts, by selection in a scratch copy: linear on average, no sorting. */
-export function medianWhere(a: ArrayLike<number>, keep: (v: number) => boolean): number {
-  let n = 0;
-  for (let i = 0; i < a.length; i++) if (keep(a[i])) n++;
-  if (!n) return NaN;
-  const w = new Float64Array(n);
-  for (let i = 0, j = 0; i < a.length; i++) if (keep(a[i])) w[j++] = a[i];
-  const k = n >> 1;
-  let lo = 0, hi = n - 1;
-  while (lo < hi) {
-    const pivot = w[(lo + hi) >> 1];
-    let i = lo, j = hi;
-    while (i <= j) {
-      while (w[i] < pivot) i++;
-      while (w[j] > pivot) j--;
-      if (i <= j) { const tmp = w[i]; w[i] = w[j]; w[j] = tmp; i++; j--; }
-    }
-    if (k <= j) hi = j; else if (k >= i) lo = i; else break;
-  }
-  return w[k];
-}
-
-const positive = (h: number) => h > 0 && h < Infinity;
-
 function toSrc(tr: LoadedTrack, lat0: number, lon0: number): Src {
   const c = tr.cols, n = c.n, d = tr.derived;
   const kx = 111_320 * Math.cos((lat0 * Math.PI) / 180), ky = 110_540;
-  const x = new Float64Array(n), y = new Float64Array(n), now = new Float64Array(n), v = new Float64Array(n);
+  const x = new Float64Array(n), y = new Float64Array(n), v = new Float64Array(n);
   const fromFile = d.speedFromFile;
   for (let i = 0; i < n; i++) {
     x[i] = (c.lon[i] - lon0) * kx; y[i] = (c.lat[i] - lat0) * ky;
@@ -138,33 +115,9 @@ function toSrc(tr: LoadedTrack, lat0: number, lon0: number): Src {
     const sp = c.speed[i];
     v[i] = fromFile && sp === sp ? sp : d.kmh[i] / 3.6;
   }
-  const hasH = tr.fields.includes('hdop'), hasS = tr.fields.includes('sats');
-  let medH = NaN;
-  if (hasH) {
-    medH = medianWhere(c.hdop, positive);
-    for (let i = 0; i < n; i++) { const h = c.hdop[i]; now[i] = h > 0 && h < Infinity ? h / medH : 1; }
-  } else if (hasS) {
-    const m = medianWhere(c.sats, positive);
-    for (let i = 0; i < n; i++) { const s = c.sats[i]; now[i] = s > 0 && s < Infinity ? m / s : 1; }
-  } else now.fill(1);
-  const fq = c.fixq;
-  for (let i = 0; i < n; i++) if (fq[i] === 2) now[i] *= Math.SQRT1_2;
-  const runStart = new Int32Array(n);
-  for (let i = 1; i < n; i++) runStart[i] = x[i] === x[i - 1] && y[i] === y[i - 1] ? runStart[i - 1] : i;
-  return { t: c.t, x, y, now: smooth(c.t, now, SMOOTH_S), v, course: c.course, ele: c.ele, runStart, standard: hasH && !d.hdopRelative, medH, n };
-}
-
-/** A moving average over a window of seconds around each fix, with two pointers. */
-export function smooth(t: Float64Array, v: Float64Array, windowS: number): Float64Array {
-  const n = v.length, out = new Float64Array(n), half = (windowS * 1000) / 2;
-  let a = 0, b = 0, sum = 0;
-  for (let i = 0; i < n; i++) {
-    const ti = t[i];
-    while (b < n && t[b] <= ti + half) sum += v[b++];
-    while (t[a] < ti - half) sum -= v[a++];
-    out[i] = sum / (b - a);
-  }
-  return out;
+  // Accuracy over time, what it's measured against, and held positions: kept since the log loaded.
+  const hasH = tr.fields.includes('hdop');
+  return { t: c.t, x, y, now: d.accuracy, v, course: c.course, ele: c.ele, runStart: d.runStart, standard: hasH && !d.hdopRelative, medH: d.hdopBase, n };
 }
 
 // ---------------------------------------------------------------- 1. clocks
@@ -251,6 +204,8 @@ interface Prepared {
   /** The seconds where some log counts, in order, and what doesn't change with trust there. */
   idx: Int32Array; t: Float64Array; srcLat: Float64Array[]; srcLon: Float64Array[]; disagree: Uint8Array;
   apart: boolean; eleOffset: ComboInfo['eleOffset'];
+  /** Columns shared by every version of the combined track (see finish). */
+  blank?: { nan: Float32Array; none: Int32Array; zero8: Int8Array; zeroU8: Uint8Array };
 }
 
 /** Each combined track's prepared work, so new trust redoes only the weighted averages. */
@@ -437,11 +392,13 @@ function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: s
   const uses: Uint8Array[] = [];
   for (let k = 0; k < K; k++) { const a = new Uint8Array(n); for (let i = 0; i < n; i++) a[i] = use[i * K + k]; uses.push(a); }
 
-  const nan32 = () => new Float32Array(n).fill(NaN);
+  // Columns a combined track has no values for, and those that don't change with trust: made once per
+  // combination and shared by every version of it (nothing writes to a track's columns once it's made).
+  const b = p.blank ??= { nan: new Float32Array(n).fill(NaN), none: new Int32Array(n).fill(-1), zero8: new Int8Array(n), zeroU8: new Uint8Array(n) };
   const cols: Columns = {
-    n, t: p.t.slice(), lat, lon, ele: oEle, speed, course,
-    hdop: nan32(), vdop: nan32(), pdop: nan32(), sats: nan32(), fixq: new Int8Array(n), geoid: nan32(), accel: nan32(),
-    line: new Int32Array(n).fill(-1), lineEnd: new Int32Array(n).fill(-1), seg: new Uint8Array(n),
+    n, t: p.t, lat, lon, ele: oEle, speed, course,
+    hdop: b.nan, vdop: b.nan, pdop: b.nan, sats: b.nan, fixq: b.zero8, geoid: b.nan, accel: b.nan,
+    line: b.none, lineEnd: b.none, seg: b.zeroU8,
   };
   const fields: FieldKey[] = ['time', 'position'];
   if (oEle.some((h) => h === h)) fields.push('ele');
@@ -449,8 +406,8 @@ function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: s
   if (course.some((c) => c === c)) fields.push('course');
   const combo: ComboInfo = {
     sources: tracks.map((track, k) => ({ track, clockS: p.shift[k], trust: trust[k], typicalM: T[k], share: shareN[k] ? shareSum[k] / shareN[k] : 0 })),
-    ref: p.ref, use: uses, srcLat: p.srcLat.map((a) => a.slice()), srcLon: p.srcLon.map((a) => a.slice()),
-    disagree: p.disagree.slice(), eleOffset: p.eleOffset && { ...p.eleOffset },
+    ref: p.ref, use: uses, srcLat: p.srcLat, srcLon: p.srcLon,
+    disagree: p.disagree, eleOffset: p.eleOffset && { ...p.eleOffset },
   };
   const parsed = { format: 'combined' as const, creator: null, name: null, cols, flags: [], problems: [], notes: [], fields, lines: n, eleBreak };
   const track: ComboTrack = { ...parsed, file: name, sizeBytes: 0, derived: derive(parsed), combo };

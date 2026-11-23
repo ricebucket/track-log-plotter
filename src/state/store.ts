@@ -1,7 +1,8 @@
 import { batch, computed, effect, signal } from '@preact/signals';
 import type { ColorKey, HaloKey, LoadedTrack, MeasureKey, ParseResult } from '../model/types';
 import { initialLang, LOCALE, translate, type Lang, type Params } from '../i18n/i18n';
-import { addTracks, alignOffsets, applyToAll, removeTrack, setColor, setHalo, setVisible, SHOW_LIMIT, trackUid, type TrackItem } from './logic';
+import { addCombined, addTracks, alignOffsets, applyToAll, LOAD_LIMIT, removeTrack, removeTracks, replaceTrack, setColor, setHalo, setLogShown, setVisible, SHOW_LIMIT, trackUid, type TrackItem } from './logic';
+import { checkCombine, combineTracks, isCombined, MAX_LOGS, recombine, type ComboTrack } from '../combine/combine';
 import { buildScale, type Scale } from '../color/scale';
 import { eleFactor, speedFactor, type Units } from '../format';
 import { clockShift, isValidZone, type ZoneSel } from '../time/zones';
@@ -157,6 +158,19 @@ export const loadErrors = signal<{ file: string; error: string }[]>([]);
 export const skippedCount = signal(0);
 export const loadingCount = signal(0);
 
+/** Select mode: each track's eye becomes a tick box, and a bar acts on the ticked tracks. */
+export const selecting = signal(false);
+/** The ticked tracks, in the order they were ticked (with equal trust, the first keeps its clock when combined). */
+export const ticked = signal<string[]>([]);
+/** What pressing Combine ran into, shown as a notice: a time zone to check, the same recording twice, logs that may not be one trip. */
+export type ComboNotice =
+  | { kind: 'zone'; id: string; file: string }
+  | { kind: 'duplicate' }
+  | { kind: 'apart'; track: ComboTrack; ids: string[] }
+  | { kind: 'full' }
+  | { kind: 'empty' };
+export const comboNotice = signal<ComboNotice | null>(null);
+
 /** Bumped when the map should zoom to the visible tracks. */
 export const fitRequest = signal(0);
 /** The map's current view, for the Google Maps link. */
@@ -268,10 +282,153 @@ export function applyAll(id: string) {
 export function remove(id: string) {
   batch(() => {
     items.value = removeTrack(items.value, id);
+    ticked.value = ticked.value.filter((x) => x !== id);
     if (selectedId.value === id) selectedId.value = items.value[0]?.id ?? null;
     if (page.value.kind === 'details' && page.value.id === id) page.value = { kind: 'tracks' };
     if (loadNotice.value?.id === id) loadNotice.value = null;
   });
+}
+
+// ---------- select mode: remove or combine several tracks ----------
+
+export function startSelect() {
+  batch(() => {
+    selecting.value = true;
+    ticked.value = [];
+    picker.value = null;
+    comboNotice.value = null;
+  });
+}
+
+export function endSelect() {
+  batch(() => {
+    selecting.value = false;
+    ticked.value = [];
+    if (comboNotice.value?.kind === 'apart') comboNotice.value = null;
+  });
+}
+
+export function toggleTick(id: string) {
+  batch(() => {
+    ticked.value = ticked.value.includes(id) ? ticked.value.filter((x) => x !== id) : [...ticked.value, id];
+    if (comboNotice.value?.kind === 'apart') comboNotice.value = null;
+  });
+}
+
+/** Ticks every track, or none when all are ticked already. */
+export function tickAll() {
+  ticked.value = ticked.value.length === items.value.length ? [] : items.value.map((x) => x.id);
+}
+
+/** Removes the ticked tracks (the list empties back to the start screen) and leaves select mode. */
+export function removeTicked() {
+  const ids = ticked.value;
+  if (!ids.length) return;
+  if (ids.length === items.value.length) { clearAll(); return; }
+  batch(() => {
+    items.value = removeTracks(items.value, ids);
+    if (selectedId.value && ids.includes(selectedId.value)) selectedId.value = items.value[0]?.id ?? null;
+    if (page.value.kind === 'details' && ids.includes(page.value.id)) page.value = { kind: 'tracks' };
+    if (loadNotice.value && ids.includes(loadNotice.value.id)) loadNotice.value = null;
+    endSelect();
+  });
+}
+
+/**
+ * Why Combine can't act on the ticked tracks, from the checks that need no
+ * pass through the fixes, or null when it can be pressed.
+ */
+export function combineBlock(ids: readonly string[]): 'few' | 'many' | 'combined' | 'noOverlap' | null {
+  if (ids.length < 2) return 'few';
+  if (ids.length > MAX_LOGS) return 'many';
+  const tracks = ids.map((id) => items.value.find((x) => x.id === id)?.track).filter((x): x is LoadedTrack => !!x);
+  if (tracks.some(isCombined)) return 'combined';
+  const c = checkCombine(tracks);
+  return !c.ok && c.reason === 'noOverlap' ? 'noOverlap' : null;
+}
+
+/** The name of a new combined track: "Combined track", then "Combined track 2" and so on. */
+function combinedName(): string {
+  const taken = new Set(items.value.map((x) => x.track.file));
+  const base = t('combine.name');
+  if (!taken.has(base)) return base;
+  for (let k = 2; ; k++) { const name = t('combine.nameN', { n: k }); if (!taken.has(name)) return name; }
+}
+
+/**
+ * Combines the ticked logs into a new track. The instant checks first: a log
+ * whose time zone may be wrong, or the same recording twice, stops it with a
+ * notice. Logs far apart for most of their shared time may not be one trip:
+ * that asks before the combined track is added.
+ */
+export function combineTicked() {
+  const ids = ticked.value;
+  const its = ids.map((id) => items.value.find((x) => x.id === id)).filter((x): x is TrackItem => !!x);
+  const c = checkCombine(its.map((x) => x.track));
+  if (!c.ok) {
+    if (c.reason === 'zone') comboNotice.value = { kind: 'zone', id: its[c.log].id, file: its[c.log].track.file };
+    else if (c.reason === 'duplicate') comboNotice.value = { kind: 'duplicate' };
+    return;
+  }
+  if (items.value.length >= LOAD_LIMIT) { comboNotice.value = { kind: 'full' }; return; }
+  const r = combineTracks(its.map((x) => x.track), { name: combinedName() });
+  if (!r.ok) { comboNotice.value = { kind: r.reason === 'duplicate' ? 'duplicate' : 'empty' }; return; }
+  if (r.apart) { comboNotice.value = { kind: 'apart', track: r.track, ids }; return; }
+  addCombo(r.track, ids);
+}
+
+/** "Combine anyway": adds the combined track held back by the "not the same trip?" question. */
+export function confirmApart() {
+  const n = comboNotice.value;
+  if (n?.kind === 'apart') addCombo(n.track, n.ids);
+}
+
+function addCombo(track: ComboTrack, ids: string[]) {
+  const r = addCombined(items.value, track, ids);
+  if (!r.id) { comboNotice.value = { kind: 'full' }; return; }
+  const id = r.id;
+  batch(() => {
+    items.value = r.items;
+    selecting.value = false;
+    ticked.value = [];
+    comboNotice.value = null;
+    // Like a newly loaded track: selected, open in the list, and in view.
+    select(id);
+    reveal.value = id;
+    fitRequest.value++;
+    cursorT.value = null;
+  });
+}
+
+function trustNow(id: string, trust: number[]) {
+  const it = items.value.find((x) => x.id === id);
+  if (!it || !isCombined(it.track)) return;
+  items.value = replaceTrack(items.value, id, recombine(it.track, trust));
+}
+
+let trustFrame = 0;
+let trustNext: { id: string; trust: number[] } | null = null;
+
+/** New trust shares for a combined track, at once (a drag's frame still waiting is dropped). */
+export function applyTrust(id: string, trust: number[]) {
+  trustNext = null;
+  trustNow(id, trust);
+}
+
+/** New trust shares while the handle is dragged: worked out once per animation frame, however fast it moves. */
+export function setTrust(id: string, trust: number[]) {
+  trustNext = { id, trust };
+  if (trustFrame) return;
+  const run = () => { trustFrame = 0; const job = trustNext; trustNext = null; if (job) trustNow(job.id, job.trust); };
+  if (typeof requestAnimationFrame === 'function') trustFrame = requestAnimationFrame(run);
+  else run();
+}
+
+/** Shows or hides one log of a combined track. */
+export function toggleLog(id: string, k: number) {
+  const it = items.value.find((x) => x.id === id);
+  if (!it?.logs) return;
+  items.value = setLogShown(items.value, id, k, !it.logs[k]);
 }
 
 export function openDetails(id: string) {
@@ -329,6 +486,9 @@ export function clearAll() {
     loadErrors.value = [];
     skippedCount.value = 0;
     cursorT.value = null;
+    selecting.value = false;
+    ticked.value = [];
+    comboNotice.value = null;
   });
 }
 
@@ -355,6 +515,9 @@ export function resetForTests() {
     loadErrors.value = [];
     skippedCount.value = 0;
     cursorT.value = null;
+    selecting.value = false;
+    ticked.value = [];
+    comboNotice.value = null;
     panelMin.value = false;
     timelineMin.value = false;
     lang.value = 'en';

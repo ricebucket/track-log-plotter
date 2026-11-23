@@ -257,15 +257,15 @@ describe('tracks panel', () => {
     expect(why).toContain('so speed steps are equal parts of 6 km/h');
   });
 
-  it('removes all tracks after asking', () => {
+  it('removes every track after asking, from select mode (which took the place of Remove all)', () => {
     loadFixtures('central-park-loop.nmea', 'roosevelt-island-run.gpx');
     render(<App Map={NoMap} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Remove all tracks' }));
-    expect(screen.getByText('Remove all 2 tracks?')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('button', { name: 'Remove all tracks' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     expect(S.items.value).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Remove all tracks' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 2?' }));
     expect(S.items.value).toHaveLength(0);
     expect(screen.getByRole('heading', { name: 'Plot your GPS track logs' })).toBeTruthy();
   });

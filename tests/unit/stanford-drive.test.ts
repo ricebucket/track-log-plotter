@@ -2,9 +2,9 @@
 // for combining logs. From the Palo Alto Caltrain station down Palm Drive, a
 // quarter of the Campus Drive loop counterclockwise to Santa Teresa Street,
 // out by Lomita Drive, along Mayfield Avenue, up Campus Drive East to the
-// Escondido Road roundabout, and right at the second corner into the lot in
-// front of Branner Hall. Each logger
-// brings the cases combining has to handle; these tests pin them down.
+// Escondido Road roundabout, past the first lot, and right into the strip of
+// parking in front of the middle of Branner Hall. Each logger brings the cases
+// combining has to handle; these tests pin them down.
 import { describe, expect, it } from 'vitest';
 import { load } from '../helpers/fixtures';
 import type { LoadedTrack } from '../../src/model/types';
@@ -45,6 +45,16 @@ function passes(tr: LoadedTrack, [lat, lon]: readonly [number, number], r: numbe
   return out;
 }
 
+/** Whether a point lies inside a polygon (ray casting, in metres around the point). */
+function inside([lat, lon]: readonly [number, number], poly: readonly (readonly [number, number])[]): boolean {
+  let yes = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = (poly[i][1] - lon) * KX, yi = (poly[i][0] - lat) * KY, xj = (poly[j][1] - lon) * KX, yj = (poly[j][0] - lat) * KY;
+    if (yi > 0 !== yj > 0 && 0 < ((xj - xi) * (0 - yi)) / (yj - yi) + xi) yes = !yes;
+  }
+  return yes;
+}
+
 /** Steps between fixes longer than the usual interval, in seconds. */
 function longSteps(tr: LoadedTrack, usualS: number): { at: number; s: number }[] {
   const out: { at: number; s: number }[] = [];
@@ -56,7 +66,11 @@ function longSteps(tr: LoadedTrack, usualS: number): { at: number; s: number }[]
 }
 
 const STATION_CURB = [37.44343, -122.16567] as const; // Mitchell Lane, at the Caltrain station
-const BRANNER_LOT = [37.42533, -122.16344] as const; // up the driveway one corner past the first lot
+// The strip of parking along Escondido Road in front of the middle of Branner Hall (its corners in OpenStreetMap).
+const BRANNER_STRIP = [[37.4249782, -122.1634037], [37.4248214, -122.1626569], [37.4247669, -122.1626741], [37.4249237, -122.1634208]] as const;
+// The lots on either side of it, where earlier versions of the drive ended: east of the hall, and up the driveway west of it.
+const EAST_LOT = [37.42513, -122.16243] as const;
+const WEST_LOT = [37.42533, -122.16344] as const;
 const BRANNER_HALL = [37.425574, -122.162818] as const;
 // The junctions the drive passes, in order.
 const ROUTE = [
@@ -76,11 +90,14 @@ const NOT_TAKEN = [
 ] as const;
 
 describe('the Stanford drive', () => {
-  it('starts at the Palo Alto Caltrain station and ends in the lot in front of Branner Hall', () => {
+  it('starts at the Palo Alto Caltrain station and ends in the strip of parking in front of the middle of Branner Hall', () => {
     const c = car.cols;
     expect(metres(c.lat[0], c.lon[0], ...STATION_CURB)).toBeLessThan(25);
-    expect(metres(c.lat[c.n - 1], c.lon[c.n - 1], ...BRANNER_LOT)).toBeLessThan(25);
+    expect(inside([c.lat[c.n - 1], c.lon[c.n - 1]], BRANNER_STRIP)).toBe(true);
     expect(metres(c.lat[c.n - 1], c.lon[c.n - 1], ...BRANNER_HALL)).toBeLessThan(100);
+    // It turns in off Escondido Road between the lots on either side, and goes into neither.
+    expect(passes(car, EAST_LOT, 15)).toEqual([]);
+    expect(passes(car, WEST_LOT, 15)).toEqual([]);
     expect(car.derived.stats.distanceM).toBeGreaterThan(5400);
     expect(car.derived.stats.distanceM).toBeLessThan(6000);
   });

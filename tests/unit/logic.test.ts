@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { addTracks, alignOffsets, applyToAll, axisRange, LOAD_LIMIT, nearestIndex, removeTrack, setColor, setHalo, setVisible, SHOW_LIMIT, type TrackItem } from '../../src/state/logic';
+import { addCombined, addTracks, alignOffsets, applyToAll, axisRange, LOAD_LIMIT, nearestIndex, removeTrack, removeTracks, setColor, setHalo, setLogShown, setVisible, SHOW_LIMIT, type TrackItem } from '../../src/state/logic';
+import { combineTracks } from '../../src/combine/combine';
 import { load } from '../helpers/fixtures';
 
 const ride = load('central-park-loop.nmea');
@@ -80,5 +81,36 @@ describe('alignment', () => {
     expect(nearestIndex(t, 1600)).toBe(2);
     expect(nearestIndex(t, 9000)).toBe(3);
     expect(nearestIndex(new Float64Array(0), 1)).toBe(-1);
+  });
+});
+
+describe('combined tracks in the list', () => {
+  const car = load('stanford-drive-car.nmea'), phone = load('stanford-drive-phone.gpx'), park = load('central-park-loop.nmea');
+  const r = combineTracks([car, phone]);
+  if (!r.ok) throw new Error(r.reason);
+  const combo = r.track;
+
+  it('goes right after the last of its logs, shown, with its logs hidden and every log line on', () => {
+    const items = addTracks([], [car, park, phone]).items; // A car, B the park, C phone
+    const c = addCombined(items, combo, ['A', 'C']);
+    expect(c.id).toBe('D');
+    expect(c.items.map((x) => x.id)).toEqual(['A', 'B', 'C', 'D']);
+    expect(c.items.map((x) => x.vis)).toEqual([false, true, false, true]);
+    expect(c.items[3].logs).toEqual([true, true]);
+    const d = addCombined(addTracks([], [phone, car, park]).items, combo, ['B', 'A']);
+    expect(d.items.map((x) => x.id)).toEqual(['A', 'B', 'D', 'C']);
+  });
+
+  it('is refused when the list is full', () => {
+    const full = addTracks([], Array.from({ length: LOAD_LIMIT }, () => park)).items;
+    expect(addCombined(full, combo, ['A', 'B'])).toEqual({ items: full, id: null });
+  });
+
+  it('turns single log lines on and off, and removes several tracks at once', () => {
+    const c = addCombined(addTracks([], [car, phone]).items, combo, ['A', 'B']);
+    const off = setLogShown(c.items, 'C', 1, false);
+    expect(off.find((x) => x.id === 'C')!.logs).toEqual([true, false]);
+    expect(setLogShown(off, 'A', 0, false)).toEqual(off); // a log's own track has no log lines
+    expect(removeTracks(c.items, ['A', 'C']).map((x) => x.id)).toEqual(['B']);
   });
 });

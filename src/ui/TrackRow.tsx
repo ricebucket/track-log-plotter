@@ -9,9 +9,12 @@ import { timeShares, type Scale } from '../color/scale';
 import { fmtDistance, fmtDuration, fmtPercent, fmtSpeed } from '../format';
 import { differentDays, fmtShortDate } from '../time/zones';
 import { formatName, measureName, measureTitle, stepLabels, unitOf } from './labels';
-import { IconChevronRight, IconCopy, IconDoc, IconEye, IconEyeOff, IconTrash, IconWarn } from './icons';
+import { IconCheck, IconChevronRight, IconCopy, IconDoc, IconEye, IconEyeOff, IconTrash, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
+import { fullTextIfCut } from './cutText';
+import { CombinedLogs } from './Combined';
+import { isCombined } from '../combine/combine';
 
 export { badgeOf } from './Badge';
 
@@ -36,24 +39,36 @@ export function TrackRow({ item }: { item: TrackItem }) {
       ? `${fmtShortDate(st.start, S.zone.value, loc)} – ${fmtShortDate(st.end, S.zone.value, loc)}`
       : fmtShortDate(st.start, S.zone.value, loc),
     `${fmtDistance(st.distanceM, u, loc)} ${u === 'imperial' ? t('unit.mi') : t('unit.km')}`,
-    formatName(tr.format),
+    // A combined track: its diamond and name say so; the line says how many logs.
+    isCombined(tr) ? t('combine.logs', { n: tr.combo.sources.length }) : formatName(tr.format),
   ].join(' · ');
+  // In select mode the eye is a tick box, and the whole row ticks it.
+  const selecting = S.selecting.value;
+  const tick = selecting && S.ticked.value.includes(item.id);
 
   return (
-    <div ref={row} class={`track-row${sel ? ' is-selected' : ''}${item.vis ? '' : ' is-hidden'}`} data-track={item.id}>
+    <div ref={row} class={`track-row${sel && !selecting ? ' is-selected' : ''}${item.vis ? '' : ' is-hidden'}${tick ? ' is-ticked' : ''}`} data-track={item.id}>
       <div class="track-row-head">
+        {selecting ? (
+          // The row itself is the checkbox for assistive tech; this box is what it looks like.
+          <span class={`tick-box${tick ? ' is-on' : ''}`} aria-hidden="true" onClick={() => S.toggleTick(item.id)}>{tick && <IconCheck size={13} />}</span>
+        ) : (
+          <button
+            type="button" class="icon-btn eye" aria-pressed={item.vis ? 'true' : 'false'}
+            aria-label={item.vis ? t('track.hide', { id: item.id }) : t('track.show', { id: item.id })}
+            title={item.vis ? t('track.hide', { id: item.id }) : t('track.show', { id: item.id })}
+            onClick={() => S.toggleVisible(item.id)}
+          >
+            {item.vis ? <IconEye /> : <IconEyeOff />}
+          </button>
+        )}
         <button
-          type="button" class="icon-btn eye" aria-pressed={item.vis ? 'true' : 'false'}
-          aria-label={item.vis ? t('track.hide', { id: item.id }) : t('track.show', { id: item.id })}
-          title={item.vis ? t('track.hide', { id: item.id }) : t('track.show', { id: item.id })}
-          onClick={() => S.toggleVisible(item.id)}
+          type="button" class="track-main" {...(selecting ? { role: 'checkbox', 'aria-checked': tick ? 'true' : 'false', 'aria-label': `${t('select.track', { id: item.id })}: ${tr.file}` } : { 'aria-expanded': sel ? 'true' : 'false' })}
+          onClick={() => (selecting ? S.toggleTick(item.id) : S.select(item.id))}
         >
-          {item.vis ? <IconEye /> : <IconEyeOff />}
-        </button>
-        <button type="button" class="track-main" aria-expanded={sel ? 'true' : 'false'} onClick={() => S.select(item.id)}>
           <Badge item={item} />
           <span class="track-text">
-            <span class="track-name">{tr.file}</span>
+            <span class="track-name" onMouseEnter={fullTextIfCut(tr.file)}>{tr.file}</span>
             <span class="track-sub" title={`${t('stat.distance')}: ${explain.distance()}`}>{sub}</span>
             {problems > 0 && (
               <span class="problem-badge"><IconWarn size={11} />{t('track.problems', { n: problems })}</span>
@@ -67,13 +82,14 @@ export function TrackRow({ item }: { item: TrackItem }) {
       {S.limitNotice.value === item.id && (
         <div class="notice" role="status"><IconWarn size={14} /><span>{t('track.limit')}</span></div>
       )}
-      {sel && <TrackDetailsInline item={item} />}
+      {sel && !selecting && <TrackDetailsInline item={item} />}
     </div>
   );
 }
 
 function TrackDetailsInline({ item }: { item: TrackItem }) {
   const st = item.track.derived.stats;
+  const detailsLabel = item.track.clock ? t('track.detailsClock') : t('track.details');
   const loc = S.locale.value;
   const u = S.units.value;
   const stats = [
@@ -92,6 +108,7 @@ function TrackDetailsInline({ item }: { item: TrackItem }) {
         ))}
       </dl>
       <SettingsCard item={item} />
+      {isCombined(item.track) && <CombinedLogs item={item} track={item.track} />}
       {S.items.value.length > 1 && (
         <div class="card-links">
           <button type="button" class="link-btn" title={applyAllHint(item)} onClick={() => S.applyAll(item.id)}>
@@ -100,9 +117,9 @@ function TrackDetailsInline({ item }: { item: TrackItem }) {
         </div>
       )}
       <div class="card-actions">
-        <button type="button" class="btn-outline" onClick={() => S.openDetails(item.id)}>
-          {/* Files whose times have no zone: a reminder that the zone is set there. */}
-          <IconDoc />{item.track.clock ? t('track.detailsClock') : t('track.details')}
+        {/* Files whose times have no zone: a reminder that the zone is set there. */}
+        <button type="button" class="btn-outline" onClick={() => S.openDetails(item.id)} onMouseEnter={fullTextIfCut(detailsLabel, (el) => el.querySelector('.btn-label'))}>
+          <IconDoc /><span class="btn-label">{detailsLabel}</span>
         </button>
         <RemoveButton item={item} />
       </div>

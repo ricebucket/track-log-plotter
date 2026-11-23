@@ -14,6 +14,8 @@ export interface TrackItem {
   halo: HaloKey;
   /** Color range (0 blue, 1 orange, 2 teal) used while several tracks are shown. */
   fam: number;
+  /** A combined track only: whether each of its logs is drawn (thin lines, dots at the cursor, a timeline lane). */
+  logs?: boolean[];
 }
 
 // Tracks never change after loading, so a number per track identifies its data.
@@ -83,6 +85,41 @@ export function setVisible(items: TrackItem[], id: string, vis: boolean): VisRes
 
 export function removeTrack(items: TrackItem[], id: string): TrackItem[] {
   return items.filter((x) => x.id !== id);
+}
+
+/** Removes several tracks at once. */
+export function removeTracks(items: TrackItem[], ids: readonly string[]): TrackItem[] {
+  return items.filter((x) => !ids.includes(x.id));
+}
+
+export type CombinedResult = { items: TrackItem[]; id: string } | { items: TrackItem[]; id: null };
+
+/**
+ * Adds a combined track right after the last of its logs in the list, with
+ * every log's lines on. Its logs are hidden (the combined track draws them
+ * itself) and it is shown; nothing is added when the list is full.
+ */
+export function addCombined(items: TrackItem[], track: LoadedTrack, sourceIds: readonly string[]): CombinedResult {
+  if (items.length >= LOAD_LIMIT) return { items, id: null };
+  const id = [...LETTERS].find((l) => !items.some((t) => t.id === l))!;
+  let out = items.map((x) => (sourceIds.includes(x.id) ? { ...x, vis: false } : x));
+  const vis = out.filter((t) => t.vis).length < SHOW_LIMIT;
+  const n = 'combo' in track ? (track as { combo: { sources: unknown[] } }).combo.sources.length : 0;
+  const item: TrackItem = { id, track, vis, ...defaultsFor(track), fam: 0, logs: Array.from({ length: n }, () => true) };
+  item.fam = vis ? freeFamily(out, item) : LETTERS.indexOf(id) % 3;
+  const at = Math.max(-1, ...sourceIds.map((s) => out.findIndex((x) => x.id === s))) + 1;
+  out = [...out.slice(0, at), item, ...out.slice(at)];
+  return { items: out, id };
+}
+
+/** Swaps a combined track's own copy of itself for a new version (new trust shares), keeping its settings. */
+export function replaceTrack(items: TrackItem[], id: string, track: LoadedTrack): TrackItem[] {
+  return items.map((x) => (x.id === id ? { ...x, track } : x));
+}
+
+/** Turns one log of a combined track on or off. */
+export function setLogShown(items: TrackItem[], id: string, k: number, on: boolean): TrackItem[] {
+  return items.map((x) => (x.id === id && x.logs ? { ...x, logs: x.logs.map((v, j) => (j === k ? on : v)) } : x));
 }
 
 export function setColor(items: TrackItem[], id: string, color: ColorKey): TrackItem[] {

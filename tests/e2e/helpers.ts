@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,4 +57,18 @@ export async function mapSettled(page: Page) {
 /** Opens fixture files through the app's file picker. */
 export async function open(page: Page, ...names: string[]) {
   await page.locator('#tlp-file-input').setInputFiles(names.map((n) => join(FIX, n)));
+}
+
+/** Opens a fixture through the app's file picker under another file name. */
+export async function openAs(page: Page, name: string, as: string) {
+  await page.locator('#tlp-file-input').setInputFiles({ name: as, mimeType: 'application/octet-stream', buffer: readFileSync(join(FIX, name)) });
+}
+
+/**
+ * Sets the app's text in a wide font, as on a computer that has neither the
+ * web font (blocked in these tests, and for some visitors) nor the first
+ * fallbacks: GitHub's Linux runners, for one.
+ */
+export async function wideFont(page: Page) {
+  await page.addStyleTag({ content: ":root { --font: 'DejaVu Sans', Verdana, sans-serif !important; }" });
 }

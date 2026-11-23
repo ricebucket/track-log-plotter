@@ -8,7 +8,7 @@ import { CASING, GAP } from '../color/palettes';
 import { hint, hintHandlers, useHintId } from './Computed';
 import { TrackRow } from './TrackRow';
 import { Details } from './Details';
-import { IconChevronDown, IconExternal, IconEye, IconEyeOff, IconLayers, IconMap, IconPanelHide, IconPanelShow, IconPegman, IconPlus, IconSheetHide, IconSheetShow, IconTrash } from './icons';
+import { IconCheck, IconChevronDown, IconCombine, IconExternal, IconEye, IconEyeOff, IconLayers, IconMap, IconPanelHide, IconPanelShow, IconPegman, IconPlus, IconSelect, IconSheetHide, IconSheetShow, IconTrash } from './icons';
 import { NARROW, useDismiss, useMedia } from './hooks';
 
 export function openFilePicker() {
@@ -133,42 +133,103 @@ function GoogleMenu({ trigger, close }: { trigger: { current: HTMLButtonElement 
 function TracksPage() {
   const all = S.items.value;
   const shown = S.visible.value.length;
-  const [confirming, setConfirming] = useState(false);
+  const selecting = S.selecting.value;
+  const ticked = S.ticked.value;
+  // Escape ends select mode (a menu or sheet open on top closes first, and keeps the key).
+  useEffect(() => {
+    if (!selecting) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented && !S.picker.peek()) S.endSelect(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selecting]);
+  const allTicked = all.length > 0 && ticked.length === all.length;
   return (
     <>
-      <section class="panel-sec" aria-labelledby="tracks-h">
+      <section class={`panel-sec${selecting ? ' is-selecting' : ''}`} aria-labelledby="tracks-h">
         <div class="sec-head">
           <h2 class="eyebrow" id="tracks-h">{t('tracks.title')}</h2>
-          <span class="muted small">{t('tracks.shown', { shown, max: SHOW_LIMIT, n: all.length })}</span>
-          <span class="grow" />
-          <button
-            type="button" class="icon-btn outline" aria-label={shown ? t('tracks.hideAll') : t('tracks.showAll')} title={shown ? t('tracks.hideAll') : t('tracks.showAll')}
-            onClick={() => S.toggleAllVisible()}
-          >
-            {shown ? <IconEye size={17} /> : <IconEyeOff size={17} />}
-          </button>
-          <button type="button" class="icon-btn outline" aria-label={t('tracks.clear')} title={t('tracks.clear')} aria-expanded={confirming ? 'true' : 'false'} onClick={() => setConfirming(!confirming)}>
-            <IconTrash />
-          </button>
-          <button type="button" class="btn-dark small" onClick={openFilePicker} disabled={all.length >= LOAD_LIMIT} title={all.length >= LOAD_LIMIT ? t('tracks.full') : undefined}>
-            <IconPlus />{t('tracks.add')}
-          </button>
+          {selecting ? (
+            <>
+              <span class="grow" />
+              <button type="button" class="select-all" role="checkbox" aria-checked={allTicked ? 'true' : 'false'} onClick={() => S.tickAll()}>
+                <span class={`tick-box${allTicked ? ' is-on' : ''}`} aria-hidden="true">{allTicked && <IconCheck size={13} />}</span>{t('select.all')}
+              </button>
+              <button type="button" class="btn-dark small" onClick={() => S.endSelect()}>{t('select.done')}</button>
+            </>
+          ) : (
+            <>
+              <span class="muted small">{t('tracks.shown', { shown, max: SHOW_LIMIT, n: all.length })}</span>
+              <span class="grow" />
+              <button
+                type="button" class="icon-btn outline" aria-label={shown ? t('tracks.hideAll') : t('tracks.showAll')} title={shown ? t('tracks.hideAll') : t('tracks.showAll')}
+                onClick={() => S.toggleAllVisible()}
+              >
+                {shown ? <IconEye size={17} /> : <IconEyeOff size={17} />}
+              </button>
+              <button type="button" class="icon-btn outline" aria-label={t('tracks.select')} title={t('tracks.selectHint')} onClick={() => S.startSelect()}>
+                <IconSelect size={17} />
+              </button>
+              <button type="button" class="btn-dark small" onClick={openFilePicker} disabled={all.length >= LOAD_LIMIT} title={all.length >= LOAD_LIMIT ? t('tracks.full') : undefined}>
+                <IconPlus />{t('tracks.add')}
+              </button>
+            </>
+          )}
         </div>
-        {confirming && (
-          <div class="confirm-row" role="group" aria-label={t('tracks.clear')}>
-            <span>{t('tracks.clearConfirm', { n: all.length })}</span>
-            <span class="grow" />
-            <button type="button" class="btn-outline small" onClick={() => setConfirming(false)}>{t('common.cancel')}</button>
-            <button type="button" class="btn-danger small" onClick={() => { setConfirming(false); S.clearAll(); }}>{t('tracks.clearYes')}</button>
-          </div>
-        )}
         <ul class="track-list">
           {all.map((it) => <li key={it.id}><TrackRow item={it} /></li>)}
         </ul>
+        {selecting && <SelectBar />}
       </section>
-      <OnMap />
-      <GoogleLinks />
+      {!selecting && <OnMap />}
+      {!selecting && <GoogleLinks />}
     </>
+  );
+}
+
+/** Why Combine can't be pressed, for each reason the instant checks give. */
+const WHY: Record<'few' | 'many' | 'combined' | 'noOverlap', () => string> = {
+  few: () => t('combine.why.few'),
+  many: () => t('combine.why.many'),
+  combined: () => t('combine.why.combined'),
+  noOverlap: () => t('combine.why.noOverlap'),
+};
+
+/**
+ * The bar under the list in select mode: Combine and Remove at its two ends,
+ * so neither is pressed by mistake, and the count between them. Remove asks
+ * once more ("Remove 3?"), like the trash button on a track.
+ */
+function SelectBar() {
+  const ids = S.ticked.value;
+  const why = S.combineBlock(ids);
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (!asking) return;
+    const timer = setTimeout(() => setAsking(false), 4000);
+    return () => clearTimeout(timer);
+  }, [asking]);
+  // A different selection is a different question.
+  useEffect(() => setAsking(false), [ids.length]);
+  return (
+    <div class="select-bar-wrap">
+      <div class="select-bar" role="toolbar" aria-label={t('select.bar')}>
+        <button
+          type="button" class="bar-btn" aria-disabled={why ? 'true' : undefined} aria-describedby={why ? 'combine-why' : undefined}
+          onClick={() => { if (!why) S.combineTicked(); }}
+        >
+          <IconCombine />{t('select.combine')}
+        </button>
+        <span class="bar-count" aria-live="polite">{t('select.count', { n: ids.length })}</span>
+        <button
+          type="button" class={`bar-btn remove${asking ? ' is-asking' : ''}`} aria-disabled={ids.length ? undefined : 'true'}
+          title={asking ? t('select.removeAgain') : undefined}
+          onClick={() => { if (!ids.length) return; if (asking) S.removeTicked(); else setAsking(true); }} onBlur={() => setAsking(false)}
+        >
+          <IconTrash />{asking ? t('select.removeAsk', { n: ids.length }) : t('select.remove')}
+        </button>
+      </div>
+      {why && <p class="select-why" id="combine-why">{WHY[why]()}</p>}
+    </div>
   );
 }
 

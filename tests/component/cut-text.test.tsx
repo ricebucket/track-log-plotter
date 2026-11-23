@@ -1,0 +1,52 @@
+// @vitest-environment happy-dom
+// Hover text for text cut off with an ellipsis: the full text, only while some is hidden.
+import { beforeEach, describe, expect, it } from 'vitest';
+import { fireEvent, render } from '@testing-library/preact';
+import { fullTextIfCut } from '../../src/ui/cutText';
+import { App } from '../../src/ui/App';
+import * as S from '../../src/state/store';
+import { load } from '../helpers/fixtures';
+
+/** Pretends the element shows `shown` pixels of `full` pixels of text (happy-dom lays nothing out). */
+function widths(el: Element, full: number, shown: number) {
+  Object.defineProperty(el, 'scrollWidth', { configurable: true, value: full });
+  Object.defineProperty(el, 'clientWidth', { configurable: true, value: shown });
+}
+
+beforeEach(() => S.resetForTests());
+
+describe('fullTextIfCut', () => {
+  it('sets the full text as the title only while the text is cut off', () => {
+    const { container } = render(<span class="name" onMouseEnter={fullTextIfCut('a-long-file-name.gpx')}>a-long-file-name.gpx</span>);
+    const el = container.querySelector('.name')!;
+    widths(el, 300, 120);
+    fireEvent.mouseEnter(el);
+    expect(el.getAttribute('title')).toBe('a-long-file-name.gpx');
+    // Wider again (the panel grew): the title goes.
+    widths(el, 300, 300);
+    fireEvent.mouseEnter(el);
+    expect(el.hasAttribute('title')).toBe(false);
+  });
+
+  it('can measure a part of the element that does the cutting off', () => {
+    const { container } = render(
+      <button type="button" onMouseEnter={fullTextIfCut('Properties & time zone', (b) => b.querySelector('.btn-label'))}>
+        <svg /><span class="btn-label">Properties &amp; time zone</span>
+      </button>,
+    );
+    const button = container.querySelector('button')!;
+    widths(button, 200, 200);
+    widths(button.querySelector('.btn-label')!, 180, 90);
+    fireEvent.mouseEnter(button);
+    expect(button.getAttribute('title')).toBe('Properties & time zone');
+  });
+
+  it('shows a cut-off track name in full when the pointer is on it in the track list', () => {
+    S.addLoaded([{ ...load('central-park-loop.nmea'), file: 'a-track-log-with-a-name-far-too-long-for-the-panel.nmea' }]);
+    const { container } = render(<App Map={() => <div />} />);
+    const name = container.querySelector('.track-row .track-name')!;
+    widths(name, 420, 180);
+    fireEvent.mouseEnter(name);
+    expect(name.getAttribute('title')).toBe('a-track-log-with-a-name-far-too-long-for-the-panel.nmea');
+  });
+});

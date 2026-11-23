@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildMarks, buildPaths, buildRuns, drawnSteps, metersPerPixel, stepsFor, type MapCtx } from '../../src/map/geojson';
+import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildLogCursors, buildLogLines, buildMarks, buildPaths, buildRuns, drawnSteps, metersPerPixel, stepsFor, type MapCtx } from '../../src/map/geojson';
+import { combineTracks, Use } from '../../src/combine/combine';
 import { addTracks } from '../../src/state/logic';
 import { buildScale, stepOf } from '../../src/color/scale';
 import type { LoadedTrack, MeasureKey } from '../../src/model/types';
-import { FAMILIES, SINGLE } from '../../src/color/palettes';
+import { FAMILIES, LOG_COLORS, SINGLE } from '../../src/color/palettes';
 import { columns, graphRange, MIN_ZOOM_MS, panView, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from '../../src/ui/timelineMath';
 import { scaleBar } from '../../src/ui/scaleBar';
 import { load } from '../helpers/fixtures';
@@ -250,5 +251,45 @@ describe('scale bar', () => {
     expect(s.px).toBeGreaterThan(40);
     expect(s.px).toBeLessThanOrEqual(110);
     expect(scaleBar(40.77, 10, true).unit).toBe('mi');
+  });
+});
+
+describe("a combined track's logs on the map", () => {
+  const car = load('stanford-drive-car.nmea'), phone = load('stanford-drive-phone.gpx');
+  const r = combineTracks([car, phone]);
+  if (!r.ok) throw new Error(r.reason);
+  const c = r.track;
+  const item = (logs: boolean[], vis = true) => ({ ...addTracks([], [c]).items[0], logs, vis });
+
+  it('draws each log with its eye on as lines in its own color, red where it was left out, and none for a hidden log', () => {
+    const lines = buildLogLines([item([true, true])]).features;
+    expect(new Set(lines.map((f) => f.properties.k))).toEqual(new Set([0, 1]));
+    for (const f of lines) expect(f.properties.c).toBe(LOG_COLORS[f.properties.k as number]);
+    // The phone's 20 s jump: left out, so drawn red; the car never is.
+    const out = lines.filter((f) => f.properties.out === 1);
+    expect(out.length).toBeGreaterThan(0);
+    expect(out.every((f) => f.properties.k === 1)).toBe(true);
+    expect(buildLogLines([item([true, false])]).features.every((f) => f.properties.k === 0)).toBe(true);
+    expect(buildLogLines([item([true, true], false)]).features).toEqual([]);
+  });
+
+  it("leaves a log's own gaps blank: no line across a stretch where it has no position", () => {
+    const phoneLines = buildLogLines([item([false, true])]).features;
+    const la = c.combo.srcLat[1];
+    // Every point of every line is a real position of the phone, and the phone's gaps split it into pieces.
+    // Its 35 s and 70 s gaps stay blank; the 8 s one is bridged, as fixes up to 10 s apart are interpolated.
+    expect(phoneLines.length).toBeGreaterThan(2);
+    let gaps = 0;
+    for (let i = 1; i < c.cols.n; i++) if (Number.isNaN(la[i]) && !Number.isNaN(la[i - 1])) gaps++;
+    expect(gaps).toBe(2);
+    for (const f of phoneLines) for (const [lon, lat] of f.geometry.coordinates) expect(Number.isFinite(lon) && Number.isFinite(lat)).toBe(true);
+  });
+
+  it('puts a dot for each shown log at the cursor, hollow and ringed in red where the log was left out', () => {
+    const k = c.combo.use[1].findIndex((u) => u === Use.LeftOut);
+    const dots = buildLogCursors([item([true, true])], {}, c.cols.t[k]).features;
+    expect(dots.map((f) => [f.properties.k, f.properties.out])).toEqual([[0, 0], [1, 1]]);
+    expect(buildLogCursors([item([true, true])], {}, null).features).toEqual([]);
+    expect(buildLogCursors([item([false, true])], {}, c.cols.t[k]).features.map((f) => f.properties.k)).toEqual([1]);
   });
 });

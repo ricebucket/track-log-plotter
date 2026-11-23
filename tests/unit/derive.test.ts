@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { haversine, bearing, median, quantile } from '../../src/derive/geo';
-import { derive, gapThreshold, medianInterval } from '../../src/derive/derive';
+import { ACCURACY_SMOOTH_S, derive, gapThreshold, medianInterval, MOVING_KMH, SPREAD_SIZE } from '../../src/derive/derive';
+import { buildScale, evenEdges, logEdges, niceEdges, RUNNING_KMH, STEPS } from '../../src/color/scale';
 import { hdopIsRelative } from '../../src/derive/hdop';
 import { inferSpeedUnit, UNIT_FACTOR } from '../../src/parse/units';
 import { ColumnBuilder } from '../../src/parse/columns';
-import type { ParsedTrack } from '../../src/model/types';
+import type { FixQuality, LoadedTrack, ParsedTrack } from '../../src/model/types';
 import { load } from '../helpers/fixtures';
 
 /** A straight synthetic track heading north from Central Park at a steady speed. */
@@ -109,5 +110,81 @@ describe('speed unit inference', () => {
   it('falls back to m/s when the track barely moves', () => {
     const still = line(50, { mps: 0.2 });
     expect(inferSpeedUnit(still.cols, new Float32Array(50).fill(1)).confident).toBe(false);
+  });
+});
+
+describe('what derive works out once, when a track loads', () => {
+  /** Central Park, heading north: a fix a second, with HDOP, satellites, a fix type and a height to taste. */
+  function fixes(n: number, at: (i: number) => { north?: number; hdop?: number; sats?: number; fixq?: FixQuality; ele?: number }, fields: ParsedTrack['fields'] = ['time', 'position']): ParsedTrack {
+    const b = new ColumnBuilder();
+    const t0 = Date.UTC(2026, 5, 14, 13, 0, 0);
+    for (let i = 0; i < n; i++) {
+      const f = at(i);
+      b.push({ t: t0 + i * 1000, lat: 40.78 + (f.north ?? i * 3) / 111_195, lon: -73.965, ele: f.ele, hdop: f.hdop, sats: f.sats, fixq: f.fixq, line: i + 1 });
+    }
+    return { format: 'gpx', creator: null, name: null, cols: b.build(), flags: [], problems: [], notes: [], fields, lines: n };
+  }
+
+  it('knows which measures the track has', () => {
+    const d = derive(fixes(80, (i) => ({ ele: 10 + i * 0.5, hdop: 1.2 })));
+    expect(d.has).toEqual({ speed: true, ele: true, grade: true, hdop: true, sats: false, fix: false, accel: false });
+    expect(derive(fixes(1, () => ({}))).has.speed).toBe(false);
+  });
+
+  it('keeps 512 of its moving speeds and of its heights in order, for the shared color steps', () => {
+    // Walking, then standing for a minute (stops stay out of the speed spread), heights from 10 m up to 49.5 m.
+    const p = fixes(200, (i) => ({ north: i < 140 ? i * 1.5 : 210, ele: 10 + (i % 80) * 0.5 }));
+    const d = derive(p);
+    for (const sp of [d.speedSpread, d.eleSpread]) {
+      expect(sp.length).toBe(SPREAD_SIZE);
+      expect(Array.from(sp).every((v, i) => i === 0 || v >= sp[i - 1])).toBe(true);
+    }
+    const moving = Array.from(d.kmh).filter((v) => v >= MOVING_KMH);
+    expect(d.speedSpread[0]).toBe(Math.min(...moving));
+    expect(d.speedSpread[SPREAD_SIZE - 1]).toBe(Math.max(...moving));
+    expect([d.eleSpread[0], d.eleSpread[SPREAD_SIZE - 1]]).toEqual([10, 49.5]);
+    expect(derive(fixes(50, () => ({ north: 7 }))).speedSpread.length).toBe(0);
+  });
+
+  it('picks exactly the color steps that sorting every fix would give', () => {
+    // A long walk and a short drive shown together, against 512 values of each from its sorted fixes.
+    const track = (p: ParsedTrack) => { const tr = { ...p, file: 'x', sizeBytes: 0 } as LoadedTrack; tr.derived = derive(tr); return tr; };
+    const both = [track(line(3000, { mps: 1.4, climb: 3 })), track(line(700, { mps: 12, climb: -2 }))];
+    const pool = (key: 'speed' | 'ele') => both.flatMap((tr) => {
+      const v = Array.from(key === 'speed' ? tr.derived.kmh : tr.cols.ele).filter((x) => (key === 'speed' ? x >= MOVING_KMH : Number.isFinite(x))).sort((x, y) => x - y);
+      return Array.from({ length: SPREAD_SIZE }, (_, j) => v[Math.round((j * (v.length - 1)) / (SPREAD_SIZE - 1))]);
+    }).sort((x, y) => x - y);
+    const q = (v: number[], f: number) => { const pos = (v.length - 1) * f, lo = Math.floor(pos), hi = Math.ceil(pos); return v[lo] + (v[hi] - v[lo]) * (pos - lo); };
+    const ele = pool('ele');
+    expect(buildScale('ele', both).edges).toEqual(niceEdges([0.2, 0.4, 0.6, 0.8].map((f) => q(ele, f))));
+    const sp = pool('speed'), hi = q(sp, 0.95), lo = Math.max(MOVING_KMH, q(sp, 0.05));
+    const log = hi > RUNNING_KMH && hi / lo > 1.5;
+    expect(buildScale('speed', both)).toMatchObject({ log, edges: log ? logEdges(lo, hi, STEPS.speed) : evenEdges(hi, STEPS.speed) });
+  });
+
+  it('keeps each fix\'s accuracy against the log\'s middle HDOP, averaged over 10 s', () => {
+    // HDOP 1 for a minute, then 3 for a minute: the middle (upper middle of an even count) is 3.
+    const d = derive(fixes(120, (i) => ({ hdop: i < 60 ? 1 : 3, sats: 8, fixq: 1 }), ['time', 'position', 'hdop', 'sats']));
+    expect(d.hdopBase).toBe(3);
+    expect(d.accuracy[20]).toBeCloseTo(1 / 3, 9);
+    expect(d.accuracy[100]).toBeCloseTo(1, 9);
+    // Across the change it ramps over the window instead of jumping.
+    const half = ACCURACY_SMOOTH_S / 2;
+    expect(d.accuracy[60 - half - 1]).toBeCloseTo(1 / 3, 9);
+    expect(d.accuracy[60]).toBeGreaterThan(1 / 3);
+    expect(d.accuracy[60]).toBeLessThan(1);
+    // A corrected fix's error is √½ of the same HDOP's; without HDOP or satellites it is 1.
+    const c = derive(fixes(40, () => ({ hdop: 2, fixq: 2 }), ['time', 'position', 'hdop']));
+    expect(c.accuracy[20]).toBeCloseTo(Math.SQRT1_2, 9);
+    expect(Array.from(derive(fixes(30, () => ({}))).accuracy).every((v) => v === 1)).toBe(true);
+    // Satellites when there's no HDOP: the usual count over the fix's.
+    const s = derive(fixes(60, (i) => ({ sats: i < 30 ? 10 : 5 }), ['time', 'position', 'sats']));
+    expect(s.accuracy[10]).toBeCloseTo(1, 9);
+    expect(s.accuracy[50]).toBeCloseTo(2, 9);
+  });
+
+  it('marks each fix with the start of its run of identical positions', () => {
+    const d = derive(fixes(10, (i) => ({ north: i < 3 ? i * 3 : i < 7 ? 9 : i * 3 })));
+    expect(Array.from(d.runStart)).toEqual([0, 1, 2, 3, 3, 3, 3, 7, 8, 9]);
   });
 });

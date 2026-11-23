@@ -1,9 +1,7 @@
 import type { LoadedTrack, MeasureKey } from '../model/types';
-import { quantileSorted } from '../derive/geo';
+import { quantilesIn } from '../derive/geo';
 import { MOVING_KMH } from '../derive/derive';
 
-/** Values each track contributes when choosing shared steps. */
-const SKETCH = 512;
 /** Faster than runners keep up (km/h). Above it, speed steps are spaced on a log scale. */
 export const RUNNING_KMH = 20;
 
@@ -44,11 +42,9 @@ export function valueAt(tr: LoadedTrack, key: MeasureKey, i: number): number {
   }
 }
 
-/** Whether a track has any value for a measure. */
+/** Whether a track has any value for a measure (worked out when it loaded). */
 export function hasMeasure(tr: LoadedTrack, key: MeasureKey): boolean {
-  if (key === 'speed') return tr.cols.n > 1;
-  for (let i = 0; i < tr.cols.n; i++) if (Number.isFinite(valueAt(tr, key, i))) return true;
-  return false;
+  return tr.derived.has[key];
 }
 
 /** Step index for a value, or -1 when it's missing. */
@@ -135,42 +131,45 @@ export function buildScale(key: MeasureKey, tracks: LoadedTrack[], factor = 1, r
   const fixed = FIXED[key];
   if (fixed) return { key, steps, edges: fixed, factor: 1, relative: false, log: false };
   if (key === 'fix') return { key, steps, edges: [], factor: 1, relative: false, log: false };
-  // Each track adds the same number of evenly spaced quantiles, so a long walk
-  // doesn't claim every step from a shorter drive loaded beside it.
-  const pool: number[] = [];
-  for (const tr of tracks) {
-    const n = tr.cols.n;
-    const stride = Math.max(1, Math.floor(n / 20000));
-    const vals: number[] = [];
-    for (let i = 0; i < n; i += stride) {
-      const v = valueAt(tr, key, i);
-      // Stops all fall in the first speed step anyway; leave them out of the split.
-      if (key === 'speed' && !(v >= MOVING_KMH)) continue;
-      if (Number.isFinite(v)) vals.push(v * factor);
-    }
-    if (!vals.length) continue;
-    vals.sort((a, b) => a - b);
-    for (let j = 0; j < SKETCH; j++) pool.push(vals[Math.round((j * (vals.length - 1)) / (SKETCH - 1))]);
-  }
-  if (pool.length === 0) return { key, steps, edges: [1, 2, 3, 4], factor, relative: false, log: false };
-  pool.sort((a, b) => a - b);
+  // Each track adds the same number of evenly spaced values of its own (its
+  // spread, kept since it loaded), so a long walk doesn't claim every step from
+  // a shorter drive loaded beside it. Stops all fall in the first speed step
+  // anyway, so the speed spreads leave them out.
+  let size = 0;
+  for (const tr of tracks) size += (key === 'speed' ? tr.derived.speedSpread : tr.derived.eleSpread).length;
+  if (size === 0) return { key, steps, edges: [1, 2, 3, 4], factor, relative: false, log: false };
+  const pool = new Float64Array(size);
+  let m = 0;
+  for (const tr of tracks) for (const v of key === 'speed' ? tr.derived.speedSpread : tr.derived.eleSpread) pool[m++] = v * factor;
   if (key === 'speed') {
     // Faster than running: space the steps on a log scale, so a walk and a
     // drive shown together each keep several colors.
-    const hi = quantileSorted(pool, 0.95);
-    const lo = Math.max(MOVING_KMH * factor, quantileSorted(pool, 0.05));
+    const [q05, q95] = quantilesIn(pool, m, [0.05, 0.95]);
+    const hi = q95;
+    const lo = Math.max(MOVING_KMH * factor, q05);
     if (hi > RUNNING_KMH * factor && hi / lo > 1.5) return { key, steps, edges: logEdges(lo, hi, steps), factor, relative: false, log: true };
     // Slower: equal steps from standing still up to a round number at the usual
     // top speed, so slow, steady and brisk stretches each get a color. (Quantiles
     // bunch up where a steady walk spends most of its time, and flicker there.)
     return { key, steps, edges: evenEdges(hi, steps), factor, relative: false, log: false };
   }
-  const qs = [0.2, 0.4, 0.6, 0.8].map((q) => quantileSorted(pool, q));
+  const qs = quantilesIn(pool, m, [0.2, 0.4, 0.6, 0.8]);
   return { key, steps, edges: niceEdges(qs), factor, relative: false, log: false };
 }
 
 /** Share of the track's time spent in each step (fractions that sum to 1, or all 0). */
 export function timeShares(tr: LoadedTrack, scale: Scale): number[] {
+  // Scales and tracks never change once made: each pair is counted once, not on every render.
+  let byTrack = sharesMemo.get(scale);
+  if (!byTrack) { byTrack = new WeakMap(); sharesMemo.set(scale, byTrack); }
+  let shares = byTrack.get(tr);
+  if (!shares) { shares = countShares(tr, scale); byTrack.set(tr, shares); }
+  return shares;
+}
+
+const sharesMemo = new WeakMap<Scale, WeakMap<LoadedTrack, number[]>>();
+
+function countShares(tr: LoadedTrack, scale: Scale): number[] {
   const out: number[] = Array.from({ length: scale.steps }, () => 0);
   const { t } = tr.cols;
   let total = 0;

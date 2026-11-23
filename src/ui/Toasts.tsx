@@ -8,6 +8,7 @@ export function Toasts() {
   const n = S.loadNotice.value;
   const errs = S.loadErrors.value;
   const skipped = S.skippedCount.value;
+  const c = S.comboNotice.value;
   return (
     <div class="toasts">
       {mapFailed.value && <div class="toast is-error" role="alert"><IconWarn size={16} /><span>{t('toast.noMap')}</span></div>}
@@ -26,6 +27,7 @@ export function Toasts() {
           <button type="button" class="icon-btn" aria-label={t('common.dismiss')} title={t('common.dismiss')} onClick={() => { S.loadErrors.value = []; }}><IconClose size={14} /></button>
         </div>
       )}
+      {c && <ComboToast notice={c} />}
       {skipped > 0 && (
         <div class="toast" role="status">
           <IconWarn size={16} />
@@ -33,6 +35,25 @@ export function Toasts() {
           <button type="button" class="icon-btn" aria-label={t('common.dismiss')} title={t('common.dismiss')} onClick={() => { S.skippedCount.value = 0; }}><IconClose size={14} /></button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** What pressing Combine ran into: a time zone to check, the same recording twice, logs that may not be one trip. */
+function ComboToast({ notice: n }: { notice: S.ComboNotice }) {
+  const dismiss = () => { S.comboNotice.value = null; };
+  const text = n.kind === 'zone' ? t('combine.zone', { file: n.file })
+    : n.kind === 'duplicate' ? t('combine.duplicate')
+    : n.kind === 'apart' ? t('combine.apart')
+    : n.kind === 'full' ? t('combine.full')
+    : t('combine.empty');
+  return (
+    <div class="toast" role="status" data-combo={n.kind}>
+      <IconWarn size={16} />
+      <span>{text}</span>
+      {n.kind === 'zone' && <button type="button" class="btn-amber" onClick={() => { dismiss(); S.endSelect(); S.openDetails(n.id); }}>{t('toast.showDetails')}</button>}
+      {n.kind === 'apart' && <button type="button" class="btn-amber" onClick={() => S.confirmApart()}>{t('combine.anyway')}</button>}
+      <button type="button" class="icon-btn" aria-label={t('common.dismiss')} title={t('common.dismiss')} onClick={dismiss}><IconClose size={14} /></button>
     </div>
   );
 }

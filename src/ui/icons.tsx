@@ -67,3 +67,5 @@ export const IconCheck = ({ size = 11 }: P) => svg(size, <path d="M4 9.5l3.2 3.2
 export const IconSearch = ({ size = 15 }: P) => svg(size, [<circle key="a" cx="8" cy="8" r="5" />, <path key="b" d="M12 12l3.5 3.5" />], 1.8);
 export const IconTrash = ({ size = 15 }: P) => svg(size, <path d="M3.5 5h11M7.5 5V3.5h3V5M5 5l.7 9.5h6.6L13 5" />, 1.6);
 export const IconCalc = ({ size = 13 }: P) => svg(size, [<rect key="a" x="4" y="2.5" width="10" height="13" rx="2" />, <path key="b" d="M6.5 5.5h5M6.6 9h.1M9 9h.1M11.4 9h.1M6.6 12h.1M9 12h.1M11.4 12h.1" />], 1.6);
+export const IconSelect = ({ size = 16 }: P) => svg(size, [<rect key="a" x="2.4" y="2.4" width="13.2" height="13.2" rx="3.2" />, <path key="b" d="M5.7 9.2l2.3 2.3 4.4-4.8" />]);
+export const IconCombine = ({ size = 16 }: P) => svg(size, <path d="M2.5 4.5c4 0 4.5 4.5 7 4.5h6M2.5 13.5c4 0 4.5-4.5 7-4.5M13 6.5L15.5 9 13 11.5" />);

@@ -6,7 +6,8 @@ import { nearestIndex } from '../state/logic';
 import { haversine } from '../derive/geo';
 import { FORMAT_SHAPE } from '../color/shapes';
 import { stepOf, valueAt, type Scale } from '../color/scale';
-import { FAMILIES, haloExtra, haloStyle, palette, UNKNOWN } from '../color/palettes';
+import { FAMILIES, haloExtra, haloStyle, LOG_COLORS, palette, UNKNOWN } from '../color/palettes';
+import { isCombined, Use } from '../combine/combine';
 
 export interface Feature<G> { type: 'Feature'; geometry: G; properties: Record<string, string | number> }
 export interface LineString { type: 'LineString'; coordinates: [number, number][] }
@@ -225,6 +226,60 @@ export function buildCursors(items: TrackItem[], offsets: Record<string, number>
       col = k >= 0 ? colors[Math.min(k, colors.length - 1)] : ctx.dark ? UNKNOWN.dark : UNKNOWN.light;
     }
     out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lon[i], c.lat[i]] }, properties: { id: it.id, i, c: col, z: it.id === ctx.selectedId ? 2 : 1 } });
+  }
+  return fc(out);
+}
+
+/**
+ * The logs of each shown combined track whose eye is on: thin solid lines in
+ * each log's color (dots and dashes on the map always mean a gap), red where
+ * the log was left out for a large error. A log's own gaps stay blank.
+ */
+export function buildLogLines(items: TrackItem[]): FC<LineString> {
+  const out: Feature<LineString>[] = [];
+  for (const it of items) {
+    if (!it.vis || !it.logs || !isCombined(it.track)) continue;
+    const { combo, cols } = it.track;
+    const gap = it.track.derived.gap;
+    for (let k = 0; k < combo.sources.length; k++) {
+      if (!it.logs[k]) continue;
+      const la = combo.srcLat[k], lo = combo.srcLon[k], use = combo.use[k];
+      let coords: [number, number][] | null = null, left = false;
+      const close = () => {
+        if (coords && coords.length >= 2) out.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: { id: it.id, k, c: LOG_COLORS[k], out: left ? 1 : 0 } });
+        coords = null;
+      };
+      for (let i = 0; i < cols.n; i++) {
+        if (la[i] !== la[i] || gap[i]) close(); // no position here, or a gap in the combined track
+        if (la[i] !== la[i]) continue;
+        const o = use[i] === Use.LeftOut;
+        // The step into a left-out second (and out of it) takes that second's look.
+        if (coords && o !== left) { const last: [number, number] = coords[coords.length - 1]; close(); coords = [last]; }
+        if (!coords) coords = [];
+        left = o;
+        coords.push([lo[i], la[i]]);
+      }
+      close();
+    }
+  }
+  return fc(out);
+}
+
+/** A dot for each shown log of each shown combined track at the cursor: hollow, ringed in red, where it was left out. */
+export function buildLogCursors(items: TrackItem[], offsets: Record<string, number>, axisT: number | null): FC<Point> {
+  if (axisT === null) return fc([]);
+  const out: Feature<Point>[] = [];
+  for (const it of items) {
+    if (!it.vis || !it.logs || !isCombined(it.track)) continue;
+    const { combo, cols } = it.track;
+    const tt = axisT - (offsets[it.id] ?? 0);
+    if (cols.n === 0 || tt < cols.t[0] - 5000 || tt > cols.t[cols.n - 1] + 5000) continue;
+    const i = nearestIndex(cols.t, tt);
+    for (let k = 0; k < combo.sources.length; k++) {
+      const la = combo.srcLat[k][i], lo = combo.srcLon[k][i];
+      if (!it.logs[k] || la !== la) continue;
+      out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [lo, la] }, properties: { id: it.id, k, c: LOG_COLORS[k], out: combo.use[k][i] === Use.LeftOut ? 1 : 0 } });
+    }
   }
   return fc(out);
 }

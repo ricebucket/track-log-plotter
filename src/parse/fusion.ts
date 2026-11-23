@@ -306,12 +306,19 @@ export function parseFusion(text: string): ParsedTrack {
   while (more) more = nextLine(scanLine(0)); // count the lines left
   const lineCount = li + 1;
 
-  // Readings a second: the usual count per fix where fixes are a second apart.
-  const counts = new Int32Array(rows.n);
+  // Readings a second: the usual count per fix where fixes are a second apart (the upper middle of the counts),
+  // from a tally of the counts in one pass, grown when a count outgrows it.
+  let tally = new Int32Array(64);
   let nc = 0;
-  for (let k = 0; k + 1 < rows.n; k++) if (rows.t[k + 1] - rows.t[k] === 1000 && rows.s1[k] > rows.s0[k]) counts[nc++] = rows.s1[k] - rows.s0[k];
-  const sorted = counts.subarray(0, nc).sort();
-  const perSecond = nc ? sorted[nc >> 1] : 1;
+  for (let k = 0; k + 1 < rows.n; k++) {
+    if (rows.t[k + 1] - rows.t[k] !== 1000 || !(rows.s1[k] > rows.s0[k])) continue;
+    const v = rows.s1[k] - rows.s0[k];
+    if (v >= tally.length) { const g = new Int32Array(Math.max(v + 1, tally.length * 2)); g.set(tally); tally = g; }
+    tally[v]++;
+    nc++;
+  }
+  let perSecond = 1;
+  for (let v = 0, seen = 0; nc && v < tally.length; v++) { seen += tally[v]; if (seen > nc >> 1) { perSecond = v; break; } }
   for (let k = 0; k < rows.n; k++) {
     const at = rows.kept[k];
     if (at >= 0) { const peak = accelPeak(r, rows.s0[k], rows.s1[k]); b.accel[at] = Number.isFinite(peak) ? peak : NaN; }

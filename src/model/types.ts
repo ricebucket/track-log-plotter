@@ -160,6 +160,28 @@ export interface Derived {
   /** Quartiles of HDOP (25th, 50th, 75th percentile), or null without HDOP. */
   hdopQ: [number, number, number] | null;
   stats: TrackStats;
+  /** Which measures the track has values for. */
+  has: Record<MeasureKey, boolean>;
+  /**
+   * The track's moving speeds (km/h, at least walking pace), summed up as 512
+   * evenly spaced values in sorted order; empty when it never moves. Shared
+   * color steps are picked from these, so a long track counts no more than a
+   * short one and nothing is sorted when tracks are shown or hidden.
+   */
+  speedSpread: Float32Array;
+  /** The same for the recorded elevations (m). */
+  eleSpread: Float32Array;
+  /**
+   * Each fix's expected error against the log's usual one (HDOP over its
+   * middle value, else the usual satellite count over the fix's; a corrected
+   * fix's error √½ as large), averaged over 10 s. 1 throughout without HDOP
+   * or satellites. It weights the log when logs are combined.
+   */
+  accuracy: Float64Array;
+  /** The middle of the positive HDOPs, which `accuracy` is measured against; NaN without HDOP. */
+  hdopBase: number;
+  /** For each fix, the first fix of its run of identical positions (a logger holding its position repeats it). */
+  runStart: Int32Array;
 }
 
 export interface LoadedTrack extends ParsedTrack {

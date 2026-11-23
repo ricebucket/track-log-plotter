@@ -1,6 +1,6 @@
-import type { Columns, Derived, ParsedTrack, TrackStats } from '../model/types';
-import { haversine, median, quantiles } from './geo';
-import { hdopIsRelative } from './hdop';
+import type { Columns, Derived, MeasureKey, ParsedTrack, TrackStats } from '../model/types';
+import { haversine, nth, quantilesIn, spread } from './geo';
+import { RELATIVE_HDOP } from './hdop';
 
 /** Half of the distance window used for grade, in meters (120 m in total). */
 export const GRADE_HALF_WINDOW = 60;
@@ -19,53 +19,214 @@ export function gapThreshold(intervalS: number): number {
 export function medianInterval(cols: Columns): number {
   const dts = new Float64Array(Math.max(0, cols.n - 1));
   let k = 0;
-  for (let i = 1; i < cols.n; i++) if (!cols.seg[i]) dts[k++] = (cols.t[i] - cols.t[i - 1]) / 1000;
-  const m = median(dts.subarray(0, k));
+  for (let i = 1; i < cols.n; i++) { const d = (cols.t[i] - cols.t[i - 1]) / 1000; if (!cols.seg[i] && d - d === 0) dts[k++] = d; }
+  const m = quantilesIn(dts, k, [0.5])[0];
   return Number.isFinite(m) ? m : 1;
 }
 
+/** How many sorted values of a distribution each track keeps for the shared color steps (see spread()). */
+export const SPREAD_SIZE = 512;
+/** A log's accuracy (from HDOP or satellites) is averaged over this many seconds before it weights the log in a combination. */
+export const ACCURACY_SMOOTH_S = 10;
+
+/**
+ * Everything worked out from a track's fixes, once, when it loads (in the
+ * reading worker): distance, speed, gaps, grade, the stats, and the summaries
+ * later steps would otherwise rescan the fixes for (which measures it has,
+ * its spread of speeds and heights for the color steps, its accuracy over
+ * time for combining, its held positions). A handful of passes over the
+ * fixes; medians and quantiles by selection, not sorting.
+ */
 export function derive(p: ParsedTrack): Derived {
-  const c = p.cols;
-  const n = c.n;
-  const dist = new Float64Array(n);
-  const gap = new Uint8Array(n);
-  const intervalS = medianInterval(c);
+  const c = p.cols, n = c.n;
+  const { t, lat, lon, ele, hdop, sats, speed, fixq, accel, seg } = c;
+
+  // ---- Pass 1: what the file holds, the bounds, and the values the medians and quantiles are picked from.
+  const dts = new Float64Array(n > 1 ? n - 1 : 0);
+  // HDOP and satellite values are gathered only when the track has some (a combined track has none).
+  const NONE = new Float64Array(0);
+  let hAll = NONE, h6 = NONE, sAll = NONE;
+  const eleV = new Float32Array(n);
+  const runStart = new Int32Array(n);
+  let nd = 0, nh = 0, n6 = 0, ns = 0, ne = 0, hNonPos = 0, sNonPos = 0, withSats = 0, withSpeed = 0, fixKnown = 0, corrected = 0;
+  let w = 180, s = 90, e = -180, nn = -90, anyEle = false, minEle = Infinity, maxEle = -Infinity, maxAccel = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const la = lat[i], lo = lon[i];
+    if (lo < w) w = lo;
+    if (lo > e) e = lo;
+    if (la < s) s = la;
+    if (la > nn) nn = la;
+    if (i > 0) {
+      const d = (t[i] - t[i - 1]) / 1000;
+      if (!seg[i] && d - d === 0) dts[nd++] = d; // d - d === 0: finite
+      // A logger holding its last position repeats it: each fix points to the start of its run of identical positions.
+      runStart[i] = la === lat[i - 1] && lo === lon[i - 1] ? runStart[i - 1] : i;
+    }
+    const h = hdop[i], sv = sats[i], ev = ele[i], f = fixq[i];
+    if (sv >= 0) withSats++;
+    if (h - h === 0) {
+      if (hAll === NONE) { hAll = new Float64Array(n); h6 = new Float64Array(n); }
+      hAll[nh++] = h; if (!(h > 0)) hNonPos++; if (sv >= 6) h6[n6++] = h;
+    }
+    if (sv - sv === 0) { if (sAll === NONE) sAll = new Float64Array(n); sAll[ns++] = sv; if (!(sv > 0)) sNonPos++; }
+    if (ev === ev) {
+      anyEle = true;
+      if (ev < minEle) minEle = ev;
+      if (ev > maxEle) maxEle = ev;
+      if (ev - ev === 0) eleV[ne++] = ev;
+    }
+    if (speed[i] - speed[i] === 0) withSpeed++;
+    if (f > 0) fixKnown++;
+    if (f === 2) corrected++;
+    if (accel[i] > maxAccel) maxAccel = accel[i];
+  }
+
+  // ---- Medians and quantiles, by selection.
+  const iv = quantilesIn(dts, nd, [0.5])[0];
+  const intervalS = Number.isFinite(iv) ? iv : 1;
   const gapS = gapThreshold(intervalS);
-
-  for (let i = 1; i < n; i++) {
-    dist[i] = dist[i - 1] + haversine(c.lat[i - 1], c.lon[i - 1], c.lat[i], c.lon[i]);
-    if (c.seg[i] || (c.t[i] - c.t[i - 1]) / 1000 > gapS) gap[i] = 1;
+  // HDOP quartiles; and whether HDOP behaves like standard HDOP (see hdopIsRelative): judged from the fixes
+  // with six or more satellites when most fixes give a count, else from all of them, so it may share the selection.
+  let q1: number, q2: number, q3: number, hdopRelative: boolean;
+  if (withSats > n / 2) {
+    [q1, q2, q3] = quantilesIn(hAll, nh, [0.25, 0.5, 0.75]);
+    hdopRelative = n6 >= 30 && quantilesIn(h6, n6, [0.1])[0] > RELATIVE_HDOP;
+  } else {
+    const q = quantilesIn(hAll, nh, [0.1, 0.25, 0.5, 0.75]);
+    [q1, q2, q3] = [q[1], q[2], q[3]];
+    hdopRelative = nh >= 30 && q[0] > RELATIVE_HDOP;
   }
+  const hdopQ: [number, number, number] | null = Number.isFinite(q2) ? [q1, q2, q3] : null;
+  const medSats = quantilesIn(sAll, ns, [0.5])[0];
+  // What a log's accuracy is measured against: the middle of its positive HDOPs (the upper middle of an even
+  // count), else of its positive satellite counts. Selecting the median above has already put that value in place.
+  const hasH = p.fields.includes('hdop'), hasS = p.fields.includes('sats');
+  const hdopBase = hasH ? (hNonPos ? positiveMiddle(hdop) : nh ? hAll[nh >> 1] : NaN) : NaN;
+  const satsBase = !hasH && hasS ? (sNonPos ? positiveMiddle(sats) : ns ? sAll[ns >> 1] : NaN) : NaN;
 
-  // Speed: from positions, over the neighboring fixes within the same run.
-  const fromPos = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const a = i > 0 && !gap[i] ? i - 1 : i;
-    const b = i < n - 1 && !gap[i + 1] ? i + 1 : i;
-    const dt = (c.t[b] - c.t[a]) / 1000;
-    fromPos[i] = a === b || dt <= 0 ? NaN : ((dist[b] - dist[a]) / dt) * 3.6;
-  }
-  let withSpeed = 0;
-  for (let i = 0; i < n; i++) if (Number.isFinite(c.speed[i])) withSpeed++;
+  // ---- Pass 2: distance, gaps, speed, moving time, and each fix's accuracy.
+  const dist = new Float64Array(n), gap = new Uint8Array(n), kmh = new Float32Array(n), now = new Float64Array(n);
+  const moving = new Float32Array(n); // speeds as stored (32-bit), for their spread
   const speedFromFile = n > 0 && withSpeed >= n * 0.5;
-  const kmh = new Float32Array(n);
+  let nm = 0, distanceM = 0, movingS = 0, maxKmh = 0;
+  // Speed at fix j: from the file, or from positions over its neighbors within the same run. It needs the
+  // next fix's distance and gap, so it is worked out one fix behind.
+  const speedAt = (j: number) => {
+    const f = speed[j];
+    if (speedFromFile && f - f === 0) kmh[j] = f * 3.6;
+    else {
+      const a = j > 0 && !gap[j] ? j - 1 : j;
+      const b = j < n - 1 && !gap[j + 1] ? j + 1 : j;
+      const dt = (t[b] - t[a]) / 1000;
+      kmh[j] = a === b || dt <= 0 ? NaN : ((dist[b] - dist[a]) / dt) * 3.6;
+    }
+    // A lone fix between gaps has no speed of its own: call it standing still.
+    let v = kmh[j];
+    if (!(v - v === 0)) kmh[j] = v = 0;
+    if (v > maxKmh) maxKmh = v;
+    if (v >= MOVING_KMH) moving[nm++] = v;
+  };
   for (let i = 0; i < n; i++) {
-    const f = c.speed[i];
-    kmh[i] = speedFromFile && Number.isFinite(f) ? f * 3.6 : fromPos[i];
+    if (i > 0) {
+      dist[i] = dist[i - 1] + haversine(lat[i - 1], lon[i - 1], lat[i], lon[i]);
+      const dt = (t[i] - t[i - 1]) / 1000;
+      if (seg[i] || dt > gapS) gap[i] = 1;
+      else {
+        const d = dist[i] - dist[i - 1];
+        distanceM += d;
+        if (dt > 0 && (d / dt) * 3.6 >= MOVING_KMH) movingS += dt;
+      }
+      speedAt(i - 1);
+    }
+    // Expected error against the log's usual one: HDOP over its middle value, else fewer satellites than usual;
+    // a corrected (differential) fix counts double, its error √½ as large.
+    let a = 1;
+    if (hasH) { const h = hdop[i]; if (h > 0 && h < Infinity) a = h / hdopBase; }
+    else if (hasS) { const sv = sats[i]; if (sv > 0 && sv < Infinity) a = satsBase / sv; }
+    if (fixq[i] === 2) a *= Math.SQRT1_2;
+    now[i] = a;
   }
-  // A lone fix between gaps has no speed of its own: call it standing still.
-  for (let i = 0; i < n; i++) if (!Number.isFinite(kmh[i])) kmh[i] = 0;
+  if (n) speedAt(n - 1);
+  // Without HDOP, satellites or corrected fixes it is 1 throughout: nothing to average.
+  const accuracy = hasH || hasS || corrected ? movingAverage(t, now, ACCURACY_SMOOTH_S) : now;
 
-  // Height doesn't reach across gaps, nor, in a combined track, across a change in the logs giving it.
+  // ---- Height: smoothed, never across a gap, nor (in a combined track) across a change in the logs giving it.
   let eleGap = gap;
   if (p.eleBreak) { eleGap = new Uint8Array(n); for (let i = 0; i < n; i++) eleGap[i] = gap[i] | p.eleBreak[i]; }
   const eleS = smoothEle(c, eleGap);
-  const grade = gradeOf(c, eleS, dist, eleGap);
-  const hdopRelative = hdopIsRelative(c.hdop, c.sats);
-  const [q1, q2, q3] = quantiles(c.hdop, [0.25, 0.5, 0.75]);
-  const hdopQ: [number, number, number] | null = Number.isFinite(q2) ? [q1, q2, q3] : null;
 
-  return { dist, kmh, speedFromFile, grade, gap, hdopRelative, hdopQ, stats: statsOf(c, eleS, dist, gap, kmh, intervalS, q2, p.eleBreak) };
+  // ---- Pass 3: grade over a 120 m window centered on each fix, and climb with hysteresis.
+  const grade = new Float32Array(n).fill(NaN);
+  const eleBreak = p.eleBreak;
+  let lo = 0, hi = 0, anyGrade = false, climb = 0, low = NaN, high = NaN;
+  for (let k = 0; k < n; k++) {
+    // The window: from the last fix at least GRADE_HALF_WINDOW behind (else the run's first) to the first at
+    // least that far ahead (else the run's last).
+    if (k === 0 || eleGap[k]) lo = hi = k;
+    while (lo < k && dist[k] - dist[lo + 1] >= GRADE_HALF_WINDOW) lo++;
+    if (hi < k) hi = k;
+    while (hi + 1 < n && !eleGap[hi + 1] && dist[hi] - dist[k] < GRADE_HALF_WINDOW) hi++;
+    const run = dist[hi] - dist[lo], ea = eleS[lo], eb = eleS[hi];
+    if (!(run < GRADE_HALF_WINDOW) && ea === ea && eb === eb) { grade[k] = ((eb - ea) / run) * 100; if (grade[k] === grade[k]) anyGrade = true; }
+    // Climb: a rise counts once the track has gone up at least CLIMB_HYSTERESIS from its low, so GPS noise doesn't add up.
+    if (ele[k] !== ele[k]) continue;
+    const v = eleS[k];
+    // Where a combined track's height changes source, close the climb so far and start afresh.
+    if (eleBreak && eleBreak[k]) {
+      if (high - low >= CLIMB_HYSTERESIS) climb += high - low;
+      low = high = NaN;
+    }
+    if (v !== v) continue;
+    if (low !== low) { low = high = v; continue; }
+    if (v > high) high = v;
+    if (v < low) { low = high = v; continue; }
+    if (high - v >= CLIMB_HYSTERESIS) {
+      if (high - low >= CLIMB_HYSTERESIS) climb += high - low;
+      low = high = v;
+    }
+  }
+  if (high - low >= CLIMB_HYSTERESIS) climb += high - low;
+
+  const start = n ? t[0] : 0;
+  const end = n ? t[n - 1] : 0;
+  const stats: TrackStats = {
+    distanceM, start, end, durationS: (end - start) / 1000, movingS,
+    avgKmh: movingS > 0 ? (distanceM / movingS) * 3.6 : 0, maxKmh,
+    climbM: anyEle ? climb : null, minEle: anyEle ? minEle : null, maxEle: anyEle ? maxEle : null,
+    intervalS, correctedShare: fixKnown ? corrected / fixKnown : null,
+    medianHdop: Number.isFinite(q2) ? q2 : null, medianSats: Number.isFinite(medSats) ? medSats : null,
+    maxAccel: Number.isFinite(maxAccel) ? maxAccel : null,
+    bbox: n ? [w, s, e, nn] : [0, 0, 0, 0],
+  };
+  const has: Record<MeasureKey, boolean> = {
+    speed: n > 1, ele: ne > 0, grade: anyGrade, hdop: nh > 0, sats: ns > 0, fix: fixKnown > 0, accel: Number.isFinite(maxAccel),
+  };
+  return {
+    dist, kmh, speedFromFile, grade, gap, hdopRelative, hdopQ, stats, has,
+    speedSpread: spread(moving, nm, SPREAD_SIZE), eleSpread: spread(eleV, ne, SPREAD_SIZE),
+    accuracy, hdopBase, runStart,
+  };
+}
+
+/** The middle of the positive finite values (the upper middle of an even count), or NaN. */
+function positiveMiddle(v: ArrayLike<number>): number {
+  const a = new Float64Array(v.length);
+  let m = 0;
+  for (let i = 0; i < v.length; i++) { const x = v[i]; if (x > 0 && x < Infinity) a[m++] = x; }
+  return nth(a, m, m >> 1);
+}
+
+/** A moving average over a window of seconds around each value, with two pointers. */
+export function movingAverage(t: Float64Array, v: Float64Array, windowS: number): Float64Array {
+  const n = v.length, out = new Float64Array(n), half = (windowS * 1000) / 2;
+  let a = 0, b = 0, sum = 0;
+  for (let i = 0; i < n; i++) {
+    const ti = t[i];
+    while (b < n && t[b] <= ti + half) sum += v[b++];
+    while (t[a] < ti - half) sum -= v[a++];
+    out[i] = sum / (b - a);
+  }
+  return out;
 }
 
 /**
@@ -89,90 +250,6 @@ export function smoothEle(c: Columns, gap: Uint8Array): Float32Array {
     runStart = i;
   }
   return out;
-}
-
-/** Grade in percent over a 120 m window centered on each fix, never across a gap. */
-function gradeOf(c: Columns, ele: Float32Array, dist: Float64Array, gap: Uint8Array): Float32Array {
-  const n = c.n;
-  const out = new Float32Array(n).fill(NaN);
-  let runStart = 0;
-  for (let i = 0; i <= n; i++) {
-    if (i < n && !(i > 0 && gap[i])) continue;
-    // run is [runStart, i)
-    const s = runStart, e = i - 1;
-    let lo = s, hi = s;
-    for (let k = s; k <= e; k++) {
-      while (lo < k && dist[k] - dist[lo + 1] >= GRADE_HALF_WINDOW) lo++;
-      if (hi < k) hi = k;
-      while (hi < e && dist[hi] - dist[k] < GRADE_HALF_WINDOW) hi++;
-      const a = dist[k] - dist[lo] >= GRADE_HALF_WINDOW ? lo : s;
-      const b = dist[hi] - dist[k] >= GRADE_HALF_WINDOW ? hi : e;
-      const run = dist[b] - dist[a];
-      if (run < GRADE_HALF_WINDOW || Number.isNaN(ele[a]) || Number.isNaN(ele[b])) continue;
-      out[k] = ((ele[b] - ele[a]) / run) * 100;
-    }
-    runStart = i;
-  }
-  return out;
-}
-
-function statsOf(c: Columns, eleS: Float32Array, dist: Float64Array, gap: Uint8Array, kmh: Float32Array, intervalS: number, mh: number, eleBreak?: Uint8Array): TrackStats {
-  const n = c.n;
-  let distanceM = 0, movingS = 0, maxKmh = 0;
-  let w = 180, s = 90, e = -180, nn = -90;
-  for (let i = 0; i < n; i++) {
-    if (c.lon[i] < w) w = c.lon[i];
-    if (c.lon[i] > e) e = c.lon[i];
-    if (c.lat[i] < s) s = c.lat[i];
-    if (c.lat[i] > nn) nn = c.lat[i];
-    if (kmh[i] > maxKmh) maxKmh = kmh[i];
-    if (i === 0 || gap[i]) continue;
-    const d = dist[i] - dist[i - 1];
-    const dt = (c.t[i] - c.t[i - 1]) / 1000;
-    distanceM += d;
-    if (dt > 0 && (d / dt) * 3.6 >= MOVING_KMH) movingS += dt;
-  }
-  // Climb with hysteresis: a rise counts once the track has gone up at least
-  // CLIMB_HYSTERESIS meters from its low, so GPS noise doesn't add up.
-  let climb = 0, low = NaN, high = NaN, anyEle = false, minEle = Infinity, maxEle = -Infinity;
-  for (let i = 0; i < n; i++) {
-    const raw = c.ele[i];
-    if (Number.isNaN(raw)) continue;
-    anyEle = true;
-    if (raw < minEle) minEle = raw;
-    if (raw > maxEle) maxEle = raw;
-    const v = eleS[i];
-    // Where a combined track's height changes source, close the climb so far and start afresh.
-    if (eleBreak && eleBreak[i]) {
-      if (high - low >= CLIMB_HYSTERESIS) climb += high - low;
-      low = high = NaN;
-    }
-    if (Number.isNaN(v)) continue;
-    if (Number.isNaN(low)) { low = high = v; continue; }
-    if (v > high) high = v;
-    if (v < low) { low = high = v; continue; }
-    if (high - v >= CLIMB_HYSTERESIS) {
-      if (high - low >= CLIMB_HYSTERESIS) climb += high - low;
-      low = high = v;
-    }
-  }
-  if (high - low >= CLIMB_HYSTERESIS) climb += high - low;
-  let fixKnown = 0, corrected = 0;
-  for (let i = 0; i < n; i++) { if (c.fixq[i] > 0) fixKnown++; if (c.fixq[i] === 2) corrected++; }
-  const start = n ? c.t[0] : 0;
-  const end = n ? c.t[n - 1] : 0;
-  const ms = median(c.sats);
-  let maxAccel = -Infinity;
-  for (let i = 0; i < n; i++) if (c.accel[i] > maxAccel) maxAccel = c.accel[i];
-  return {
-    distanceM, start, end, durationS: (end - start) / 1000, movingS,
-    avgKmh: movingS > 0 ? (distanceM / movingS) * 3.6 : 0, maxKmh,
-    climbM: anyEle ? climb : null, minEle: anyEle ? minEle : null, maxEle: anyEle ? maxEle : null,
-    intervalS, correctedShare: fixKnown ? corrected / fixKnown : null,
-    medianHdop: Number.isFinite(mh) ? mh : null, medianSats: Number.isFinite(ms) ? ms : null,
-    maxAccel: Number.isFinite(maxAccel) ? maxAccel : null,
-    bbox: n ? [w, s, e, nn] : [0, 0, 0, 0],
-  };
 }
 
 /** Number of gaps and the longest one in seconds. */

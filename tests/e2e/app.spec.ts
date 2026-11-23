@@ -4,7 +4,7 @@
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { writeFileSync } from 'node:fs';
-import { mapSettled, open, pillSides, stubNetwork, textLines } from './helpers';
+import { mapSettled, open, openAs, pillSides, stubNetwork, textLines, wideFont } from './helpers';
 import { bigFusionLog } from '../helpers/big-logs';
 
 test.beforeEach(async ({ page }) => {
@@ -155,6 +155,105 @@ test('keeps Properties and Remove? on one line while asking to remove', async ({
   const c = (await card.boundingBox())!;
   expect(Math.abs(p.y - a.y)).toBeLessThanOrEqual(1);
   expect(a.x + a.width).toBeLessThanOrEqual(c.x + c.width);
+});
+
+test('keeps Properties and Remove? on one line inside the card in a wide fallback font', async ({ page }) => {
+  // The CI runner's fallback font is wider than this one's: the label gives way, Remove? never leaves the card.
+  await wideFont(page);
+  await open(page, 'central-park-loop-motion.csv');
+  const card = page.locator('.track-row.is-selected');
+  const props = card.getByRole('button', { name: /^Properties/ });
+  await card.getByRole('button', { name: 'Remove this track' }).click();
+  const ask = card.getByRole('button', { name: 'Remove?' });
+  await expect(ask).toBeVisible();
+  expect(await textLines(props)).toBe(1);
+  expect(await textLines(ask)).toBe(1);
+  const p = (await props.boundingBox())!;
+  const a = (await ask.boundingBox())!;
+  const c = (await card.boundingBox())!;
+  expect(Math.abs(p.y - a.y)).toBeLessThanOrEqual(1);
+  expect(p.x + p.width).toBeLessThanOrEqual(a.x);
+  expect(a.x + a.width).toBeLessThanOrEqual(c.x + c.width);
+  // The whole label is still its name, and shows on hover once it's cut off.
+  await expect(props).toHaveAccessibleName('Properties & time zone');
+  await props.hover();
+  await expect(props).toHaveAttribute('title', 'Properties & time zone');
+});
+
+test('shows a track name cut off in the list in full on hover, and only then', async ({ page }) => {
+  const long = 'central-park-loop-with-a-very-long-file-name-from-the-logger-2026-10-17.gpx';
+  await openAs(page, 'central-park-loop-garmin.gpx', long);
+  await openAs(page, 'central-park-loop-vendor.gpx', 'short.gpx');
+  const longName = page.locator('.track-row .track-name', { hasText: long });
+  const shortName = page.locator('.track-row .track-name', { hasText: 'short.gpx' });
+  await longName.hover();
+  await expect(longName).toHaveAttribute('title', long);
+  await shortName.hover();
+  await expect(shortName).not.toHaveAttribute('title');
+});
+
+test('combines two logs from select mode: the new track, its logs on the map and the timeline, and its trust', async ({ page }) => {
+  await open(page, 'stanford-drive-car.nmea', 'stanford-drive-phone.gpx');
+  await mapSettled(page);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('checkbox', { name: /^Select track A:/ }).click();
+  await page.getByRole('checkbox', { name: /^Select track B:/ }).click();
+  const bar = page.getByRole('toolbar', { name: 'Act on the selected tracks' });
+  await expect(bar.getByText('2 selected')).toBeVisible();
+  // Combine and Remove sit at the bar's two ends.
+  const c = (await bar.getByRole('button', { name: 'Combine' }).boundingBox())!;
+  const r = (await bar.getByRole('button', { name: 'Remove' }).boundingBox())!;
+  const b = (await bar.boundingBox())!;
+  expect(c.x - b.x).toBeLessThan(12);
+  expect(b.x + b.width - (r.x + r.width)).toBeLessThan(12);
+  await bar.getByRole('button', { name: 'Combine' }).click();
+
+  const row = page.locator('.track-row[data-track="C"]');
+  await expect(row.locator('.track-name')).toHaveText('Combined track');
+  await expect(row).toHaveClass(/is-selected/);
+  await expect(row.getByRole('region', { name: 'Its logs' }).getByRole('listitem')).toHaveCount(2);
+  // On the map: the combined track, and its two logs as thin lines, the phone's jump in red.
+  const map = page.locator('.map');
+  await expect(map).toHaveAttribute('data-log-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  await expect(map).toHaveAttribute('data-log-out', /^[1-9]\d*$/);
+  // On the timeline: a thin lane for each log under the combined track's lane.
+  await expect(page.locator('.lane.log-lane')).toHaveCount(2);
+  await row.getByRole('button', { name: 'Hide log 2' }).click();
+  await expect(page.locator('.lane.log-lane')).toHaveCount(1);
+  await row.getByRole('button', { name: 'Show log 2' }).click();
+
+  // Trust: open the line and drag the handle most of the way to log 2.
+  await expect(row.locator('.trust-val')).toHaveText('equal');
+  await row.getByRole('button', { name: 'Adjust' }).click();
+  const shape = row.locator('.trust-shape');
+  const box = (await shape.boundingBox())!;
+  const handle = (await row.getByRole('slider', { name: 'Trust in each log' }).boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.8, box.y + box.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await expect(row.locator('.trust-val')).toHaveText(/^1 at \d+%, 2 at \d+%$/);
+  const [, one, , two] = (await row.locator('.trust-val').textContent())!.match(/\d+/g)!.map(Number);
+  expect(two).toBeGreaterThan(one);
+  // Clicking the center mark makes them equal again.
+  await row.getByRole('button', { name: 'Make them equal' }).click();
+  await expect(row.locator('.trust-val')).toHaveText('equal');
+});
+
+test('leaves select mode on Escape, and refuses to combine a combined track again', async ({ page }) => {
+  await open(page, 'stanford-drive-car.nmea', 'stanford-drive-phone.gpx');
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('toolbar', { name: 'Act on the selected tracks' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('checkbox', { name: /^Select track A:/ }).click();
+  await page.getByRole('checkbox', { name: /^Select track B:/ }).click();
+  await page.getByRole('button', { name: 'Combine' }).click();
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('checkbox', { name: /^Select track A:/ }).click();
+  await page.getByRole('checkbox', { name: /^Select track C:/ }).click();
+  await expect(page.getByText("A combined track can't be combined again.")).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Combine' })).toHaveAttribute('aria-disabled', 'true');
 });
 
 test('closes the Options menu and the color pane on a second press', async ({ page }) => {
@@ -426,4 +525,19 @@ test('has no serious accessibility problems', async ({ page }) => {
   const results = await new AxeBuilder({ page }).exclude('.map').analyze();
   const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   expect(serious.map((v) => `${v.id}: ${v.help}`)).toEqual([]);
+});
+
+test('has no serious accessibility problems in select mode, or on a combined track with its trust shape open', async ({ page }) => {
+  await open(page, 'stanford-drive-car.nmea', 'stanford-drive-phone.gpx', 'stanford-drive-logger.gpx');
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('checkbox', { name: /^Select track A:/ }).click();
+  const serious = async () => (await new AxeBuilder({ page }).exclude('.map').analyze()).violations
+    .filter((v) => v.impact === 'serious' || v.impact === 'critical').map((v) => `${v.id}: ${v.help}`);
+  expect(await serious()).toEqual([]);
+  await page.getByRole('checkbox', { name: /^Select track B:/ }).click();
+  await page.getByRole('checkbox', { name: /^Select track C:/ }).click();
+  await page.getByRole('button', { name: 'Combine' }).click();
+  await page.locator('.track-row[data-track="D"]').getByRole('button', { name: 'Adjust' }).click();
+  await expect(page.getByRole('slider', { name: 'Trust in each log' })).toBeVisible();
+  expect(await serious()).toEqual([]);
 });

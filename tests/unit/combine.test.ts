@@ -3,7 +3,7 @@
 // the elevation offset. The Stanford drive brings three real-looking loggers;
 // small synthetic walks in Central Park cover the rest.
 import { describe, expect, it } from 'vitest';
-import { checkCombine, combineTracks, isCombined, recombine, smooth, Use, type ComboTrack } from '../../src/combine/combine';
+import { checkCombine, combineTracks, isCombined, recombine, Use, type ComboTrack } from '../../src/combine/combine';
 import { parseText } from '../../src/parse/index';
 import type { LoadedTrack } from '../../src/model/types';
 import { load } from '../helpers/fixtures';
@@ -159,9 +159,13 @@ describe('combining logs: the Stanford drive', () => {
   it('breaks grade and climb where the logs giving the height change, so the 32 m between car and phone never shows as a slope', () => {
     const breaks = three.eleBreak!;
     expect(breaks.reduce((a, b) => a + b, 0)).toBeGreaterThan(3); // the phone's gaps and jump
-    // No grade steeper than the car's own, and no more climb than the car's, give or take.
-    const steep = (t: LoadedTrack) => { const g = Array.from(t.derived.grade).filter(Number.isFinite).map(Math.abs).sort((a, b) => a - b); return g[Math.floor(g.length * 0.99)]; };
-    expect(steep(three)).toBeLessThan(steep(car) + 3);
+    // Where the car counts, no grade steeper than the car's own, and no more climb than the car's, give or take.
+    // (Before the car's log starts, the phone stands alone at the station: its own heights are all there is.)
+    const steep = (t: LoadedTrack, keep: (i: number) => boolean = () => true) => {
+      const g = Array.from(t.derived.grade, (v, i) => (keep(i) ? Math.abs(v) : NaN)).filter(Number.isFinite).sort((a, b) => a - b);
+      return g[Math.floor(g.length * 0.99)];
+    };
+    expect(steep(three, (i) => three.combo.use[0][i] === Use.Used)).toBeLessThan(steep(car) + 3);
     expect(three.derived.stats.climbM!).toBeLessThan(car.derived.stats.climbM! + 15);
   });
 
@@ -247,11 +251,13 @@ describe('combining logs: corner cases', () => {
     expect(near.ok && near.apart).toBe(false);
   });
 
-  it('keeps each log counted by its HDOP averaged over 10 s, so the weights don\'t flip from fix to fix', () => {
-    const t = Float64Array.from({ length: 60 }, (_, i) => i * 1000);
-    const jitter = Float64Array.from({ length: 60 }, (_, i) => (i % 2 ? 1.5 : 0.5));
-    const s = smooth(t, jitter, 10);
-    for (let i = 10; i < 50; i++) expect(Math.abs(s[i] - 1)).toBeLessThan(0.1);
+  it('keeps each log counted by its HDOP averaged over 10 s, worked out when it loads, so the weights don\'t flip from fix to fix', () => {
+    // HDOP jumping between 0.5 and 1.5 at every fix: three times worse, then three times better.
+    const w = walk({ seed: 11, hdop: (i) => (i % 2 ? 1.5 : 0.5) });
+    const a = Array.from(w.derived.accuracy.subarray(10, w.cols.n - 10));
+    expect(w.derived.hdopBase).toBe(1.5);
+    expect(Math.max(...a) - Math.min(...a)).toBeLessThan(0.1);
+    expect(Math.abs(a[0] - 2 / 3)).toBeLessThan(0.05);
   });
 
   it('corrects a clock a fraction of a second off, in tenths', () => {

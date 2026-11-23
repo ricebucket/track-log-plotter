@@ -7,8 +7,8 @@ import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import * as S from '../state/store';
 import { trackUid, type TrackItem } from '../state/logic';
 import { BASEMAPS, TEXT_FONT, ZH_LABEL } from './basemaps';
-import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildMarks, buildPaths, buildRuns } from './geojson';
-import { CASING, GAP } from '../color/palettes';
+import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildLogCursors, buildLogLines, buildMarks, buildPaths, buildRuns } from './geojson';
+import { CASING, GAP, LEFT_OUT } from '../color/palettes';
 import { traceShape, type BadgeShape } from '../color/shapes';
 import { haversine } from '../derive/geo';
 import { mapApi, mapFailed, tipXY } from './bridge';
@@ -22,7 +22,7 @@ function plus(base: number, add: number | unknown[]) {
   return typeof add === 'number' ? base + add : ['+', base, add];
 }
 
-const SOURCES = ['tlp-runs', 'tlp-paths', 'tlp-gaps', 'tlp-fixes', 'tlp-flags', 'tlp-marks', 'tlp-cursors'] as const;
+const SOURCES = ['tlp-runs', 'tlp-paths', 'tlp-gaps', 'tlp-logs', 'tlp-fixes', 'tlp-flags', 'tlp-marks', 'tlp-cursors', 'tlp-log-cursors'] as const;
 const EMPTY = { type: 'FeatureCollection', features: [] } as const;
 /** Fix glyphs draw from zoom 17; their data is sent a little before that. */
 const FIX_GLYPH_ZOOM = 17;
@@ -83,6 +83,13 @@ function addOwnLayers(map: MlMap) {
   map.addLayer({ id: 'tlp-line', type: 'line', source: 'tlp-runs', layout: round, paint: line as never });
   map.addLayer({ id: 'tlp-casing-sel', type: 'line', source: 'tlp-paths', filter: SELECTED as never, layout: round, paint: casing as never });
   map.addLayer({ id: 'tlp-line-sel', type: 'line', source: 'tlp-runs', filter: SELECTED as never, layout: round, paint: line as never });
+  // A combined track's logs: thin, solid and fainter than tracks, drawn over the combined line so they show
+  // where they stray from it; red where a log was left out.
+  const out = ['==', ['get', 'out'], 1];
+  map.addLayer({
+    id: 'tlp-log-line', type: 'line', source: 'tlp-logs', layout: round,
+    paint: { 'line-color': ['case', out, LEFT_OUT, ['get', 'c']] as never, 'line-opacity': ['case', out, 0.95, 0.55] as never, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.1, 14, 1.6, 17, 2.4, 20, 3.2] },
+  });
   map.addLayer({
     id: 'tlp-arrows', type: 'symbol', source: 'tlp-paths', minzoom: 14,
     layout: { 'symbol-placement': 'line', 'symbol-spacing': 90, 'icon-image': 'tlp-arrow', 'icon-size': ['interpolate', ['linear'], ['zoom'], 14, 0.85, 18, 1.2], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': false, 'icon-padding': 1, visibility: S.showArrows.value ? 'visible' : 'none' },
@@ -96,6 +103,11 @@ function addOwnLayers(map: MlMap) {
   map.addLayer({ id: 'tlp-mark-text', type: 'symbol', source: 'tlp-marks', layout: { 'text-field': ['get', 'id'], 'text-font': TEXT_FONT, 'text-size': 12, 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#ffffff' } });
   map.addLayer({ id: 'tlp-cursor-ring', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 10, 'circle-color': '#ffffff' } });
   map.addLayer({ id: 'tlp-cursor', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 7, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#101820', 'circle-stroke-width': 3 } });
+  // The logs' dots at the cursor: hollow with a red ring where a log was left out.
+  map.addLayer({
+    id: 'tlp-log-cursor', type: 'circle', source: 'tlp-log-cursors',
+    paint: { 'circle-radius': 4.6, 'circle-color': ['get', 'c'], 'circle-opacity': ['case', out, 0, 1] as never, 'circle-stroke-color': ['case', out, LEFT_OUT, '#ffffff'] as never, 'circle-stroke-width': ['case', out, 2.6, 1.6] as never },
+  });
 }
 
 /** Vector basemaps label places in Chinese when the app is in Chinese. */
@@ -236,6 +248,9 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     try {
       container.dataset.lines = String(map.queryRenderedFeatures({ layers: ['tlp-line'] }).length);
       container.dataset.selLines = String(map.queryRenderedFeatures({ layers: ['tlp-line-sel'] }).length);
+      const logLines = map.queryRenderedFeatures({ layers: ['tlp-log-line'] });
+      container.dataset.logLines = String(logLines.length);
+      container.dataset.logOut = String(logLines.filter((f) => f.properties?.out === 1).length);
       const marks = map.queryRenderedFeatures({ layers: ['tlp-mark'] });
       container.dataset.marks = String(marks.length);
       const at = marks[0] ? map.project((marks[0].geometry as unknown as { coordinates: [number, number] }).coordinates) : null;
@@ -370,6 +385,11 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   }));
   disposers.push(effect(() => {
     if (!ready.value) return;
+    const vis = S.visible.value;
+    send('tlp-logs', `${visKey(vis)}#${vis.map((x) => x.logs?.map(Number).join('') ?? '').join('|')}`, () => buildLogLines(vis));
+  }));
+  disposers.push(effect(() => {
+    if (!ready.value) return;
     // Up to 100,000s of points: only send them when zoomed in enough to draw them.
     const vis = S.visible.value, on = S.showFixes.value && zoomedIn.value;
     send('tlp-fixes', on ? visKey(vis) : 'off', () => (on ? buildFixPoints(vis, { dark: false, single: false, selectedId: null, scaleFor: S.scaleFor }) : EMPTY));
@@ -387,6 +407,7 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     if (!ready.value) return;
     const ctx = { dark: S.dark.value, single: S.single.value, selectedId: S.selected.value?.id ?? null, scaleFor: S.scaleFor };
     setData(map, 'tlp-cursors', buildCursors(S.visible.value, S.offsets.value, S.cursorT.value, ctx));
+    setData(map, 'tlp-log-cursors', buildLogCursors(S.visible.value, S.offsets.value, S.cursorT.value));
     placeTip();
   }));
   disposers.push(effect(() => {

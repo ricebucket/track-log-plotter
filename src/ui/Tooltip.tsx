@@ -7,7 +7,10 @@ import { tipXY } from '../map/bridge';
 import { fixAt } from '../state/inspect';
 import { differentDays, fmtClock, fmtDateClock } from '../time/zones';
 import { fmtNum } from '../format';
-import { measureTitle, valueText, unitOf } from './labels';
+import { measureTitle, metresText, valueText, unitOf } from './labels';
+import { isCombined, Use, type ComboTrack } from '../combine/combine';
+import { haversine } from '../derive/geo';
+import { LogNumber } from './Combined';
 import { Badge } from './Badge';
 import { IconClose, IconFlag } from './icons';
 import { Computed, hintHandlers, useHintId } from './Computed';
@@ -53,7 +56,7 @@ export function Tooltip() {
   const loc = S.locale.value;
   // Each row: label, value, how the app worked it out (null when it's read
   // from the file), and the measure it shows, if the map can draw it.
-  const rows: Row[] = [{ label: t('measure.speed'), value: valueText('speed', f.kmh), hint: sel.track.derived.speedFromFile ? null : explain.speedDerived(), measure: 'speed' }];
+  const rows: Row[] = [{ label: t('measure.speed'), value: valueText('speed', f.kmh), hint: isCombined(sel.track) ? t('computed.combinedSpeed') : sel.track.derived.speedFromFile ? null : explain.speedDerived(), measure: 'speed' }];
   if (Number.isFinite(f.ele)) rows.push({ label: t('measure.ele'), value: valueText('ele', f.ele), hint: null, measure: 'ele' });
   if (Number.isFinite(f.ellipsoid)) rows.push({ label: t('inspect.ellipsoid'), value: `${fmtNum(f.ellipsoid * (S.units.value === 'imperial' ? 3.28084 : 1), loc, 0, 0)} ${unitOf('ele')}`, hint: explain.ellipsoid() });
   if (Number.isFinite(f.grade)) rows.push({ label: t('measure.grade'), value: valueText('grade', f.grade), hint: explain.grade(), measure: 'grade' });
@@ -138,13 +141,41 @@ export function Tooltip() {
         {/* Decimal degrees: 5 places is about a meter, and pastes into map search boxes. */}
         <div class="tip-coords"><dt>{t('inspect.position')}</dt><dd class="mono coords">{f.lat.toFixed(5)}, {f.lon.toFixed(5)}</dd></div>
       </dl>
+      {isCombined(sel.track) && Number.isFinite(f.ele) && sel.track.combo.eleOffset && <div class="tip-amber">{eleOffsetText(sel.track.combo.eleOffset)}</div>}
+      {isCombined(sel.track) && <LogRows track={sel.track} i={f.i} />}
       {others.length > 0 && (
         <div class="tip-others">
           {others.map((o) => <div key={o.id}><Badge item={o.item} size="tiny" /><span class="mono small">{o.text}</span></div>)}
         </div>
       )}
       {f.flag !== null && <div class="tip-flag"><IconFlag />{t('inspect.flag', { n: f.flag })}</div>}
-      <div class="tip-source muted small">{source}</div>
+      {/* A combined track has no file to point into. */}
+      {!isCombined(sel.track) && <div class="tip-source muted small">{source}</div>}
     </div>
+  );
+}
+
+/** A steady height difference between two logs, worked out but not applied: "log 2 reads 32 m lower than log 1 throughout". */
+export function eleOffsetText(o: { from: number; to: number; m: number }): string {
+  const p = { a: o.from + 1, b: o.to + 1, m: metresText(Math.abs(o.m)) };
+  return o.m < 0 ? t('combine.eleLower', p) : t('combine.eleHigher', p);
+}
+
+/** Where each of a combined track's logs is at this point: how far away, or why it doesn't count. */
+function LogRows({ track, i }: { track: ComboTrack; i: number }) {
+  const { combo, cols } = track;
+  return (
+    <ul class="tip-logs">
+      {combo.sources.map((_, k) => {
+        const la = combo.srcLat[k][i], lo = combo.srcLon[k][i], u = combo.use[k][i];
+        const d = la === la ? metresText(haversine(cols.lat[i], cols.lon[i], la, lo)) : '';
+        const text = u === Use.LeftOut ? t('inspect.logOut', { d })
+          : u === Use.Held ? t('inspect.logHeld')
+          : u === Use.Idle ? t('inspect.logIdle')
+          : la !== la ? t('inspect.logNone')
+          : t('inspect.logAway', { d });
+        return <li key={k} class={u === Use.LeftOut ? 'is-out' : undefined} data-log={k + 1}><LogNumber k={k} /><span><span class="sr-only">{t('combine.logLabel', { k: k + 1 })}: </span>{text}</span></li>;
+      })}
+    </ul>
   );
 }

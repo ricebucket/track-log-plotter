@@ -96,3 +96,10 @@ export function noteText(n: Note): string {
     default: return t(`note.${n.kind}`);
   }
 }
+
+/** A short distance: metres (feet in imperial units), with a decimal below 10. */
+export function metresText(m: number): string {
+  const v = m * (units.value === 'imperial' ? 3.28084 : 1);
+  const d = v < 10 ? 1 : 0;
+  return `${fmtNum(v, locale.value, d, d)} ${unitOf('ele')}`;
+}

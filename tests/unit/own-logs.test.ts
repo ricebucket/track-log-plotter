@@ -62,12 +62,15 @@ describe('your own logs', () => {
       expect(outOfOrder, 'fixes out of time order').toBe(0);
       for (const f of tr.flags) expect(Math.abs(f.lat) <= 90 && Math.abs(f.lon) <= 180, `button press ${f.n} on the Earth`).toBe(true);
 
-      // Derived values: same length as the fixes, never infinite.
+      // Derived values: one per fix (the spreads: 512 values, or none, in sorted order), never infinite.
       const d = tr.derived as unknown as Record<string, unknown>;
       for (const [k, v] of Object.entries(d)) {
         if (!ArrayBuffer.isView(v)) continue;
         const a = v as unknown as ArrayLike<number>;
-        expect(a.length, `${k} length`).toBe(c.n);
+        const spread = k.endsWith('Spread');
+        const lengthOk = spread ? a.length === 0 || a.length === 512 : a.length === c.n;
+        expect(lengthOk, `${k} length ${a.length}`).toBe(true);
+        expect(!spread || Array.from(a).every((x, i) => i === 0 || x >= a[i - 1]), `${k} in order`).toBe(true);
         expect(infinite(a), `infinite ${k} values`).toBe(0);
       }
       const st = tr.derived.stats;

@@ -12,7 +12,9 @@ import * as S from '../state/store';
 import { t } from '../state/store';
 import { axisRange } from '../state/logic';
 import { fixAt } from '../state/inspect';
-import { palette, UNKNOWN } from '../color/palettes';
+import { LEFT_OUT, LOG_COLORS, palette, UNKNOWN } from '../color/palettes';
+import { isCombined, Use } from '../combine/combine';
+import { LogNumber } from './Combined';
 import { differentDays, fmtClock, fmtDateClock, fmtShortDate, isMidnight, offsetLabel, offsetMinutes, zoneCity } from '../time/zones';
 import { columns, graphRange, MIN_ZOOM_MS, panView, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from './timelineMath';
 import { measureName, valueText } from './labels';
@@ -145,6 +147,69 @@ function Lane({ item, t0, t1, tall, fromStart, narrow, labelW, cursor, halo = fa
           {!narrow && shifted && !halo && <span class="lane-note">{t('timeline.fromStart', { date: fmtShortDate(item.track.derived.stats.start, S.zone.value, S.locale.value) })}</span>}
           {!narrow && (tall || halo) && logY && <span class="lane-note">{t('timeline.logScale')}</span>}
         </span>
+      </div>
+      <canvas ref={canvas} class="lane-canvas" style={{ height: `${h}px` }} aria-hidden="true" />
+    </div>
+  );
+}
+
+/**
+ * A thin lane for one log of a combined track, under the track's own lane: a
+ * strip in the log's color where it has a fix, and a thin red line through
+ * the middle where it was left out for a large error.
+ */
+function LogLane({ item, k, t0, t1, narrow, labelW }: { item: TrackItem; k: number; t0: number; t1: number; narrow: boolean; labelW: number }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    const el = canvas.current;
+    if (!el) return;
+    setW(el.clientWidth);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const h = narrow ? 9 : 12;
+  const offset = S.offsets.value[item.id] ?? 0;
+  const tr = item.track;
+  useEffect(() => {
+    const el = canvas.current;
+    const g = el?.getContext?.('2d');
+    if (!el || !g || w === 0 || !isCombined(tr)) return;
+    const dpr = window.devicePixelRatio || 1;
+    el.width = Math.round(w * dpr);
+    el.height = Math.round(h * dpr);
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    // One pass through the combined points: which pixel columns have the log, and which have it left out.
+    const W = Math.max(1, Math.round(w)), has = new Uint8Array(W), out = new Uint8Array(W);
+    const times = tr.cols.t, la = tr.combo.srcLat[k], use = tr.combo.use[k], gap = tr.derived.gap;
+    const span = Math.max(1, t1 - t0);
+    const colOf = (v: number) => Math.floor(((v + offset - t0) / span) * W);
+    let prev = -1;
+    for (let i = 0; i < tr.cols.n; i++) {
+      if (la[i] !== la[i]) { prev = -1; continue; }
+      const x = colOf(times[i]);
+      // Fill across to the previous fix of this log (fixes a second apart may be pixels apart when zoomed in).
+      const from = prev >= 0 && !gap[i] ? Math.max(0, prev + 1) : x;
+      for (let c = Math.max(0, from); c <= Math.min(W - 1, x); c++) { has[c] = 1; if (use[i] === Use.LeftOut) out[c] = 1; }
+      prev = x;
+    }
+    g.fillStyle = LOG_COLORS[k];
+    g.globalAlpha = 0.55;
+    const sh = Math.max(3, h - 6);
+    for (let x = 0; x < W; x++) if (has[x]) g.fillRect(x, (h - sh) / 2, 1.2, sh);
+    g.globalAlpha = 1;
+    g.fillStyle = LEFT_OUT;
+    for (let x = 0; x < W; x++) if (out[x]) g.fillRect(x, h / 2 - 0.9, 1.2, 1.8);
+  }, [w, h, tr, k, t0, t1, offset]);
+  return (
+    <div class="lane log-lane" data-track={item.id} data-log={k + 1} style={{ height: `${h}px` }}>
+      <div class="lane-label" style={{ width: `${labelW - 10}px` }}>
+        <span class="badge-space" aria-hidden="true" />
+        <LogNumber k={k} />
+        {!narrow && <span class="lane-note">{t('timeline.logLane', { k: k + 1 })}</span>}
       </div>
       <canvas ref={canvas} class="lane-canvas" style={{ height: `${h}px` }} aria-hidden="true" />
     </div>
@@ -423,6 +488,8 @@ export function Timeline() {
               {tall && S.showHaloGraph.value && it.halo !== 'off' && (
                 <Lane cursor={cursor} item={it} t0={t0} t1={t1} tall={false} narrow={narrow} labelW={LW} fromStart={fromStart} halo />
               )}
+              {/* The selected combined track's logs, each with its eye on: a thin lane apiece. */}
+              {tall && it.logs?.map((on, k) => on && <LogLane key={`log-${k}`} item={it} k={k} t0={t0} t1={t1} narrow={narrow} labelW={LW} />)}
             </Fragment>
           );
         })}
