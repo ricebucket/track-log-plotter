@@ -120,7 +120,7 @@ export const basemapOpen = signal(false);
 export const zoneOpen = signal(false);
 /** The part of the timeline shown when zoomed in, or null for all of it. */
 export const timelineView = signal<[number, number] | null>(null);
-/** The track whose file time zone is being picked (details page), or null. */
+/** The track whose file time zone is being picked (properties page), or null. */
 export const clockPicker = signal<string | null>(null);
 export const limitNotice = signal<string | null>(null);
 

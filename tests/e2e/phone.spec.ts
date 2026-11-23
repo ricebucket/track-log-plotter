@@ -56,9 +56,9 @@ test('opens the color pane and the time zone list as bottom sheets', async ({ pa
   expect(Math.round(zones.y + zones.height)).toBe(vp.height);
 });
 
-test('opens the details page at the top', async ({ page }) => {
+test('opens the properties page at the top', async ({ page }) => {
   await open(page, 'central-park-loop-truncated.nmea');
-  await page.locator('.track-row[data-track="A"]').getByRole('button', { name: /^Details/ }).click();
+  await page.locator('.track-row[data-track="A"]').getByRole('button', { name: /^Properties/ }).click();
   await expect(page.getByRole('button', { name: 'Back' })).toBeInViewport();
   await expect(page.getByText('Last line cut off')).toBeVisible();
 });

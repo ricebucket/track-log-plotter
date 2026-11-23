@@ -84,7 +84,7 @@ export type Note =
   | { kind: 'route' }
   | { kind: 'motion'; rate: number };
 
-/** Fields a file can contain, for the details page. */
+/** Fields a file can contain, for the properties page. */
 export type FieldKey =
   | 'time' | 'position' | 'ele' | 'speed' | 'course' | 'hdop' | 'vdop' | 'pdop'
   | 'sats' | 'fix' | 'geoid' | 'accel' | 'flags';
@@ -104,7 +104,7 @@ export interface ParsedTrack {
   lines: number;
   /**
    * For files whose times have no time zone: the zone they're read in
-   * ('local', 'utc' or an IANA id). The user can change it on the details page.
+   * ('local', 'utc' or an IANA id). The user can change it on the properties page.
    */
   clock?: string;
 }

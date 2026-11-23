@@ -24,7 +24,7 @@
   "track.show": "Show track {id}",
   "track.problems": { "one": "1 problem", "other": "{n} problems" },
   "track.limit": "Three tracks are showing. Hide one to show this one.",
-  "track.details": "Details",
+  "track.details": "Properties",
 
   "stat.distance": "Distance",
   "stat.moving": "Moving time",
@@ -213,7 +213,7 @@
 
   "toast.noMap": "This browser can't draw the map (WebGL is off). Tracks still load, and the panel and timeline work.",
   "toast.problems": { "one": "{file} loaded with 1 problem. Everything readable loaded.", "other": "{file} loaded with {n} problems. Everything readable loaded." },
-  "toast.showDetails": "Show details",
+  "toast.showDetails": "Show properties",
   "toast.skipped": { "one": "Ten tracks are loaded, the most the app holds. 1 file wasn't opened.", "other": "Ten tracks are loaded, the most the app holds. {n} files weren't opened." },
   "toast.error.unknownFormat": "{file} isn't a GPX, NMEA or Columbus Fusion track log.",
   "toast.error.empty": "{file} has no fixes.",
@@ -272,7 +272,7 @@
   "unit.g": "g",
   "field.accel": "Motion sensor (acceleration)",
   "note.motion": "The logger's motion sensor recorded {n} readings a second. Pick Acceleration under Color or Halo to see them.",
-  "note.route": "The file stores the track as a route with a time at every point, so the route is read as the track.",
+  "note.route": "This file saves the recording as a GPX route, the form meant for planned paths, but every point has a time, so the app shows it as a track.",
   "computed.accel": "Worked out from the logger's motion sensor: the average reading over {s} seconds is gravity and is taken out, and each fix shows the strongest push left in its second, in g.",
   "stat.maxAccel": "Peak acceleration",
   "timeline.logScale": "log scale",

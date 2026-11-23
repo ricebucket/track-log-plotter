@@ -123,7 +123,7 @@ describe('tracks panel', () => {
     expect(screen.getByText(/^Jul 11 – Jul 12 · [\d.]+ km · GPX$/)).toBeTruthy();
     expect(document.querySelector('.tl-time')!.textContent!.replace(/\s/g, ' ')).toBe('Jul 11, 7:30:00 PM');
     expect([...document.querySelectorAll('.tl-ticks .tick-date')].map((e) => e.textContent)).toEqual(['Jul 12']);
-    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Properties' }));
     expect(screen.getByText('Sat, Jul 11, 2026 – Sun, Jul 12, 2026')).toBeTruthy();
     expect(screen.getByText(/^Jul 11, 7:30:00\sPM – Jul 12, 8:\d{2}:\d{2}\sAM/)).toBeTruthy();
   });
@@ -187,10 +187,10 @@ describe('tracks panel', () => {
     expect(document.querySelector('.tooltip')).toBeNull();
   });
 
-  it('opens the details page with the problem explained', () => {
+  it('opens the properties page with the problem explained', () => {
     loadFixtures('central-park-loop-truncated.nmea');
     render(<App Map={NoMap} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show properties' }));
     expect(screen.getByText('Last line cut off')).toBeTruthy();
     expect(screen.getByText(/stops after 28 characters/)).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Fields in this file' })).toBeTruthy();
@@ -268,11 +268,11 @@ describe('tracks panel', () => {
     expect(within(screen.getByRole('dialog', { name: 'Color track B by' })).queryByText('Acceleration')).toBeNull();
   });
 
-  it('lets the time zone of a Columbus Fusion log be changed on its details page', () => {
+  it('lets the time zone of a Columbus Fusion log be changed on its properties page', () => {
     loadFixtures('roosevelt-island-run.csv');
     const before = S.items.value[0].track.cols.t[0];
     render(<App Map={NoMap} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Properties' }));
     expect(screen.getByRole('heading', { name: 'Time zone of the file' })).toBeTruthy();
     const clock = document.querySelector('[data-clock-trigger]') as HTMLElement;
     expect(clock.textContent).toBe('UTC');

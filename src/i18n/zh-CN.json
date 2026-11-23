@@ -24,7 +24,7 @@
   "track.show": "显示轨迹 {id}",
   "track.problems": { "other": "{n} 个问题" },
   "track.limit": "已经显示了 3 条轨迹。请先隐藏一条，再显示这一条。",
-  "track.details": "详情",
+  "track.details": "属性",
 
   "stat.distance": "距离",
   "stat.moving": "移动时间",
@@ -213,7 +213,7 @@
 
   "toast.noMap": "此浏览器无法绘制地图（WebGL 已关闭）。轨迹仍可载入，面板和时间轴可以正常使用。",
   "toast.problems": { "other": "{file} 已载入，有 {n} 个问题。所有可读取的内容都已载入。" },
-  "toast.showDetails": "查看详情",
+  "toast.showDetails": "查看属性",
   "toast.skipped": { "other": "已载入 10 条轨迹，这是上限。有 {n} 个文件未打开。" },
   "toast.error.unknownFormat": "{file} 不是 GPX、NMEA 或 Columbus Fusion 轨迹记录。",
   "toast.error.empty": "{file} 中没有定位点。",
@@ -272,7 +272,7 @@
   "unit.g": "g",
   "field.accel": "运动传感器（加速度）",
   "note.motion": "记录器的运动传感器每秒记录 {n} 次读数。在“颜色”或“光晕”中选择“加速度”即可查看。",
-  "note.route": "文件把轨迹存成了每个点都带时间的路线，因此按轨迹读取该路线。",
+  "note.route": "此文件把记录存成了 GPX 路线（这种形式通常用于规划的路径），但每个点都带有时间，因此按轨迹显示。",
   "computed.accel": "根据记录器的运动传感器计算：把 {s} 秒内读数的平均值当作重力去除，每个定位点显示该秒内剩余的最强加速度，单位 g。",
   "stat.maxAccel": "最大加速度",
   "timeline.logScale": "对数刻度",

@@ -48,10 +48,10 @@ describe('computed values', () => {
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
-  it('marks every computed row on the details page, and only those', () => {
+  it('marks every computed row on the properties page, and only those', () => {
     S.addLoaded([load('central-park-loop.nmea')]);
     render(<App Map={NoMap} />);
-    fireEvent.click(screen.getByRole('button', { name: /^Details/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Properties/ }));
     const kv = document.querySelector('.kv') as HTMLElement;
     const labels = [...kv.querySelectorAll('dt')].map((dt) => ({ name: dt.firstChild?.textContent, computed: !!dt.querySelector('.computed-btn') }));
     expect(labels.find((l) => l.name === 'Date')!.computed).toBe(false);

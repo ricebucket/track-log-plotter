@@ -10,7 +10,7 @@
 //   ,,162604,40.7712400,-73.9712300,16.9,0.0,0.0,-0.03,0.06,1.05
 //
 // - date is YYMMDD and time HHMMSS, on the logger's own clock with no time
-//   zone. They're read as UTC; the details page can set another zone. A row
+//   zone. They're read as UTC; the properties page can set another zone. A row
 //   may leave the date (and the tag) empty: the last date carries on.
 // - lat and lon are decimal degrees. The older Columbus CSV layout writes a
 //   positive number with N/S/E/W after it, pads its fields with NUL bytes and

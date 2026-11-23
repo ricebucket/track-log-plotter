@@ -55,7 +55,7 @@ describe('store', () => {
     expect(S.trackTime('C', S.cursorT.value!)).toBe(c.derived.stats.start);
   });
 
-  it('opens the details page and remembers preferences', () => {
+  it('opens the properties page and remembers preferences', () => {
     S.addLoaded([load('central-park-loop.nmea')]);
     S.openDetails('A');
     expect(S.page.value).toEqual({ kind: 'details', id: 'A' });

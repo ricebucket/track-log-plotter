@@ -16,7 +16,7 @@ test('opens files and flags the damaged one', async ({ page }) => {
   await expect(page.getByText('central-park-loop-truncated.nmea', { exact: true })).toBeVisible();
   await expect(page.getByText('2 of 3 shown · 2 loaded')).toBeVisible();
   await expect(page.getByText('1 problem', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Show details' }).click();
+  await page.getByRole('button', { name: 'Show properties' }).click();
   await expect(page.getByText('Last line cut off')).toBeVisible();
 });
 

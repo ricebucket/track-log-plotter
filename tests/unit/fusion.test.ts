@@ -22,7 +22,7 @@ describe('Columbus Fusion logs', () => {
     expect(tr.problems).toEqual([]);
     expect(tr.cols.n).toBeGreaterThan(500);
     // Written as 07:40:00 on June 21 (the logger's New York clock), read as UTC
-    // until the details page sets the zone.
+    // until the properties page sets the zone.
     expect(tr.cols.t[0]).toBe(Date.UTC(2026, 5, 21, 7, 40, 0));
     expect(tr.clock).toBe('utc');
     expect(tr.notes).toEqual(expect.arrayContaining([{ kind: 'noZone' }, { kind: 'speedUnit', unit: 'kmh', inferred: false }]));

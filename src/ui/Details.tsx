@@ -40,7 +40,7 @@ function ClockZone({ item }: { item: TrackItem }) {
 
 const FIELDS: FieldKey[] = ['time', 'position', 'ele', 'speed', 'course', 'hdop', 'vdop', 'pdop', 'sats', 'fix', 'geoid', 'accel', 'flags'];
 
-/** The track's details page, inside the side panel. */
+/** The track's properties page, inside the side panel. */
 export function Details({ id }: { id: string }) {
   const item = S.items.value.find((x) => x.id === id);
   if (!item) return null;
