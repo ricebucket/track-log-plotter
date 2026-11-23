@@ -106,6 +106,24 @@ export interface Column {
 }
 
 /**
+ * The values a lane's graph spans, bottom to top, from the lowest and highest
+ * values in view. Most graphs stand on zero. Acceleration hovers around 1 g,
+ * so it spans just the readings (at least 0.1 g). Elevation is often far above
+ * sea level, so it spans just the values in view too: at least 10 m, so GPS
+ * noise on flat ground stays small, with a little room below the lowest point.
+ */
+export function graphRange(key: MeasureKey, lo: number, hi: number): [number, number] {
+  if (!(hi >= lo)) return [0, 1];
+  if (key === 'accel') return [Math.min(lo, hi - 0.1), hi];
+  if (key === 'ele') {
+    const span = Math.max(hi - lo, 10);
+    const low = (lo + hi) / 2 - span / 2;
+    return [low - span * 0.1, low + span];
+  }
+  return [Math.min(0, lo), hi];
+}
+
+/**
  * Summarises a track into one entry per pixel column of a lane. `offset` moves
  * the track's times onto the axis [t0, t1].
  */

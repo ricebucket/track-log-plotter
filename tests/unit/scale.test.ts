@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildScale, logEdges, niceEdges, niceNumber, stepOf, STEPS, timeShares, valueAt } from '../../src/color/scale';
+import { buildScale, evenEdges, logEdges, niceCeil, niceEdges, niceNumber, stepOf, STEPS, timeShares, valueAt } from '../../src/color/scale';
 import { FAMILIES, palette, haloExtra, haloStyle, SINGLE } from '../../src/color/palettes';
 import { load } from '../helpers/fixtures';
 
@@ -61,6 +61,21 @@ describe('scales', () => {
   it('splits the track\'s time across steps', () => {
     const shares = timeShares(a, buildScale('speed', [a]));
     expect(shares.reduce((x, y) => x + y, 0)).toBeCloseTo(1, 6);
+  });
+
+  it('splits a log slower than running into equal speed steps from zero', () => {
+    expect([0.93, 5.44, 6, 11.2, 13, 26].map(niceCeil)).toEqual([1, 6, 6, 12, 15, 30]);
+    expect(evenEdges(5.44, 5)).toEqual([1.2, 2.4, 3.6, 4.8]);
+    // The walk spends most of its time near 5 km/h: the steps no longer bunch up there.
+    const walk = load('lower-manhattan-walk.gpx');
+    const s = buildScale('speed', [walk]);
+    expect([s.edges, s.log]).toEqual([[1.2, 2.4, 3.6, 4.8], false]);
+    // Stopped, the stairs, and walking each fall in a different step.
+    expect([0, 1.7, 5].map((v) => stepOf(s, v))).toEqual([0, 1, 4]);
+    // In mph the round top speed is in mph too.
+    expect(buildScale('speed', [walk], 1 / 1.609344).edges).toEqual([0.8, 1.6, 2.4, 3.2]);
+    // A ride faster than running keeps its log steps.
+    expect(buildScale('speed', [a]).log).toBe(true);
   });
 
   it('rounds log-scale edges to round numbers', () => {

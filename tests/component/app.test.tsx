@@ -230,6 +230,14 @@ describe('tracks panel', () => {
     expect(legend.querySelector('.legend-why button')).toBeTruthy();
   });
 
+  it('shows equal speed steps from zero for a log slower than running, and says why', () => {
+    loadFixtures('lower-manhattan-walk.gpx');
+    render(<App Map={NoMap} />);
+    expect([...document.querySelectorAll('.legend-step .mono:not(.muted)')].map((e) => e.textContent)).toEqual(['< 1.2', '1.2–2.4', '2.4–3.6', '3.6–4.8', '≥ 4.8']);
+    const why = [...document.querySelectorAll('.legend .computed-btn')].map((b) => b.getAttribute('aria-label')).join(' ');
+    expect(why).toContain('so speed steps are equal parts of 6 km/h');
+  });
+
   it('removes all tracks after asking', () => {
     loadFixtures('central-park-loop.nmea', 'roosevelt-island-run.gpx');
     render(<App Map={NoMap} />);

@@ -241,6 +241,9 @@ test('zooms into a dragged range and back out with Reset zoom', async ({ page })
   await page.mouse.up();
   const reset = page.getByRole('button', { name: 'Reset zoom' });
   await expect(reset).toBeVisible();
+  // Reset zoom comes and goes to the left of Fit, which keeps its place.
+  const fitBox = (await page.locator('.timeline').getByRole('button', { name: /^Fit/ }).boundingBox())!;
+  expect((await reset.boundingBox())!.x).toBeLessThan(fitBox.x);
   await expect(page.locator('.tl-ticks span').first()).not.toHaveText(first!);
   await reset.click();
   await expect(reset).toHaveCount(0);

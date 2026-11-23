@@ -176,7 +176,7 @@ export function measureHint(item: TrackItem, key: MeasureKey, scale: Scale): str
   if (key === 'grade') return explain.grade();
   if (key === 'hdop' && scale.relative) return explain.hdopRelative();
   if (key === 'speed') {
-    const steps = scale.log ? `${explain.steps()} ${explain.stepsLog(scale)}` : explain.steps();
+    const steps = `${explain.steps()} ${scale.log ? explain.stepsLog(scale) : explain.stepsEven(scale)}`;
     return item.track.derived.speedFromFile ? steps : `${explain.speedDerived()} ${steps}`;
   }
   if (key === 'ele') return explain.steps();

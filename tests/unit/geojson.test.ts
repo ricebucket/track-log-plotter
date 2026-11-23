@@ -4,7 +4,7 @@ import { addTracks } from '../../src/state/logic';
 import { buildScale, stepOf } from '../../src/color/scale';
 import type { LoadedTrack, MeasureKey } from '../../src/model/types';
 import { FAMILIES, SINGLE } from '../../src/color/palettes';
-import { columns, MIN_ZOOM_MS, panView, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from '../../src/ui/timelineMath';
+import { columns, graphRange, MIN_ZOOM_MS, panView, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from '../../src/ui/timelineMath';
 import { scaleBar } from '../../src/ui/scaleBar';
 import { load } from '../helpers/fixtures';
 
@@ -140,6 +140,18 @@ describe('timeline math', () => {
     const cols = columns(tr, 'accel', s, tr.cols.t[i], tr.cols.t[i] + 1000, 10, 0);
     expect(cols.filter((col) => stepOf(s, col!.max) === steps[i])).toHaveLength(1);
     expect(cols.map((col) => col!.step)).toEqual(Array(10).fill(steps[i]));
+  });
+
+  it('scales elevation graphs to the values in view, not from sea level', () => {
+    // A ride at 1,500–1,540 m: the graph spans those 40 m, with a little room below.
+    expect(graphRange('ele', 1500, 1540)).toEqual([1496, 1540]);
+    // A flat stretch: at least 10 m, centered, so GPS noise stays small.
+    expect(graphRange('ele', 3, 5)).toEqual([-2, 9]);
+    // Speed, HDOP and the rest stand on zero; acceleration spans its readings.
+    expect(graphRange('speed', 4, 30)).toEqual([0, 30]);
+    expect(graphRange('hdop', 0.8, 2.4)).toEqual([0, 2.4]);
+    const [lo, hi] = graphRange('accel', 1.02, 1.05);
+    expect([Number(lo.toFixed(9)), hi]).toEqual([0.95, 1.05]);
   });
 
   it('zooms with the scroll wheel around the time under the pointer', () => {

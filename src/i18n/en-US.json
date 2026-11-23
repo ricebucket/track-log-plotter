@@ -243,6 +243,7 @@
   "computed.hdopRelative": "This file's HDOP doesn't behave like standard HDOP, so its values are ranked within the track: each step holds a quarter of the fixes.",
   "computed.shares": "The share of the track's time spent in each step, from the times between fixes.",
   "computed.steps": "The steps are chosen from the shown tracks, so a color means the same value on each of them. They change when you show or hide a track.",
+  "computed.stepsEven": "The shown tracks stay below running pace ({running}), so speed steps are equal parts of {top}: from standing still up to a round number at the top speed they usually reach.",
   "computed.stepsLog": "The shown tracks move faster than running pace ({running}), so speed steps are spaced on a log scale: each step reaches about {ratio} times as fast as the one before.",
   "lang.name": "English",
   "options.title": "Options",

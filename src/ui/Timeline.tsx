@@ -14,7 +14,7 @@ import { axisRange } from '../state/logic';
 import { fixAt } from '../state/inspect';
 import { palette, UNKNOWN } from '../color/palettes';
 import { differentDays, fmtClock, fmtDateClock, fmtShortDate, isMidnight, offsetLabel, offsetMinutes, zoneCity } from '../time/zones';
-import { columns, MIN_ZOOM_MS, panView, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from './timelineMath';
+import { columns, graphRange, MIN_ZOOM_MS, panView, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from './timelineMath';
 import { measureName, valueText } from './labels';
 import { Badge } from './Badge';
 import { IconChevronDown, IconClock, IconFit, IconPause, IconPlay, IconTimeline, IconZoomOut, IconZoomReset } from './icons';
@@ -85,15 +85,13 @@ function Lane({ item, t0, t1, tall, fromStart, narrow, labelW, cursor, halo = fa
       // The selected track: one graph. Its height is the value and its fill is
       // the color the map gives that value, so there is no second strip to explain.
       const top = 4, bottom = h - 1;
-      // Most graphs stand on zero. Acceleration hovers around 1 g (gravity), so
-      // its graph spans just the readings in view (at least 0.1 g), and the
-      // waveform fills the lane.
-      const base = key === 'accel' ? Math.min(lo, hi - 0.1) : Math.min(0, lo);
+      // Most graphs stand on zero; acceleration and elevation span just the values in view.
+      const [base, peak] = graphRange(key, lo, hi);
       // When the color steps are on a log scale, so is the graph: values below
       // walking pace sit on the axis.
       const yOf = logY && hi > MOVING_KMH
         ? (v: number) => bottom - (Math.log(Math.max(v, MOVING_KMH) / MOVING_KMH) / Math.log(hi / MOVING_KMH)) * (bottom - top)
-        : (v: number) => bottom - ((v - base) / Math.max(1e-9, hi - base)) * (bottom - top);
+        : (v: number) => bottom - ((v - base) / Math.max(1e-9, peak - base)) * (bottom - top);
       for (let x = 0; x < cols.length; x++) {
         const c = cols[x];
         if (!c) continue;
@@ -381,29 +379,30 @@ export function Timeline() {
         {narrow ? (
           // One row on a phone: icons, and one time zone button.
           <>
-            <button type="button" class="icon-btn outline" aria-label={zoomed ? t('map.fitZoomed') : t('map.fit')} title={zoomed ? t('map.fitZoomed') : t('map.fit')} onClick={() => mapApi.fit(zoomed ? [t0, t1] : undefined)}>
-              <IconFit size={15} />
-            </button>
+            {/* Reset zoom comes and goes; Fit, always there, keeps its place on the right. */}
             {zoomed && (
               <button type="button" class="icon-btn outline" aria-label={t('timeline.resetZoom')} title={t('timeline.resetZoomHint')} onClick={() => { S.timelineView.value = null; }}>
                 <IconZoomReset size={15} />
               </button>
             )}
+            <button type="button" class="icon-btn outline" aria-label={zoomed ? t('map.fitZoomed') : t('map.fit')} title={zoomed ? t('map.fitZoomed') : t('map.fit')} onClick={() => mapApi.fit(zoomed ? [t0, t1] : undefined)}>
+              <IconFit size={15} />
+            </button>
             <ZoneButton iconOnly={multiDay} />
           </>
         ) : (
           <>
+            {zoomed && (
+              <button type="button" class="btn-outline small" title={t('timeline.resetZoomHint')} onClick={() => { S.timelineView.value = null; }}>
+                <IconZoomOut size={14} />{t('timeline.resetZoom')}
+              </button>
+            )}
             <button
               type="button" class="btn-outline small" aria-label={zoomed ? t('map.fitZoomed') : t('map.fit')} title={zoomed ? t('map.fitZoomed') : t('map.fit')}
               onClick={() => mapApi.fit(zoomed ? [t0, t1] : undefined)}
             >
               <IconFit size={14} />{t('map.fitShort')}
             </button>
-            {zoomed && (
-              <button type="button" class="btn-outline small" title={t('timeline.resetZoomHint')} onClick={() => { S.timelineView.value = null; }}>
-                <IconZoomOut size={14} />{t('timeline.resetZoom')}
-              </button>
-            )}
             <ZoneButtons at={cursor} />
           </>
         )}

@@ -243,6 +243,7 @@
   "computed.hdopRelative": "此文件的 HDOP 不符合标准 HDOP 的规律，因此在本轨迹内排名：每一档包含四分之一的定位点。",
   "computed.shares": "根据定位点之间的时间，计算轨迹在每一档所花时间的占比。",
   "computed.steps": "分档依据当前显示的轨迹选定，因此同一种颜色在这些轨迹上代表相同的数值。显示或隐藏轨迹时，分档会随之变化。",
+  "computed.stepsEven": "所显示的轨迹都低于跑步速度（{running}），所以速度分级是把 {top} 等分：从静止一直到它们通常能达到的最高速度附近的整数。",
   "computed.stepsLog": "显示的轨迹比跑步速度（{running}）更快，因此速度按对数刻度分档：每一档的速度约为前一档的 {ratio} 倍。",
   "lang.name": "中文",
   "options.title": "选项",

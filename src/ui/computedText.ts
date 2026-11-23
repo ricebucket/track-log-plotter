@@ -27,5 +27,6 @@ export const explain = {
   shares: () => t('computed.shares'),
   accel: () => t('computed.accel'),
   steps: () => t('computed.steps'),
+  stepsEven: (s: { edges: number[] }) => t('computed.stepsEven', { top: `${fmtNum(s.edges[0] * (s.edges.length + 1), locale.value, 1, 0)} ${unitOf('speed')}`, running: `${fmtSpeed(RUNNING_KMH, units.value, locale.value, 0)} ${unitOf('speed')}` }),
   stepsLog: (s: { edges: number[] }) => t('computed.stepsLog', { ratio: fmtNum(s.edges[1] / s.edges[0], locale.value, 1, 1), running: `${fmtSpeed(RUNNING_KMH, units.value, locale.value, 0)} ${unitOf('speed')}` }),
 };

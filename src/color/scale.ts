@@ -99,6 +99,19 @@ export function niceNumber(v: number): number {
   return Number((best * p).toPrecision(4));
 }
 
+/** The round number at or above v (…, 5, 6, 8, 10, 12, 15, 20, …). */
+export function niceCeil(v: number): number {
+  const p = 10 ** Math.floor(Math.log10(v));
+  for (const c of NICE_MANTISSA) if (c * p >= v * (1 - 1e-9)) return Number((c * p).toPrecision(4));
+  return 10 * p;
+}
+
+/** Equal steps from zero up to a round number at or above top: 1.2, 2.4, 3.6, 4.8 for a top of 5.4. */
+export function evenEdges(top: number, steps: number): number[] {
+  const t = niceCeil(top);
+  return Array.from({ length: steps - 1 }, (_, k) => Number(((t * (k + 1)) / steps).toFixed(4)));
+}
+
 /** Step edges spaced evenly on a log scale between lo and hi, rounded to round numbers. */
 export function logEdges(lo: number, hi: number, steps: number): number[] {
   const r = (hi / lo) ** (1 / steps);
@@ -147,6 +160,10 @@ export function buildScale(key: MeasureKey, tracks: LoadedTrack[], factor = 1, r
     const hi = quantileSorted(pool, 0.95);
     const lo = Math.max(MOVING_KMH * factor, quantileSorted(pool, 0.05));
     if (hi > RUNNING_KMH * factor && hi / lo > 1.5) return { key, steps, edges: logEdges(lo, hi, steps), factor, relative: false, log: true };
+    // Slower: equal steps from standing still up to a round number at the usual
+    // top speed, so slow, steady and brisk stretches each get a color. (Quantiles
+    // bunch up where a steady walk spends most of its time, and flicker there.)
+    return { key, steps, edges: evenEdges(hi, steps), factor, relative: false, log: false };
   }
   const qs = [0.2, 0.4, 0.6, 0.8].map((q) => quantileSorted(pool, q));
   return { key, steps, edges: niceEdges(qs), factor, relative: false, log: false };
