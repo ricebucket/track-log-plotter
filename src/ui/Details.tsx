@@ -2,7 +2,7 @@ import type { FieldKey } from '../model/types';
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { fmtBytes, fmtDistance, fmtDuration, fmtEle, fmtNum, fmtPercent, fmtSpeed } from '../format';
-import { fmtClock, fmtDate, offsetLabel } from '../time/zones';
+import { differentDays, fmtClock, fmtDate, fmtDateClock, offsetLabel } from '../time/zones';
 import { noteText, problemBody, problemTitle, unitOf } from './labels';
 import { badgeOf } from './TrackRow';
 import { IconBack, IconFlag, IconTrash, IconWarn } from './icons';
@@ -21,10 +21,13 @@ export function Details({ id }: { id: string }) {
   const u = S.units.value;
   const z = S.zone.value;
   const km = u === 'imperial' ? t('unit.mi') : t('unit.km');
+  // A track over more than one day shows both dates.
+  const multiDay = differentDays(st.start, st.end, z);
+  const clock = multiDay ? fmtDateClock : fmtClock;
   // [label, value, how it was computed (null when it comes straight from the file)]
   const rows: [string, string, string | null][] = [
-    [t('details.date'), fmtDate(st.start, z, loc), null],
-    [t('details.time'), `${fmtClock(st.start, z, loc)} – ${fmtClock(st.end, z, loc)} (${offsetLabel(st.start, z)})`, null],
+    [t('details.date'), multiDay ? `${fmtDate(st.start, z, loc)} – ${fmtDate(st.end, z, loc)}` : fmtDate(st.start, z, loc), null],
+    [t('details.time'), `${clock(st.start, z, loc)} – ${clock(st.end, z, loc)} (${offsetLabel(st.start, z)})`, null],
     [t('details.duration'), fmtDuration(st.durationS), explain.duration()],
     [t('stat.moving'), fmtDuration(st.movingS), explain.moving()],
     [t('stat.distance'), `${fmtDistance(st.distanceM, u, loc)} ${km}`, explain.distance()],
@@ -88,7 +91,7 @@ export function Details({ id }: { id: string }) {
             {tr.flags.map((f) => (
               <li key={f.n}>
                 <button type="button" class="flag-btn" onClick={() => S.seek(item.id, f.t)}>
-                  <IconFlag />#{f.n}<span class="mono muted">{fmtClock(f.t, z, loc)}</span>{f.name && <span class="muted">{f.name}</span>}
+                  <IconFlag />#{f.n}<span class="mono muted">{clock(f.t, z, loc)}</span>{f.name && <span class="muted">{f.name}</span>}
                 </button>
               </li>
             ))}

@@ -178,9 +178,17 @@ const gpxGarmin = toGpx(ride, { creator: 'Garmin-style test file', name: 'Centra
 const gpxRun = toGpx(run, { creator: 'Synthetic GPX 1.0 file', name: 'Roosevelt Island run', rand: rng(104), mode: 'gpx10' }).replace('version="1.1"', 'version="1.0"').replace('http://www.topografix.com/GPX/1/1', 'http://www.topografix.com/GPX/1/0');
 const nmeaEvening = toNmea(evening, { rand: rng(105), sbasEvery: 0, gsv: false });
 
-// Sample ride for the app: track A's log ends on a cut-off line.
+// An evening ride up the Hudson (7:30 PM in New York, crossing midnight UTC),
+// then the ride back the next morning after a night's stop: one log spanning
+// two dates both in New York and in UTC, with a gap overnight.
+const eveningUp = simulate({ route: ROUTES.hudson, start: Date.UTC(2026, 6, 11, 23, 30, 0), interval: 5, kmh: (p, r) => 16 + 2 * Math.sin(p * 10) + (r() - 0.5) * 2, seed: 44, eleBase: 5, eleAmp: 2 });
+const morningBack = simulate({ route: ROUTES.hudson.toReversed(), start: Date.UTC(2026, 6, 12, 11, 40, 0), interval: 5, kmh: (p, r) => 15 + 2 * Math.sin(p * 9) + (r() - 0.5) * 2, seed: 45, eleBase: 5, eleAmp: 2 });
+const gpxOvernight = toGpx([...eveningUp, ...morningBack], { creator: 'Synthetic GPX file', name: 'Hudson overnight', rand: rng(107), mode: 'garmin', gapIdx: eveningUp.length });
+
+// Sample ride for the app: clean files, so a first look shows no problems.
+// (The cut-off version below is a test fixture only.)
 const truncatedA = nmeaA.join('\n') + '\n' + nmeaA[4].slice(0, 28); // an RMC sentence cut after 28 characters
-write('public/sample/central-park-loop.nmea', truncatedA);
+write('public/sample/central-park-loop.nmea', nmeaA.join('\n') + '\n');
 write('public/sample/central-park-loop.gpx', gpxB);
 write('public/sample/roosevelt-island-run.gpx', gpxRun);
 
@@ -191,6 +199,7 @@ write('tests/fixtures/central-park-loop-vendor.gpx', gpxB);
 write('tests/fixtures/central-park-loop-garmin.gpx', gpxGarmin);
 write('tests/fixtures/roosevelt-island-run.gpx', gpxRun);
 write('tests/fixtures/hudson-greenway-evening.log', nmeaEvening.join('\n') + '\n');
+write('tests/fixtures/hudson-overnight.gpx', gpxOvernight);
 
 // A damaged NMEA log: every kind of damage the reader handles, in one file.
 const dmg = toNmea(ride.slice(0, 120), { rand: rng(106), gsv: false });

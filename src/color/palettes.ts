@@ -21,8 +21,18 @@ export const FAMILIES: Family[] = [
 ];
 
 export const SINGLE = {
-  /** Amounts (speed, elevation, grade): viridis steps. */
-  mag: { light5: ['#44bf70', '#1f968b', '#2f6c8e', '#443c84', '#440154'], dark5: ['#3b528b', '#25848e', '#22a884', '#7ad151', '#fde725'] },
+  /**
+   * Amounts (speed, elevation, grade): a broad multi-hue scale, so low and
+   * high are told apart at a glance. Low is blue and high is amber or yellow
+   * on every basemap, and each step is lighter than the one before, so
+   * color-blind viewers can still read the order.
+   * Light maps: deep blue → purple → magenta → coral → amber (OKLCH lightness
+   * 0.30 → 0.80). Dark maps: blue → magenta → pink → orange → yellow.
+   * Checked with the dataviz validator: adjacent steps differ by ΔE ≥ 16.9
+   * (normal vision) and ≥ 8.2 (color-blind simulations). The amber end is
+   * light on light maps; the dark casing under every line keeps it visible.
+   */
+  mag: { light5: ['#041586', '#670dbd', '#cb228e', '#fb5a46', '#f4b00c'], dark5: ['#5a67f5', '#b845c4', '#f0607a', '#fd9d3a', '#f3f04b'] },
   /** Fix quality (HDOP, satellites): green to red. */
   qual: { light4: ['#029e72', '#f0c12a', '#ec7c0e', '#be2132'], dark4: ['#22b988', '#fad03e', '#f98f3a', '#e2484f'] },
   /** Fix type: plain GPS, corrected. */

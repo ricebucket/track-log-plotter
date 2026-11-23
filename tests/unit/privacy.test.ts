@@ -60,12 +60,14 @@ describe('privacy guard', () => {
     expect(checked).toBeGreaterThan(10);
   });
 
-  it('keeps local-tracks/ out of git and out of the code', () => {
+  it('keeps local-tracks/ out of git, the app and the scripts', () => {
     const ignore = readFileSync(join(ROOT, '.gitignore'), 'utf8').split('\n').map((l) => l.trim());
     expect(ignore).toContain('local-tracks/');
+    // Only the test helper that finds your own logs may name the folder.
+    const allowed = new Set(['tests/helpers/own-logs.ts', 'tests/unit/privacy.test.ts']);
     const code = walk(join(ROOT, 'src')).concat(walk(join(ROOT, 'tests')), walk(join(ROOT, 'scripts')));
     for (const f of code) {
-      if (f.endsWith('privacy.test.ts')) continue;
+      if (allowed.has(relative(ROOT, f))) continue;
       expect(readFileSync(f, 'utf8'), relative(ROOT, f)).not.toMatch(/local-tracks/);
     }
   });

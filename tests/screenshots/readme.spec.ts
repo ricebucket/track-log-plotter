@@ -4,8 +4,8 @@ import { expect, test, type Browser, type BrowserContextOptions, type Page } fro
 
 const OUT = 'docs/screenshots';
 const TEXT = {
-  en: { sample: 'Try the sample ride', dismiss: 'Dismiss' },
-  zh: { sample: '试试示例骑行', dismiss: '关闭提示' },
+  en: { sample: 'Try the sample ride' },
+  zh: { sample: '试试示例骑行' },
 } as const;
 type Lang = keyof typeof TEXT;
 
@@ -19,7 +19,6 @@ async function open(browser: Browser, lang: Lang, options: BrowserContextOptions
   await page.goto('./');
   await page.getByRole('button', { name: TEXT[lang].sample }).click();
   await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]/, { timeout: 30_000 });
-  await page.getByRole('button', { name: TEXT[lang].dismiss }).click();
   return page;
 }
 

@@ -11,7 +11,7 @@ export function ZonePicker({ at }: { at: number }) {
   const input = useRef<HTMLInputElement>(null);
   const [q, setQ] = useState('');
   const close = () => { S.zoneOpen.value = false; };
-  useDismiss(ref, close);
+  useDismiss(ref, close, '[data-zone-trigger]');
   useEffect(() => { input.current?.focus(); }, []);
   const list = useMemo(() => searchZones(q, at), [q, at]);
   return (

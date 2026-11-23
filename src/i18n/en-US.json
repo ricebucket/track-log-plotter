@@ -11,7 +11,6 @@
   "panel.hide": "Minimize the panel",
   "panel.show": "Show the panel",
 
-  "settings.label": "Settings",
   "settings.units": "Units",
   "settings.metric": "Metric (km/h, km, m)",
   "settings.imperial": "Imperial (mph, mi, ft)",
@@ -40,7 +39,7 @@
   "colorHalo.label": "Color and halo",
   "colorHalo.color": "Color",
   "colorHalo.halo": "Halo",
-  "colorHalo.applyAll": "Use this color and halo for all tracks",
+  "colorHalo.applyAll": "Use on all tracks",
 
   "measure.speed": "Speed",
   "measure.ele": "Elevation",
@@ -67,7 +66,6 @@
   "picker.haloIntro": "A soft band around the line, wider toward the far end of the measure.",
   "picker.notInFile": "Not in this file.",
 
-  "legend.share": "share of time",
   "legend.withUnit": "{name} ({unit})",
   "legend.grade": "Grade (%), uphill or downhill",
   "legend.hdopRelative": "HDOP, ranked within this track",
@@ -93,9 +91,7 @@
   "onmap.gapsHint": "A dotted line where the logger had no fix for a while.",
 
   "google.title": "Open in Google Maps",
-  "google.view": "This view",
-  "google.streetCursor": "Street View at the cursor",
-  "google.streetCenter": "Street View here",
+  "google.view": "This map view",
   "google.note": "Opens a new tab at the same spot",
 
   "details.date": "Date",
@@ -206,7 +202,7 @@
   "map.zoomIn": "Zoom in",
   "map.zoomOut": "Zoom out",
   "map.fit": "Fit the tracks",
-  "map.north": "Point north",
+  "map.north": "Turn the map north up",
 
   "inspect.ellipsoid": "Above ellipsoid",
   "inspect.course": "Course",
@@ -254,5 +250,20 @@
   "computed.hdopRelative": "This file's HDOP doesn't behave like standard HDOP, so its values are ranked within the track: each step holds a quarter of the fixes.",
   "computed.shares": "The share of the track's time spent in each step, from the times between fixes.",
   "computed.steps": "The steps are chosen from the shown tracks, so a color means the same value on each of them. They change when you show or hide a track.",
-  "computed.stepsLog": "The shown tracks move faster than running pace ({running}), so speed steps are spaced on a log scale: each step reaches about {ratio} times as fast as the one before."
+  "computed.stepsLog": "The shown tracks move faster than running pace ({running}), so speed steps are spaced on a log scale: each step reaches about {ratio} times as fast as the one before.",
+  "lang.name": "English",
+  "options.title": "Options",
+  "tracks.clear": "Remove all tracks",
+  "tracks.clearConfirm": {"one": "Remove the loaded track?", "other": "Remove all {n} tracks?"},
+  "tracks.clearYes": "Remove all",
+  "common.cancel": "Cancel",
+  "options.hint": "Basemap, language and units",
+  "colorHalo.allColor": "color by {m}",
+  "colorHalo.allPlain": "plain lines",
+  "colorHalo.allHalo": "halo by {m}",
+  "colorHalo.allNoHalo": "no halo",
+  "colorHalo.applyAllHint": "Every track: {color}, {halo}",
+  "google.street": "Street View at the selected point",
+  "google.myMaps": "Google My Maps",
+  "google.myMapsHow": "To see the track on Google: in My Maps, create a map, choose Import under its layer and pick your GPX file. This uploads the file to your Google account. NMEA files can't be imported there."
 }

@@ -3,6 +3,7 @@
 import type { LoadedTrack, MeasureKey } from '../model/types';
 import type { TrackItem } from '../state/logic';
 import { nearestIndex } from '../state/logic';
+import { haversine } from '../derive/geo';
 import { stepOf, valueAt, type Scale } from '../color/scale';
 import { FAMILIES, haloExtra, haloStyle, palette, UNKNOWN } from '../color/palettes';
 
@@ -32,6 +33,30 @@ export function stepsFor(track: LoadedTrack, key: MeasureKey, scale: Scale): Int
 /** Badge color of a track (its range's badge), used for its pins and fix rings. */
 export function badgeColor(item: TrackItem, _single: boolean): string {
   return FAMILIES[item.fam % 3].badge;
+}
+
+/** Meters per screen pixel at a latitude and zoom (MapLibre tiles are 512 pixels wide). */
+export function metersPerPixel(lat: number, zoom: number): number {
+  return (40_075_016.7 * Math.cos((lat * Math.PI) / 180)) / (512 * 2 ** zoom);
+}
+
+/**
+ * A dot with the track's letter for each shown track smaller than `minPx` on
+ * screen at this zoom. When the shown tracks are far apart, fitting them all
+ * zooms out so far that a track is a speck (MapLibre then drops its short
+ * colored pieces altogether), so the dot shows where it is.
+ */
+export function buildMarks(items: TrackItem[], zoom: number, minPx = 24): FC<Point> {
+  const out: Feature<Point>[] = [];
+  for (const it of items) {
+    if (!it.vis) continue;
+    const [w, s, e, n] = it.track.derived.stats.bbox;
+    const lat = (s + n) / 2, lon = (w + e) / 2;
+    const sizeM = Math.max(haversine(lat, w, lat, e), haversine(s, lon, n, lon));
+    if (sizeM / metersPerPixel(lat, zoom) >= minPx) continue;
+    out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: { id: it.id, c: badgeColor(it, false) } });
+  }
+  return { type: 'FeatureCollection', features: out };
 }
 
 /** Colored runs of the line, each with its halo width and opacity. */

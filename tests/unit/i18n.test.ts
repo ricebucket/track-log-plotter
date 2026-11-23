@@ -45,6 +45,8 @@ describe('translations', () => {
   it('every key used in the code exists, and every message is used', () => {
     const src = files(join(ROOT, 'src')).map((f) => readFileSync(f, 'utf8')).join('\n');
     const used = new Set([...src.matchAll(/\bt\(\s*'([\w.]+)'/g)].map((m) => m[1]));
+    // Messages read in a given language rather than the current one: translate(lang, 'key').
+    for (const m of src.matchAll(/\btranslate\(\s*\w+\s*,\s*'([\w.]+)'/g)) used.add(m[1]);
     for (const k of used) expect(en[k], `missing message ${k}`).toBeDefined();
     // Keys built at run time: `measure.${k}`, `basemap.${id}`, `problem.${kind}.title`…
     const dynamic = /^(measure|basemap|problem|note|unit|field|halo\.hint|toast\.error|settings|fix)\./;

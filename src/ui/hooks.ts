@@ -18,13 +18,19 @@ export function useMedia(query: string): boolean {
   return on;
 }
 
-/** Calls close() on Escape or on a pointer press outside the element (and outside `except`). */
-export function useDismiss(ref: RefObject<HTMLElement | null>, close: () => void, except?: RefObject<HTMLElement | null>) {
+/**
+ * Calls close() on Escape or on a pointer press outside the element.
+ * `except` is the button that opens the popover, as a ref or a CSS selector:
+ * a press on it is left to the button's own click, which closes the popover.
+ * Otherwise the press would close it and the click would open it again.
+ */
+export function useDismiss(ref: RefObject<HTMLElement | null>, close: () => void, except?: RefObject<HTMLElement | null> | string) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     const onDown = (e: PointerEvent) => {
       const target = e.target as Node;
-      if (ref.current?.contains(target) || except?.current?.contains(target)) return;
+      if (ref.current?.contains(target)) return;
+      if (typeof except === 'string' ? (target as Element).closest?.(except) : except?.current?.contains(target)) return;
       close();
     };
     document.addEventListener('keydown', onKey);

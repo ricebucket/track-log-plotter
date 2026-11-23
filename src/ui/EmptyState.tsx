@@ -1,6 +1,6 @@
 import * as S from '../state/store';
 import { t } from '../state/store';
-import { LangToggle, openFilePicker } from './Panel';
+import { openFilePicker } from './Panel';
 import { IconFolder, IconLock, IconUpload } from './icons';
 
 /** Before any track is open. */
@@ -10,7 +10,6 @@ export function EmptyState() {
     <>
       <div class="brand-pill">
         <span class="app-title">{t('app.name')}</span>
-        <LangToggle onDark />
       </div>
       <div class="empty-wrap">
         <main class="empty-card" aria-labelledby="empty-h">

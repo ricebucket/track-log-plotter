@@ -2,11 +2,11 @@ import * as S from '../state/store';
 import { t } from '../state/store';
 import { tipXY } from '../map/bridge';
 import { fixAt } from '../state/inspect';
-import { fmtClock } from '../time/zones';
+import { differentDays, fmtClock, fmtDateClock } from '../time/zones';
 import { fmtNum } from '../format';
 import { valueText, unitOf } from './labels';
 import { badgeOf } from './TrackRow';
-import { IconFlag } from './icons';
+import { IconClose, IconFlag } from './icons';
 import { ComputedMark } from './Computed';
 
 /** The fix inspector: a card on the map at the selected track's cursor. */
@@ -44,10 +44,11 @@ export function Tooltip() {
     : t('inspect.point', { a: f.i + 1, line: f.line });
 
   return (
-    <div class="tooltip" style={{ left: `${left}px`, top: `${Math.max(12, xy.y - 40)}px`, width: `${W}px` }} role="status" aria-live="off">
+    <div class="tooltip" data-x={Math.round(xy.x)} data-y={Math.round(xy.y)} style={{ left: `${left}px`, top: `${Math.max(12, xy.y - 40)}px`, width: `${W}px` }} role="status" aria-live="off">
       <div class="tip-head">
         <span class="badge small" style={{ background: badgeOf(sel) }}>{sel.id}</span>
-        <span class="mono tip-time">{fmtClock(f.t, S.zone.value, loc)}</span>
+        <span class="mono tip-time">{(differentDays(sel.track.derived.stats.start, sel.track.derived.stats.end, S.zone.value) ? fmtDateClock : fmtClock)(f.t, S.zone.value, loc)}</span>
+        <button type="button" class="icon-btn tip-close" aria-label={t('common.close')} title={t('common.close')} onClick={() => S.clearCursor()}><IconClose size={14} /></button>
       </div>
       <dl class="tip-rows">
         {rows.map(([k, v, c]) => <div key={k}><dt>{k}{c && <ComputedMark />}</dt><dd class="mono">{v}</dd></div>)}

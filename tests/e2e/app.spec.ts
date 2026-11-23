@@ -52,7 +52,8 @@ test('minimizes and restores both panes', async ({ page }) => {
   await expect(page.getByRole('region', { name: 'Timeline' })).toBeVisible();
 });
 
-test('switches to Chinese and remembers it', async ({ page }) => {
+test('switches to Chinese from the Options menu and remembers it', async ({ page }) => {
+  await page.getByRole('button', { name: /Options/ }).click();
   await page.getByRole('button', { name: '中文' }).click();
   await expect(page.getByText('轨迹绘图器')).toBeVisible();
   await page.reload();
@@ -68,6 +69,128 @@ test('explains each measure and recolors the track', async ({ page }) => {
   await pane.getByRole('radio', { name: /Elevation/ }).click();
   await expect(pane).toHaveCount(0);
   await expect(page.getByText('Elevation (m)')).toBeVisible();
+});
+
+test('closes the Options menu and the color pane on a second press', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  const options = page.getByRole('button', { name: /Options/ });
+  await options.click();
+  await expect(page.getByRole('dialog', { name: 'Options' })).toBeVisible();
+  await options.click();
+  await expect(page.getByRole('dialog', { name: 'Options' })).toHaveCount(0);
+  const color = page.getByRole('button', { name: 'Color Speed (km/h)' });
+  await color.click();
+  await expect(page.getByRole('dialog', { name: 'Color track A by' })).toBeVisible();
+  await color.click();
+  await expect(page.getByRole('dialog', { name: 'Color track A by' })).toHaveCount(0);
+});
+
+test('closes the fix card with its button and with a click on an empty spot', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  const hover = () => page.mouse.move(lanes.x + 150 + (lanes.width - 150) * 0.5, lanes.y + 20);
+  await hover();
+  const card = page.locator('.tooltip');
+  await expect(card).toBeVisible();
+  await card.getByRole('button', { name: 'Close' }).click();
+  await expect(card).toHaveCount(0);
+  await hover();
+  await expect(card).toBeVisible();
+  // Just right of the panel, near the top: empty map.
+  const panel = (await page.locator('.panel').boundingBox())!;
+  await page.mouse.click(panel.x + panel.width + 40, panel.y + 60);
+  await expect(card).toHaveCount(0);
+});
+
+test('shows the compass only while the map is turned', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  const compass = page.getByRole('button', { name: 'Turn the map north up' });
+  await expect(compass).toHaveCount(0);
+  // Right-drag turns the map.
+  const vp = page.viewportSize()!;
+  await page.mouse.move(vp.width * 0.7, vp.height * 0.35);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(vp.width * 0.7 + 160, vp.height * 0.35 + 40, { steps: 12 });
+  await page.mouse.up({ button: 'right' });
+  await expect(compass).toBeVisible();
+  await compass.click();
+  await expect(compass).toHaveCount(0, { timeout: 5_000 });
+});
+
+/** Where the fix card's fix is on screen, and the time it shows. */
+async function cardFix(page: import('@playwright/test').Page) {
+  const card = page.locator('.tooltip');
+  await expect(card).toBeVisible();
+  return { x: Number(await card.getAttribute('data-x')), y: Number(await card.getAttribute('data-y')), time: await card.locator('.tip-time').textContent() };
+}
+
+test('dragging along a track moves the cursor and the fix card with it', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  const at = (f: number) => page.mouse.move(lanes.x + 150 + (lanes.width - 150) * f, lanes.y + 20);
+  await at(0.3);
+  const a = await cardFix(page);
+  await at(0.36);
+  const b = await cardFix(page);
+  expect(b.time).not.toBe(a.time);
+  // Press on the track at the first fix and drag to the second.
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 5 });
+  await page.mouse.move(b.x, b.y, { steps: 5 });
+  await expect(page.locator('.tooltip .tip-time')).toHaveText(b.time!);
+  await page.mouse.up();
+  // The map didn't pan: the fix is still where it was on screen.
+  const after = await cardFix(page);
+  expect(Math.abs(after.x - b.x) + Math.abs(after.y - b.y)).toBeLessThan(3);
+});
+
+test('during playback, hovering the timeline leaves the cursor alone but a press moves it', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  const x = (f: number) => lanes.x + 150 + (lanes.width - 150) * f;
+  const frac = async () => {
+    const box = (await page.locator('.tl-cursor').boundingBox())!;
+    return (box.x - lanes.x - 150) / (lanes.width - 150);
+  };
+  await page.mouse.click(x(0.05), lanes.y + 20);
+  await page.getByRole('button', { name: 'Play' }).click();
+  await page.mouse.move(x(0.9), lanes.y + 20);
+  await page.waitForTimeout(300);
+  expect(await frac()).toBeLessThan(0.5);
+  await page.mouse.click(x(0.8), lanes.y + 20);
+  await expect.poll(frac).toBeGreaterThan(0.75);
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await page.mouse.move(x(0.2), lanes.y + 20);
+  await expect.poll(frac).toBeLessThan(0.3);
+});
+
+test('zoomed far out, a dot stands in for the track and zooms back to it', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  const map = page.locator('.map');
+  await expect(map).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  await expect(map).toHaveAttribute('data-marks', '0');
+  for (let i = 0; i < 10 && (await map.getAttribute('data-marks')) === '0'; i++) {
+    await page.getByRole('button', { name: 'Zoom out' }).click();
+    await page.waitForTimeout(450);
+  }
+  await expect(map).toHaveAttribute('data-marks', '1');
+  const [x, y] = (await map.getAttribute('data-mark-at'))!.split(',').map(Number);
+  await page.mouse.click(x, y);
+  await expect(map).toHaveAttribute('data-marks', '0');
+  await expect(map).toHaveAttribute('data-lines', /^[1-9]\d*$/);
+});
+
+test('shows dates on the timeline for a log over two days', async ({ page }) => {
+  await open(page, 'hudson-overnight.gpx');
+  await page.getByRole('button', { name: 'UTC' }).click();
+  await expect(page.locator('.tl-ticks .tick-date')).toHaveText(['Jul 12']);
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  await page.mouse.move(lanes.x + 150 + (lanes.width - 150) * 0.9, lanes.y + 20);
+  await expect(page.locator('.tl-time')).toContainText('Jul 12,');
 });
 
 test('shows at most three tracks', async ({ page }) => {

@@ -11,8 +11,8 @@ import { t } from '../state/store';
 import { axisRange } from '../state/logic';
 import { fixAt } from '../state/inspect';
 import { palette, UNKNOWN } from '../color/palettes';
-import { fmtClock, fmtShortDate, offsetLabel, offsetMinutes, zoneCity } from '../time/zones';
-import { columns, ticks } from './timelineMath';
+import { differentDays, fmtClock, fmtDateClock, fmtShortDate, isMidnight, offsetLabel, offsetMinutes, zoneCity } from '../time/zones';
+import { columns, playStep, ticks } from './timelineMath';
 import { measureName, valueText } from './labels';
 import { badgeOf } from './TrackRow';
 import { IconChevronDown, IconPause, IconPlay, IconTimeline } from './icons';
@@ -53,38 +53,45 @@ function Lane({ item, t0, t1, tall, narrow, labelW }: { item: TrackItem; t0: num
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
     const cols = columns(item.track, key, item.color === 'none' ? null : scale, t0, t1, w, offset);
-    const bandY = tall ? h - 10 : 3, bandH = tall ? 9 : h - 6;
+    const unknown = S.dark.value ? UNKNOWN.dark : UNKNOWN.light;
+    const colorOf = (step: number) => (item.color === 'none' ? colors[0] : step >= 0 ? colors[Math.min(step, colors.length - 1)] : unknown);
     let lo = Infinity, hi = -Infinity;
     for (const c of cols) if (c && !c.gap && Number.isFinite(c.max)) { lo = Math.min(lo, c.min); hi = Math.max(hi, c.max); }
-    if (tall && Number.isFinite(lo)) {
-      const top = 4, bottom = bandY - 3;
-      const yOf = (v: number) => bottom - ((v - Math.min(0, lo)) / Math.max(1e-9, hi - Math.min(0, lo))) * (bottom - top);
-      g.fillStyle = S.single.value ? 'rgba(71,82,93,0.14)' : `${colors[Math.min(2, colors.length - 1)]}33`;
-      g.strokeStyle = S.single.value ? '#47525d' : colors[colors.length - 1];
-      g.lineWidth = 1.5;
+    if (tall) {
+      // The selected track: one graph. Its height is the value and its fill is
+      // the color the map gives that value, so there is no second strip to explain.
+      const top = 4, bottom = h - 1;
+      const base = Math.min(0, lo);
+      const yOf = (v: number) => bottom - ((v - base) / Math.max(1e-9, hi - base)) * (bottom - top);
+      for (let x = 0; x < cols.length; x++) {
+        const c = cols[x];
+        if (!c) continue;
+        if (c.gap) { g.fillStyle = 'rgba(16,24,32,0.10)'; g.fillRect(x, 0, 1, h); continue; }
+        if (!Number.isFinite(c.max) || !Number.isFinite(lo)) { g.fillStyle = unknown; g.fillRect(x, bottom - 4, 1.4, 4); continue; }
+        const y = yOf(c.max);
+        g.fillStyle = colorOf(c.step);
+        g.fillRect(x, y, 1.4, bottom - y);
+      }
+      g.strokeStyle = 'rgba(16,24,32,0.7)';
+      g.lineWidth = 1.2;
       g.beginPath();
       let open = false;
       for (let x = 0; x < cols.length; x++) {
         const c = cols[x];
-        if (!c || c.gap || !Number.isFinite(c.max)) { open = false; continue; }
+        if (!c || c.gap || !Number.isFinite(c.max) || !Number.isFinite(lo)) { open = false; continue; }
         const y = yOf(c.max);
         if (!open) { g.moveTo(x, y); open = true; } else g.lineTo(x, y);
       }
       g.stroke();
-      g.beginPath();
+    } else {
+      // Other shown tracks: a strip of the map colors.
       for (let x = 0; x < cols.length; x++) {
         const c = cols[x];
-        if (!c || c.gap || !Number.isFinite(c.max)) continue;
-        g.rect(x, yOf(c.max), 1, bottom - yOf(c.max));
+        if (!c) continue;
+        if (c.gap) { g.fillStyle = 'rgba(16,24,32,0.10)'; g.fillRect(x, 0, 1, h); continue; }
+        g.fillStyle = Number.isFinite(c.max) ? colorOf(c.step) : unknown;
+        g.fillRect(x, 3, 1.4, h - 6);
       }
-      g.fill();
-    }
-    for (let x = 0; x < cols.length; x++) {
-      const c = cols[x];
-      if (!c) continue;
-      if (c.gap) { g.fillStyle = 'rgba(16,24,32,0.10)'; g.fillRect(x, 0, 1, h); continue; }
-      g.fillStyle = c.step >= 0 ? colors[Math.min(c.step, colors.length - 1)] : (S.dark.value ? UNKNOWN.dark : UNKNOWN.light);
-      g.fillRect(x, bandY, 1.4, bandH);
     }
     g.fillStyle = '#101820';
     for (const f of item.track.flags) {
@@ -115,7 +122,7 @@ function ZoneButtons({ at }: { at: number }) {
     <div class="seg small" role="group" aria-label={t('zone.label')}>
       <button type="button" aria-pressed={z === 'local' ? 'true' : 'false'} title={t('zone.localHint', { offset: offsetLabel(at, 'local') })} onClick={() => { S.zone.value = 'local'; }}>{t('zone.local')}</button>
       <button type="button" aria-pressed={z === 'utc' ? 'true' : 'false'} onClick={() => { S.zone.value = 'utc'; }}>UTC</button>
-      <button type="button" aria-pressed={custom ? 'true' : 'false'} aria-haspopup="dialog" aria-expanded={S.zoneOpen.value ? 'true' : 'false'} onClick={() => { S.zoneOpen.value = !S.zoneOpen.value; }}>
+      <button type="button" data-zone-trigger aria-pressed={custom ? 'true' : 'false'} aria-haspopup="dialog" aria-expanded={S.zoneOpen.value ? 'true' : 'false'} onClick={() => { S.zoneOpen.value = !S.zoneOpen.value; }}>
         {custom ? zoneCity(z) : t('zone.other')}<IconChevronDown size={11} />
       </button>
     </div>
@@ -152,9 +159,8 @@ export function Timeline() {
     const step = (now: number) => {
       const dt = now - last;
       last = now;
-      const next = (S.cursorT.value ?? t0) + dt * 60;
-      if (next >= t1) { S.cursorT.value = t1; setPlaying(false); return; }
-      S.cursorT.value = next;
+      // Holds still while the cursor is dragged along a track; loops at the end.
+      if (!S.scrubbing.peek()) S.cursorT.value = playStep(S.cursorT.value ?? t0, dt, t0, t1);
       raf = requestAnimationFrame(step);
     };
     raf = requestAnimationFrame(step);
@@ -168,6 +174,8 @@ export function Timeline() {
   const onPointer = (e: PointerEvent) => {
     const el = lanesRef.current;
     if (!el) return;
+    // During playback, only a press (or a drag with the button down) moves the cursor, not hovering.
+    if (playing && e.type === 'pointermove' && !(e.buttons & 1)) return;
     const r = el.getBoundingClientRect();
     const f = (e.clientX - r.left - LW) / Math.max(1, r.width - LW);
     if (f < 0 || f > 1) return;
@@ -185,6 +193,9 @@ export function Timeline() {
     : '';
   const step = sel ? sel.track.derived.stats.intervalS * 1000 : 1000;
   const tickList = ticks(t0, t1, tickW, offsetMinutes(t0, z));
+  // Tracks that run past midnight or over several days: the readout shows the
+  // date, and a tick at midnight shows the new date instead of 12:00 AM.
+  const multiDay = differentDays(t0, t1, z);
 
   return (
     <section class="timeline" aria-label={t('timeline.label')}>
@@ -193,7 +204,7 @@ export function Timeline() {
           {playing ? <IconPause /> : <IconPlay />}
         </button>
         {sel && <span class="badge small" style={{ background: badgeOf(sel) }}>{sel.id}</span>}
-        <span class="tl-time mono" aria-live="polite">{fmtClock(selFix ? selFix.t : cursor, z, loc)}</span>
+        <span class="tl-time mono" aria-live="polite">{(multiDay ? fmtDateClock : fmtClock)(selFix ? selFix.t : cursor, z, loc)}</span>
         <span class="muted small tl-offset">{offsetLabel(cursor, z)}</span>
         <span class="tl-divider" />
         <span class="tl-values mono">{readout}</span>
@@ -214,7 +225,9 @@ export function Timeline() {
       </div>
       <div class="tl-ticks" style={{ marginLeft: `${LW}px` }} aria-hidden="true">
         {tickList.map((tk) => (
-          <span key={tk} style={{ left: `${((tk - t0) / Math.max(1, t1 - t0)) * 100}%` }}>{fmtClock(tk, z, loc, false)}</span>
+          isMidnight(tk, z)
+            ? <span key={tk} class="tick-date" style={{ left: `${((tk - t0) / Math.max(1, t1 - t0)) * 100}%` }}>{fmtShortDate(tk, z, loc)}</span>
+            : <span key={tk} style={{ left: `${((tk - t0) / Math.max(1, t1 - t0)) * 100}%` }}>{fmtClock(tk, z, loc, false)}</span>
         ))}
       </div>
     </section>

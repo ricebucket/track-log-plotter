@@ -8,19 +8,17 @@ Plot GPS track logs on a map, in your browser. Open GPX and NMEA files from your
 
 ![Track Log Plotter: three tracks in Manhattan and on Roosevelt Island on a light basemap, the track list with a speed legend and an HDOP halo key, a fix inspector card on the map, and the timeline with one lane per track](docs/screenshots/desktop-en.png)
 
-The screenshot shows the synthetic New York City sample ride that the app offers on its first screen.
-
 ## What it does
 
 - **Several tracks.** Up to ten loaded and three shown at once. One track on its own gets broad multi-hue colors; with several, each track has its own color range so they stay apart.
 - **Color and halo.** Pick a measure for each, per track. The halo widens toward the far end of its measure, so two measures read at once.
-- **Timeline.** One lane per shown track and a shared cursor. Tracks recorded at the same time line up by clock (two loggers carried together); a track recorded at another time lines up at its start.
+- **Timeline.** One lane per shown track and a shared cursor; the selected track's lane is a graph filled with its map colors. Drag along a track on the map to move the cursor there too, or press play to replay the tracks in a loop. Tracks recorded at the same time line up by clock (two loggers carried together); a track recorded at another time lines up at its start. Logs that run past midnight or over several days show their dates.
 - **Fix inspector.** The cursor shows every value at that moment: speed, elevation, height above the ellipsoid, grade, HDOP, VDOP, PDOP, satellites used, fix type, course, button presses and the line in the file.
 - **Computed values are marked.** Anything the app works out itself, such as grade, distance or speed from positions, carries a calculator icon that explains how.
 - **Damaged logs still load.** A cut-off last line, bad checksums, sentences glued together, stray bytes, time running backwards or impossible jumps are skipped and listed on the track's details page.
-- **Keyless basemaps.** OpenStreetMap, OpenFreeMap Light and Dark, OpenTopoMap and Esri World Imagery (satellite and hybrid), with links that open the same spot in Google Maps.
+- **Keyless basemaps.** OpenStreetMap, OpenFreeMap Light and Dark, OpenTopoMap and Esri World Imagery (satellite and hybrid), with links that open the same spot in Google Maps, and Street View at the selected point.
 - **Time zones.** Local time, UTC or any zone.
-- **English and 简体中文**, switched with one click, on desktops and phones.
+- **English and 简体中文**, switched in the Options menu (top right), on desktops and phones. English shows 12-hour times, Chinese 24-hour.
 
 Supports GPX and NMEA.
 

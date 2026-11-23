@@ -32,6 +32,11 @@ export function translate(lang: Lang, key: string, params?: Params): string {
 }
 
 /** Placeholder names used by a message, for the translation tests. */
+/** A language's own name for itself ("English", "中文"), for the language switch. */
+export function langName(lang: Lang): string {
+  return translate(lang, 'lang.name');
+}
+
 export function placeholders(m: Message): string[] {
   const texts = typeof m === 'string' ? [m] : [m.one ?? '', m.other];
   const set = new Set<string>();

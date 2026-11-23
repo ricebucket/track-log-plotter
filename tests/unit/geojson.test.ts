@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildPaths, buildRuns, stepsFor, type MapCtx } from '../../src/map/geojson';
+import { boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildMarks, buildPaths, buildRuns, metersPerPixel, stepsFor, type MapCtx } from '../../src/map/geojson';
 import { addTracks } from '../../src/state/logic';
 import { buildScale } from '../../src/color/scale';
 import type { LoadedTrack, MeasureKey } from '../../src/model/types';
 import { FAMILIES, SINGLE } from '../../src/color/palettes';
-import { columns, tickStep, ticks } from '../../src/ui/timelineMath';
+import { columns, PLAY_SPEED, playStep, tickStep, ticks } from '../../src/ui/timelineMath';
 import { scaleBar } from '../../src/ui/scaleBar';
 import { load } from '../helpers/fixtures';
 
@@ -70,7 +70,34 @@ describe('map features', () => {
   });
 });
 
+describe('dots for tiny tracks', () => {
+  it('marks a shown track only when it is too small to see', () => {
+    const items = addTracks([], [load('central-park-loop.nmea'), load('roosevelt-island-run.gpx')]).items;
+    expect(buildMarks(items, 14).features).toEqual([]);
+    const far = buildMarks(items, 5).features;
+    expect(far.map((f) => f.properties.id)).toEqual(['A', 'B']);
+    expect(far[0].properties.c).toBe(FAMILIES[items[0].fam % 3].badge);
+    // The dot sits in the middle of the track's box.
+    const box = items[0].track.derived.stats.bbox;
+    expect(far[0].geometry.coordinates).toEqual([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]);
+    items[1].vis = false;
+    expect(buildMarks(items, 5).features.map((f) => f.properties.id)).toEqual(['A']);
+  });
+
+  it('knows how many meters a pixel covers', () => {
+    expect(metersPerPixel(0, 0)).toBeCloseTo(78_271.5, 0);
+    expect(metersPerPixel(60, 1)).toBeCloseTo(78_271.5 / 4, 0);
+  });
+});
+
 describe('timeline math', () => {
+  it('plays at sixty times real time and loops at the end', () => {
+    const t0 = 1_000_000, t1 = t0 + 600_000;
+    expect(playStep(t0, 100, t0, t1)).toBe(t0 + 100 * PLAY_SPEED);
+    expect(playStep(t1 - 1000, 100, t0, t1)).toBe(t0);
+    expect(playStep(t0 - 5000, 16, t0, t1)).toBe(t0);
+  });
+
   it('spaces ticks so labels never crowd', () => {
     expect(tickStep(30 * 60_000, 900)).toBe(300_000);
     expect(tickStep(10 * 3600_000, 300)).toBe(10_800_000);

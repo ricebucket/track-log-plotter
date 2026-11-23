@@ -12,6 +12,7 @@ export const IconEye = ({ size = 19 }: P) => svg(size, [<path key="a" d="M1.8 9S
 export const IconEyeOff = ({ size = 19 }: P) => svg(size, <path d="M3.2 6.4C2.3 7.6 1.8 9 1.8 9s2.6 5 7.2 5c1.1 0 2.1-.3 3-.7M6.3 4.5C7.1 4.2 8 4 9 4c4.6 0 7.2 5 7.2 5s-.6 1.2-1.7 2.4M2.5 2.5l13 13" />, 1.6);
 export const IconPlus = ({ size = 14 }: P) => svg(size, <path d="M9 3.5v11M3.5 9h11" />, 2);
 export const IconChevronDown = ({ size = 14 }: P) => svg(size, <path d="M5 7l4 4 4-4" />, 2);
+export const IconChevronRight = ({ size = 14 }: P) => svg(size, <path d="M7 5l4 4-4 4" />, 2);
 export const IconChevronUp = ({ size = 14 }: P) => svg(size, <path d="M5 11l4-4 4 4" />, 2);
 export const IconBack = ({ size = 16 }: P) => svg(size, <path d="M11 4.5L6.5 9l4.5 4.5" />, 2);
 export const IconClose = ({ size = 15 }: P) => svg(size, <path d="M4.5 4.5l9 9M13.5 4.5l-9 9" />, 1.9);
@@ -37,8 +38,9 @@ export const IconLock = ({ size = 16 }: P) => svg(size, <path d="M5 8.5h8a1 1 0 
 export const IconZoomIn = ({ size = 18 }: P) => svg(size, <path d="M9 4v10M4 9h10" />, 2);
 export const IconZoomOut = ({ size = 18 }: P) => svg(size, <path d="M4 9h10" />, 2);
 export const IconFit = ({ size = 18 }: P) => svg(size, <path d="M3 7V3h4M11 3h4v4M15 11v4h-4M7 15H3v-4" />, 1.8);
-export const IconNorth = ({ size = 18 }: P) => (
-  <svg width={size} height={size} viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path d="M9 2.5l3.6 9.5L9 10.3 5.4 12z" fill="currentColor" /><path d="M7.4 16V13.4l3.2 2.6v-2.6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+/** A compass needle: the red half points north. */
+export const IconCompass = ({ size = 20 }: P) => (
+  <svg width={size} height={size} viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path d="M9 1.5l3.2 7.5H5.8z" fill="#d03b3b" /><path d="M9 16.5L5.8 9h6.4z" fill="currentColor" fill-opacity="0.4" /></svg>
 );
 export const IconFlag = ({ size = 12 }: P) => (
   <svg width={size} height={size} viewBox="0 0 10 10" aria-hidden="true" focusable="false"><path d="M2 9.5V1h5.5L6.5 3l1 2H2" fill="currentColor" /></svg>

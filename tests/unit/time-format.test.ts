@@ -6,11 +6,15 @@ import { googleBaseFor, googleViewUrl, streetViewUrl } from '../../src/links/goo
 const t = Date.UTC(2026, 5, 14, 13, 5, 9); // 09:05:09 in New York (UTC−4)
 
 describe('time zones', () => {
-  it('formats clock times in the chosen zone', () => {
-    expect(fmtClock(t, 'utc', 'en-US')).toBe('13:05:09');
-    expect(fmtClock(t, 'America/New_York', 'en-US')).toBe('09:05:09');
+  it('formats clock times in the chosen zone: 12-hour in English, 24-hour in Chinese', () => {
+    // Intl puts a narrow no-break space before AM and PM.
+    const en = (z: Parameters<typeof fmtClock>[1], s = true) => fmtClock(t, z, 'en-US', s).replace(/\s/g, ' ');
+    expect(en('utc')).toBe('1:05:09 PM');
+    expect(en('America/New_York')).toBe('9:05:09 AM');
+    expect(en('Europe/London', false)).toBe('2:05 PM');
     expect(fmtClock(t, 'Asia/Tokyo', 'zh-CN')).toBe('22:05:09');
-    expect(fmtClock(t, 'Europe/London', 'en-US', false)).toBe('14:05');
+    expect(fmtClock(t, 'America/New_York', 'zh-CN')).toBe('09:05:09');
+    expect(fmtClock(t, 'utc', 'zh-CN', false)).toBe('13:05');
   });
 
   it('formats dates in both languages', () => {

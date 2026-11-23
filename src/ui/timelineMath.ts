@@ -6,6 +6,15 @@ import { stepOf, valueAt, type Scale } from '../color/scale';
 const STEPS_S = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400];
 
 /** Tick spacing (ms) that keeps labels at least minPx apart. */
+/** Playback speed: track time runs this many times faster than real time. */
+export const PLAY_SPEED = 60;
+
+/** The cursor after one playback frame. Playback loops: past the end it starts over. */
+export function playStep(cursor: number, dtMs: number, t0: number, t1: number): number {
+  const next = cursor + dtMs * PLAY_SPEED;
+  return next >= t1 || next < t0 ? t0 : next;
+}
+
 export function tickStep(spanMs: number, widthPx: number, minPx = 84): number {
   const target = (spanMs / Math.max(1, widthPx)) * minPx;
   for (const s of STEPS_S) if (s * 1000 >= target) return s * 1000;

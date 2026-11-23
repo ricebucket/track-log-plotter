@@ -62,6 +62,17 @@ describe('parseNmea', () => {
     expect(p.notes).toContainEqual({ kind: 'midnight' });
   });
 
+  it('keeps going past midnight in a log with no dates at all', () => {
+    // Position sentences only: no RMC, so no date anywhere in the file.
+    const text = [gga('235958.00'), gga('235959.00'), gga('000000.00'), gga('000001.00'), ''].join('\n');
+    const p = parseNmea(text);
+    expect(p.cols.n).toBe(4);
+    for (let i = 1; i < p.cols.n; i++) expect(p.cols.t[i] - p.cols.t[i - 1]).toBe(1000);
+    expect(p.problems).toEqual([]);
+    expect(p.notes).toContainEqual({ kind: 'noDate' });
+    expect(p.notes).toContainEqual({ kind: 'midnight' });
+  });
+
   it('dates GGA fixes logged before the first RMC', () => {
     const p = parseNmea([gga('130458.00'), gga('130459.00'), rmc('130500.00'), ''].join('\n'));
     expect(new Date(p.cols.t[0]).toISOString()).toBe('2026-06-14T13:04:58.000Z');

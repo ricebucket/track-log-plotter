@@ -30,9 +30,27 @@ export function isValidZone(z: string): boolean {
   try { return Intl.DateTimeFormat('en-US', { timeZone: z }).resolvedOptions().timeZone.length > 0; } catch { return false; }
 }
 
-/** 24-hour clock time, "13:05:09". */
+/** Clock time: 12-hour in English ("1:05:09 PM"), 24-hour in Chinese ("13:05:09"). */
 export function fmtClock(t: number, zone: ZoneSel, locale: string, seconds = true): string {
-  return dtf(locale, zone, { hour: '2-digit', minute: '2-digit', second: seconds ? '2-digit' : undefined, hourCycle: 'h23' }).format(t);
+  const h12 = !locale.startsWith('zh');
+  return dtf(locale, zone, { hour: h12 ? 'numeric' : '2-digit', minute: '2-digit', second: seconds ? '2-digit' : undefined, hourCycle: h12 ? 'h12' : 'h23' }).format(t);
+}
+
+/** Short date and clock time, "Jul 12, 12:05:09 AM" or "7月12日 00:05:09". */
+export function fmtDateClock(t: number, zone: ZoneSel, locale: string, seconds = true): string {
+  return `${fmtShortDate(t, zone, locale)}${locale.startsWith('zh') ? ' ' : ', '}${fmtClock(t, zone, locale, seconds)}`;
+}
+
+/** Whether two times fall on different calendar days in a zone. */
+export function differentDays(a: number, b: number, zone: ZoneSel): boolean {
+  const f = dtf('en-CA', zone, { year: 'numeric', month: '2-digit', day: '2-digit' });
+  return f.format(a) !== f.format(b);
+}
+
+/** Whether a time is exactly midnight in a zone. */
+export function isMidnight(t: number, zone: ZoneSel): boolean {
+  const local = t + offsetMinutes(t, zone) * 60_000;
+  return ((local % 86_400_000) + 86_400_000) % 86_400_000 === 0;
 }
 
 /** Date with weekday, "Sun, Jun 14, 2026" or "2026年6月14日周日". */

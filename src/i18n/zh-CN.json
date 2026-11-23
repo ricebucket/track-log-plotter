@@ -11,7 +11,6 @@
   "panel.hide": "收起面板",
   "panel.show": "展开面板",
 
-  "settings.label": "设置",
   "settings.units": "单位",
   "settings.metric": "公制（km/h、公里、米）",
   "settings.imperial": "英制（mph、英里、英尺）",
@@ -40,7 +39,7 @@
   "colorHalo.label": "颜色与光晕",
   "colorHalo.color": "颜色",
   "colorHalo.halo": "光晕",
-  "colorHalo.applyAll": "所有轨迹都使用此颜色和光晕",
+  "colorHalo.applyAll": "应用到所有轨迹",
 
   "measure.speed": "速度",
   "measure.ele": "海拔",
@@ -67,7 +66,6 @@
   "picker.haloIntro": "线条周围的一圈柔和色带，越接近数据的另一端越宽。",
   "picker.notInFile": "此文件中没有。",
 
-  "legend.share": "时间占比",
   "legend.withUnit": "{name}（{unit}）",
   "legend.grade": "坡度（%），上坡或下坡",
   "legend.hdopRelative": "HDOP，在本轨迹内排名",
@@ -93,9 +91,7 @@
   "onmap.gapsHint": "记录器一段时间没有定位的地方显示为虚线。",
 
   "google.title": "在 Google 地图中打开",
-  "google.view": "当前视图",
-  "google.streetCursor": "光标处的街景",
-  "google.streetCenter": "此处的街景",
+  "google.view": "当前地图视图",
   "google.note": "在新标签页中打开同一位置",
 
   "details.date": "日期",
@@ -206,7 +202,7 @@
   "map.zoomIn": "放大",
   "map.zoomOut": "缩小",
   "map.fit": "缩放到轨迹",
-  "map.north": "指向正北",
+  "map.north": "恢复正北朝上",
 
   "inspect.ellipsoid": "椭球高",
   "inspect.course": "航向",
@@ -254,5 +250,20 @@
   "computed.hdopRelative": "此文件的 HDOP 不符合标准 HDOP 的规律，因此在本轨迹内排名：每一档包含四分之一的定位点。",
   "computed.shares": "根据定位点之间的时间，计算轨迹在每一档所花时间的占比。",
   "computed.steps": "分档依据当前显示的轨迹选定，因此同一种颜色在这些轨迹上代表相同的数值。显示或隐藏轨迹时，分档会随之变化。",
-  "computed.stepsLog": "显示的轨迹比跑步速度（{running}）更快，因此速度按对数刻度分档：每一档的速度约为前一档的 {ratio} 倍。"
+  "computed.stepsLog": "显示的轨迹比跑步速度（{running}）更快，因此速度按对数刻度分档：每一档的速度约为前一档的 {ratio} 倍。",
+  "lang.name": "中文",
+  "options.title": "选项",
+  "tracks.clear": "移除全部轨迹",
+  "tracks.clearConfirm": {"other": "移除全部 {n} 条轨迹？"},
+  "tracks.clearYes": "全部移除",
+  "common.cancel": "取消",
+  "options.hint": "底图、语言和单位",
+  "colorHalo.allColor": "颜色按{m}",
+  "colorHalo.allPlain": "单色线条",
+  "colorHalo.allHalo": "光晕按{m}",
+  "colorHalo.allNoHalo": "无光晕",
+  "colorHalo.applyAllHint": "所有轨迹：{color}，{halo}",
+  "google.street": "所选位置的街景",
+  "google.myMaps": "Google 我的地图",
+  "google.myMapsHow": "要在 Google 上查看轨迹：在“我的地图”中新建地图，点图层下的“导入”，选择你的 GPX 文件。文件会上传到你的 Google 帐号。NMEA 文件无法在那里导入。"
 }

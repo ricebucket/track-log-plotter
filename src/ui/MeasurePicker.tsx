@@ -16,7 +16,7 @@ export function MeasurePicker() {
   const item = S.selected.value;
   const ref = useRef<HTMLDivElement>(null);
   const close = () => { S.picker.value = null; };
-  useDismiss(ref, close);
+  useDismiss(ref, close, '[data-picker-trigger]');
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
   }, [p?.which]);

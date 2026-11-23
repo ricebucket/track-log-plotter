@@ -60,9 +60,6 @@ button:disabled { cursor: default; opacity: 0.5; }
 .seg button { height: 30px; padding: 0 8px; display: inline-flex; align-items: center; gap: 4px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-3); font-size: 12px; font-weight: 700; white-space: nowrap; }
 .seg button[aria-pressed='true'] { background: var(--ink); color: #fff; }
 .seg.small button { height: 28px; padding: 0 10px; font-size: 11.5px; }
-.seg.on-dark { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.18); }
-.seg.on-dark button { color: rgba(255, 255, 255, 0.82); }
-.seg.on-dark button[aria-pressed='true'] { background: #fff; color: var(--ink); }
 
 .radio-dot { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--faint); background: #fff; }
 [aria-checked='true'] > .radio-dot { border: 5px solid var(--ink); }
@@ -82,7 +79,6 @@ button:disabled { cursor: default; opacity: 0.5; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .popover { position: absolute; z-index: 30; display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 14px; background: var(--card); color: var(--ink); box-shadow: var(--shadow-pop); }
-.settings { top: 58px; right: 14px; width: 270px; }
 .radio-list { display: flex; flex-direction: column; gap: 2px; }
 .radio-list button { display: flex; align-items: center; gap: 9px; min-height: 36px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; text-align: left; font-size: 13px; }
 .radio-list button[aria-checked='true'] { background: rgba(16, 24, 32, 0.06); font-weight: 700; }
@@ -110,25 +106,31 @@ button:disabled { cursor: default; opacity: 0.5; }
 .stats .num { font-family: var(--mono); font-size: 14.5px; font-weight: 600; }
 .stats .unit { font-size: 11px; font-weight: 500; color: var(--muted); }
 .color-halo { display: flex; flex-direction: column; gap: 10px; margin-left: -10px; padding: 10px 10px 4px; border-radius: 10px; background: rgba(16, 24, 32, 0.025); box-shadow: inset 0 0 0 1px rgba(16, 24, 32, 0.09); }
-.measure-row { display: flex; align-items: center; gap: 8px; }
-.measure-label { flex: none; width: 46px; font-size: 12.5px; font-weight: 700; }
-.select-btn { flex: 1 1 auto; min-width: 0; height: 36px; padding: 0 10px 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid var(--line-2); border-radius: 9px; background: #fff; font-size: 13px; font-weight: 600; text-align: left; }
-.select-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.select-btn[aria-expanded='true'] { border-color: var(--ink); }
+/* Color and halo headings: they open the measure pane beside the panel, so
+   they look like section headings with a "go to" arrow, not like drop-downs. */
+.measure-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 6px 8px 6px 10px; border: 0; border-radius: 9px; background: rgba(16, 24, 32, 0.055); color: var(--ink); text-align: left; }
+.measure-btn:hover { background: rgba(16, 24, 32, 0.1); }
+.measure-btn.is-open { background: var(--ink); color: #fff; }
+.measure-label { flex: none; min-width: 44px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.measure-btn.is-open .measure-label { color: rgba(255, 255, 255, 0.72); }
+.measure-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 700; }
+.measure-btn > svg { flex: none; opacity: 0.75; }
 .legend { display: flex; flex-direction: column; gap: 4px; }
-.legend-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 11.5px; color: var(--muted); }
-.legend-title { font-weight: 600; color: var(--ink-3); }
+.legend-why { align-self: end; display: inline-flex; }
 .legend-grid, .halo-grid { display: grid; gap: 4px; }
-.legend-step { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; font-size: 11px; white-space: nowrap; }
+.legend-step { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; font-size: 11px; }
+/* Long step labels ("14.0–15.5") wrap inside their column instead of running into the next. */
+.legend-step .mono { max-width: 100%; overflow-wrap: anywhere; line-height: 13px; }
 .halo-key { display: flex; flex-direction: column; gap: 4px; }
 .halo-step { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; color: var(--ink-3); }
 
-.toggle-chip { height: 36px; padding: 0 12px 0 8px; display: inline-flex; align-items: center; gap: 8px; border-radius: 10px; border: 1px solid var(--line-2); background: #fff; color: var(--ink-3); font-size: 12.5px; font-weight: 700; }
-.toggle-chip.is-on { border: 1.5px solid var(--ink); color: var(--ink); }
-.toggle-chip .glyph { flex: none; opacity: 0.45; }
-.toggle-chip.is-on .glyph { opacity: 1; }
-.check { flex: none; width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--faint); display: inline-flex; align-items: center; justify-content: center; }
-.is-on .check { background: var(--ink); border-color: var(--ink); color: #fff; }
+/* On the map switches: the dark border shows that one is on. */
+.toggle-chip { height: 44px; padding: 0 14px 0 6px; display: inline-flex; align-items: center; gap: 8px; border-radius: 10px; border: 1px solid var(--line-2); background: #fff; color: var(--muted); font-size: 12.5px; font-weight: 700; }
+.toggle-chip.is-on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); color: var(--ink); }
+.toggle-chip .glyph { flex: none; opacity: 0.4; filter: grayscale(1); }
+.toggle-chip.is-on .glyph { opacity: 1; filter: none; }
+.confirm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; padding: 10px 10px 10px 12px; border-radius: 10px; background: var(--amber-bg); color: var(--amber-ink); box-shadow: inset 0 0 0 1px var(--amber-ring); font-size: 12.5px; font-weight: 700; }
+.btn-danger { height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: #8a1c1c; color: #fff; font-size: 12.5px; font-weight: 700; }
 .link-chip { height: 34px; padding: 0 11px 0 12px; display: inline-flex; align-items: center; gap: 6px; border-radius: 10px; border: 1px solid rgba(16, 24, 32, 0.18); color: var(--ink); text-decoration: none; font-size: 12.5px; font-weight: 700; background: #fff; }
 
 /* ---------- measure pane ---------- */
@@ -208,7 +210,16 @@ button:disabled { cursor: default; opacity: 0.5; }
 .zoom-stack { display: flex; flex-direction: column; border-radius: 12px; background: var(--panel-bg); box-shadow: var(--shadow); overflow: hidden; }
 .zoom-stack button { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-bottom: 1px solid rgba(16, 24, 32, 0.1); background: transparent; }
 .zoom-stack button:last-child { border-bottom: 0; }
-.basemap-menu { top: 62px; right: 52px; width: 384px; max-height: calc(100vh - 100px); overflow-y: auto; }
+.my-maps { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 10px; }
+.my-maps p { margin: 0; line-height: 17px; }
+.tl-ticks .tick-date { font-weight: 800; color: var(--ink); }
+.bm-opts { align-self: stretch; display: flex; align-items: center; gap: 6px; margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--line); font-size: 12.5px; font-weight: 700; }
+.options-menu { top: 62px; right: 52px; width: 384px; max-height: calc(100vh - 100px); overflow-y: auto; gap: 14px; }
+.opt-sec { display: flex; flex-direction: column; gap: 8px; }
+.opt-sec + .opt-sec { padding-top: 14px; border-top: 1px solid var(--line); }
+.opt-sec h3 { margin: 0; }
+.opt-sec .seg { align-self: flex-start; }
+.compass span { display: inline-flex; transition: transform 0.2s; }
 .bm-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 10px; }
 .bm-tile { display: flex; flex-direction: column; gap: 5px; padding: 0; border: 0; background: transparent; text-align: left; }
 .bm-thumb { position: relative; display: block; height: 64px; border-radius: 9px; overflow: hidden; box-shadow: 0 0 0 1px var(--line); }
@@ -230,8 +241,12 @@ button:disabled { cursor: default; opacity: 0.5; }
 .attribution.on-dark { background: rgba(0, 0, 0, 0.55); color: #e8edf1; }
 
 /* ---------- inspector, toasts, empty state ---------- */
-.tooltip { position: absolute; z-index: 12; padding: 10px 12px; border-radius: 12px; background: var(--card); box-shadow: var(--shadow-pop); pointer-events: none; font-size: 12px; }
+/* The fix card lets the mouse through to the map and the timeline under it;
+   only its close button takes clicks. It sits above the map buttons so they
+   never cover that button. */
+.tooltip { position: absolute; z-index: 16; padding: 10px 12px; border-radius: 12px; background: var(--card); box-shadow: var(--shadow-pop); pointer-events: none; font-size: 12px; }
 .tip-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tip-close { width: 26px; height: 26px; margin: -4px -6px -4px auto; pointer-events: auto; }
 .tip-time { font-size: 13px; font-weight: 700; }
 .tip-rows { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; }
 .tip-rows div { display: contents; }
@@ -286,8 +301,11 @@ button:disabled { cursor: default; opacity: 0.5; }
   .picker { left: 0 !important; right: 0; bottom: 0; top: auto !important; width: auto; max-height: 72vh !important; border-radius: 18px 18px 0 0; }
   .map-tools { top: 8px; right: 8px; }
   .bm-button { padding: 6px; height: 52px; }
-  .bm-button-text, .bm-button > svg, .zoom-stack .zoom-btn { display: none; }
-  .basemap-menu { right: 0; top: 60px; width: min(384px, calc(100vw - 16px)); }
+  .zoom-stack .zoom-btn { display: none; }
+  /* Hidden on screen but still read out, so the button keeps its name. */
+  .bm-button-text, .bm-opts-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .bm-opts { margin-left: 0; padding: 0 4px 0 8px; }
+  .options-menu { right: 0; top: 60px; width: min(384px, calc(100vw - 16px)); }
   .map-footer { left: 8px; right: 68px; top: 8px; bottom: auto; align-items: flex-start; }
   .timeline-min .map-footer { left: 8px; bottom: auto; }
   .scale { display: none; }

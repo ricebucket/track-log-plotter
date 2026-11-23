@@ -1,13 +1,13 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { effect, signal } from '@preact/signals';
-import type { GeoJSONSource, Map as MlMap, StyleSpecification } from 'maplibre-gl';
+import type { GeoJSONSource, Map as MlMap, MapLayerMouseEvent, MapLayerTouchEvent, StyleSpecification } from 'maplibre-gl';
 // MapLibre looks for its worker next to its own module, which no longer holds
 // once Vite bundles it. Have Vite bundle the worker too, and say where it is.
 import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import * as S from '../state/store';
 import { trackUid, type TrackItem } from '../state/logic';
 import { BASEMAPS, TEXT_FONT, ZH_LABEL } from './basemaps';
-import { boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildPaths, buildRuns } from './geojson';
+import { boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildMarks, buildPaths, buildRuns } from './geojson';
 import { CASING, GAP } from '../color/palettes';
 import { haversine } from '../derive/geo';
 import { mapApi, mapFailed, tipXY } from './bridge';
@@ -21,7 +21,7 @@ function plus(base: number, add: number | unknown[]) {
   return typeof add === 'number' ? base + add : ['+', base, add];
 }
 
-const SOURCES = ['tlp-runs', 'tlp-paths', 'tlp-gaps', 'tlp-fixes', 'tlp-flags', 'tlp-cursors'] as const;
+const SOURCES = ['tlp-runs', 'tlp-paths', 'tlp-gaps', 'tlp-fixes', 'tlp-flags', 'tlp-marks', 'tlp-cursors'] as const;
 const EMPTY = { type: 'FeatureCollection', features: [] } as const;
 /** Fix glyphs draw from zoom 17; their data is sent a little before that. */
 const FIX_GLYPH_ZOOM = 17;
@@ -74,6 +74,9 @@ function addOwnLayers(map: MlMap) {
   map.addLayer({ id: 'tlp-fix-text', type: 'symbol', source: 'tlp-fixes', minzoom: FIX_GLYPH_ZOOM, layout: { 'text-field': ['get', 's'], 'text-font': TEXT_FONT, 'text-size': 9, 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#101820' } });
   map.addLayer({ id: 'tlp-flag', type: 'circle', source: 'tlp-flags', paint: { 'circle-radius': 10, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } });
   map.addLayer({ id: 'tlp-flag-text', type: 'symbol', source: 'tlp-flags', layout: { 'text-field': ['get', 'label'], 'text-font': TEXT_FONT, 'text-size': 10, 'text-allow-overlap': true }, paint: { 'text-color': '#ffffff' } });
+  // Dots for tracks too small to see at this zoom; clicking one zooms to it.
+  map.addLayer({ id: 'tlp-mark', type: 'circle', source: 'tlp-marks', paint: { 'circle-radius': 11, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2.5 } });
+  map.addLayer({ id: 'tlp-mark-text', type: 'symbol', source: 'tlp-marks', layout: { 'text-field': ['get', 'id'], 'text-font': TEXT_FONT, 'text-size': 12, 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#ffffff' } });
   map.addLayer({ id: 'tlp-cursor-ring', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 10, 'circle-color': '#ffffff' } });
   map.addLayer({ id: 'tlp-cursor', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 7, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#101820', 'circle-stroke-width': 3 } });
 }
@@ -115,6 +118,8 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   // Becomes true each time a style (and our layers) is ready; effects wait for it.
   const ready = signal(false);
   const zoomedIn = signal(false);
+  // The zoom in quarter steps, for the dots that stand in for tiny tracks.
+  const zoomStep = signal(0);
   // Last data sent to each source, so unchanged data is never sent again.
   const sent: Record<string, string> = {};
   // Whether the drawn-lines count (for the browser tests) needs refreshing.
@@ -149,7 +154,7 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   };
   mapApi.zoomIn = () => map.zoomIn();
   mapApi.zoomOut = () => map.zoomOut();
-  mapApi.north = () => map.resetNorth();
+  mapApi.north = () => map.resetNorthPitch();
   mapApi.fit = fit;
 
   /** Sends data to a source only when its key changed since the last send. */
@@ -182,11 +187,14 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     ready.value = true;
   });
   map.on('move', placeTip);
-  map.on('zoomend', () => { zoomedIn.value = map.getZoom() >= FIX_DATA_ZOOM; });
+  map.on('zoomend', () => {
+    zoomedIn.value = map.getZoom() >= FIX_DATA_ZOOM;
+    zoomStep.value = Math.round(map.getZoom() * 4) / 4;
+  });
   map.on('moveend', () => {
     countStale = true;
     const c = map.getCenter();
-    S.mapView.value = { lat: c.lat, lon: c.lng, zoom: map.getZoom(), bearing: map.getBearing() };
+    S.mapView.value = { lat: c.lat, lon: c.lng, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
   });
   map.on('error', () => { /* a tile failed to load; the map keeps going */ });
   // How many track lines are drawn, for the browser tests only (they set
@@ -199,28 +207,103 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     try {
       container.dataset.lines = String(map.queryRenderedFeatures({ layers: ['tlp-line'] }).length);
       container.dataset.selLines = String(map.queryRenderedFeatures({ layers: ['tlp-line-sel'] }).length);
+      const marks = map.queryRenderedFeatures({ layers: ['tlp-mark'] });
+      container.dataset.marks = String(marks.length);
+      const at = marks[0] ? map.project((marks[0].geometry as unknown as { coordinates: [number, number] }).coordinates) : null;
+      container.dataset.markAt = at ? `${Math.round(at.x)},${Math.round(at.y)}` : '';
     } catch { /* style changing */ }
   });
 
-  // Clicking a track line selects it and moves the cursor to the nearest fix.
-  map.on('click', (e) => {
-    if (!ready.peek()) return;
-    const hit = map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers: ['tlp-line', 'tlp-casing'] });
-    const id = hit[0]?.properties?.id as string | undefined;
-    const it = id ? S.items.peek().find((x) => x.id === id) : undefined;
-    if (!it) return;
-    S.select(it.id);
+  /**
+   * The fix of a track nearest to a point. While dragging, `prev` is the last
+   * fix picked: where the track passes the same place twice, a fix close to it
+   * wins when it is about as near, so the cursor stays on the same pass.
+   */
+  const nearestFix = (it: TrackItem, lat: number, lng: number, prev: number): number => {
     const c = it.track.cols;
     let best = 0, bd = Infinity;
     for (let i = 0; i < c.n; i++) {
-      const dd = haversine(e.lngLat.lat, e.lngLat.lng, c.lat[i], c.lon[i]);
-      if (dd < bd) { bd = dd; best = i; }
+      const d = haversine(lat, lng, c.lat[i], c.lon[i]);
+      if (d < bd) { bd = d; best = i; }
     }
-    S.seek(it.id, c.t[best]);
+    if (prev < 0) return best;
+    // 12 pixels at this zoom, in meters (MapLibre tiles are 512 pixels wide).
+    const tol = (12 * 40_075_016.7 * Math.cos((lat * Math.PI) / 180)) / (512 * 2 ** map.getZoom());
+    let near = -1, nd = Infinity;
+    for (let i = Math.max(0, prev - 400); i < Math.min(c.n, prev + 400); i++) {
+      const d = haversine(lat, lng, c.lat[i], c.lon[i]);
+      if (d < nd) { nd = d; near = i; }
+    }
+    return near >= 0 && nd <= bd + tol ? near : best;
+  };
+  const itemAt = (id: unknown) => (typeof id === 'string' ? S.items.peek().find((x) => x.id === id) : undefined);
+
+  // Clicking a track line selects it and moves the cursor to the nearest fix.
+  // Clicking anywhere else removes the cursor, which closes the fix card.
+  map.on('click', (e) => {
+    if (!ready.peek()) return;
+    // A dot for a track too small to see: select that track and zoom to it.
+    const dot = itemAt(map.queryRenderedFeatures(e.point, { layers: ['tlp-mark'] })[0]?.properties?.id);
+    if (dot) {
+      S.select(dot.id);
+      const b = dot.track.derived.stats.bbox;
+      map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: padding(), maxZoom: 16, duration: 500 });
+      return;
+    }
+    const hit = map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers: ['tlp-line', 'tlp-casing'] });
+    const it = itemAt(hit[0]?.properties?.id);
+    if (!it) { S.clearCursor(); return; }
+    S.select(it.id);
+    S.seek(it.id, it.track.cols.t[nearestFix(it, e.lngLat.lat, e.lngLat.lng, -1)]);
   });
+
+  // Pressing on a track and dragging moves the cursor along it, like the
+  // timeline does, and the fix card follows. The map doesn't pan meanwhile.
+  let scrubId: string | null = null;
+  let scrubPrev = -1;
+  let scrubAt: { lat: number; lng: number } | null = null;
+  let scrubFrame = 0;
+  const scrubTo = (ll: { lat: number; lng: number }) => {
+    scrubAt = ll;
+    if (scrubFrame) return;
+    scrubFrame = requestAnimationFrame(() => {
+      scrubFrame = 0;
+      const it = itemAt(scrubId);
+      if (!it || !scrubAt) return;
+      scrubPrev = nearestFix(it, scrubAt.lat, scrubAt.lng, scrubPrev);
+      S.seek(it.id, it.track.cols.t[scrubPrev]);
+    });
+  };
+  const startScrub = (e: MapLayerMouseEvent | MapLayerTouchEvent) => {
+    const it = ready.peek() ? itemAt(e.features?.[0]?.properties?.id) : undefined;
+    if (!it) return;
+    e.preventDefault(); // keeps the map from panning
+    scrubId = it.id;
+    scrubPrev = -1;
+    S.scrubbing.value = true;
+    S.select(it.id);
+    map.getCanvas().style.cursor = 'grabbing';
+    scrubTo(e.lngLat);
+  };
+  const endScrub = () => {
+    if (!scrubId) return;
+    scrubId = null;
+    S.scrubbing.value = false;
+    map.getCanvas().style.cursor = '';
+  };
+  map.on('mousedown', 'tlp-casing', (e) => { if (e.originalEvent.button === 0) startScrub(e); });
+  map.on('touchstart', 'tlp-casing', (e) => { if (e.points.length === 1) startScrub(e); });
+  map.on('mousemove', (e) => { if (scrubId) scrubTo(e.lngLat); });
+  map.on('touchmove', (e) => { if (scrubId) scrubTo(e.lngLat); });
+  map.on('touchend', endScrub);
+  map.on('touchcancel', endScrub);
+  window.addEventListener('mouseup', endScrub);
+  disposers.push(() => { window.removeEventListener('mouseup', endScrub); cancelAnimationFrame(scrubFrame); });
   // Hover listeners query features on every mouse move, so listen on one layer only.
-  map.on('mouseenter', 'tlp-line', () => { map.getCanvas().style.cursor = 'pointer'; });
-  map.on('mouseleave', 'tlp-line', () => { map.getCanvas().style.cursor = ''; });
+  for (const layer of ['tlp-line', 'tlp-mark']) {
+    map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
+  }
 
   let lastStyle = S.basemap.peek() + S.lang.peek();
   disposers.push(effect(() => {
@@ -244,6 +327,12 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     const vis = S.visible.value;
     send('tlp-paths', visKey(vis), () => buildPaths(vis, { dark: false, single: false, selectedId: null, scaleFor: S.scaleFor }));
     send('tlp-flags', visKey(vis), () => buildFlags(vis, { dark: false, single: false, selectedId: null, scaleFor: S.scaleFor }));
+  }));
+  disposers.push(effect(() => {
+    if (!ready.value) return;
+    const vis = S.visible.value;
+    const marks = buildMarks(vis, zoomStep.value || map.getZoom());
+    send('tlp-marks', `${visKey(vis)}#${marks.features.map((f) => f.properties.id).join(',')}`, () => marks);
   }));
   disposers.push(effect(() => {
     if (!ready.value) return;

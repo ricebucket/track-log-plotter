@@ -253,7 +253,17 @@ export function parseNmea(text: string): ParsedTrack {
     if (e.date !== null) { nextDate = e.date; nextTod = e.tod; continue; }
     if (nextDate !== null) { if (e.tod > nextTod + 43200) nextDate -= 1; e.date = nextDate; nextTod = e.tod; }
   }
-  if (!anyDate) notes.push({ kind: 'noDate' });
+  if (!anyDate) {
+    // No dates anywhere: count days from zero, rolling over at midnight, so a
+    // log that runs past midnight keeps going forward instead of jumping back.
+    let day = 0, prev = epochs[0]?.tod ?? 0;
+    for (const e of epochs) {
+      if (e.tod < prev - 43200) day += 1;
+      e.date = day;
+      prev = e.tod;
+    }
+    notes.push({ kind: 'noDate' });
+  }
 
   const b = new ColumnBuilder();
   let voidCount = 0;

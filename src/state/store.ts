@@ -103,6 +103,8 @@ export function scaleFor(track: LoadedTrack, key: MeasureKey): Scale {
 
 /** Cursor time on the timeline axis (ms), or null before the user points anywhere. */
 export const cursorT = signal<number | null>(null);
+/** True while the cursor is being dragged along a track on the map; playback holds still meanwhile. */
+export const scrubbing = signal(false);
 /** Time of the cursor in a track's own clock. */
 export function trackTime(id: string, axisT: number): number {
   return axisT - (offsets.value[id] ?? 0);
@@ -114,7 +116,6 @@ export type Page = { kind: 'tracks' } | { kind: 'details'; id: string };
 export const page = signal<Page>({ kind: 'tracks' });
 export const picker = signal<{ which: 'color' | 'halo'; anchorTop: number } | null>(null);
 export const basemapOpen = signal(false);
-export const settingsOpen = signal(false);
 export const zoneOpen = signal(false);
 export const limitNotice = signal<string | null>(null);
 
@@ -127,7 +128,7 @@ export const loadingCount = signal(0);
 /** Bumped when the map should zoom to the visible tracks. */
 export const fitRequest = signal(0);
 /** The map's current view, for the Google Maps link. */
-export const mapView = signal({ lat: 40.7705, lon: -73.9655, zoom: 13, bearing: 0 });
+export const mapView = signal({ lat: 40.7705, lon: -73.9655, zoom: 13, bearing: 0, pitch: 0 });
 
 // ---------- actions ----------
 
@@ -217,6 +218,27 @@ export function openDetails(id: string) {
   });
 }
 
+/** Removes the cursor, which closes the fix card on the map. */
+export function clearCursor() {
+  cursorT.value = null;
+}
+
+/** Removes every loaded track, back to the start screen. */
+export function clearAll() {
+  batch(() => {
+    items.value = [];
+    selectedId.value = null;
+    page.value = { kind: 'tracks' };
+    picker.value = null;
+    zoneOpen.value = false;
+    limitNotice.value = null;
+    loadNotice.value = null;
+    loadErrors.value = [];
+    skippedCount.value = 0;
+    cursorT.value = null;
+  });
+}
+
 /** Moves the cursor to a moment in a track's own clock. */
 export function seek(id: string, trackT: number) {
   cursorT.value = trackT + (offsets.value[id] ?? 0);
@@ -230,7 +252,6 @@ export function resetForTests() {
     page.value = { kind: 'tracks' };
     picker.value = null;
     basemapOpen.value = false;
-    settingsOpen.value = false;
     zoneOpen.value = false;
     limitNotice.value = null;
     loadNotice.value = null;

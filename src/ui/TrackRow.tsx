@@ -5,9 +5,9 @@ import { t } from '../state/store';
 import { palette, haloExtra, haloStyle, CASING, FAMILIES, HIDDEN_BADGE } from '../color/palettes';
 import { timeShares, type Scale } from '../color/scale';
 import { fmtDistance, fmtDuration, fmtPercent, fmtSpeed } from '../format';
-import { fmtShortDate } from '../time/zones';
+import { differentDays, fmtShortDate } from '../time/zones';
 import { measureName, measureTitle, stepLabels, unitOf } from './labels';
-import { IconChevronDown, IconCopy, IconDoc, IconEye, IconEyeOff, IconWarn } from './icons';
+import { IconChevronRight, IconCopy, IconDoc, IconEye, IconEyeOff, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
 
@@ -24,7 +24,9 @@ export function TrackRow({ item }: { item: TrackItem }) {
   const ramp = palette(item.fam, item.color, S.dark.value, S.single.value && item.vis);
   const problems = tr.problems.length;
   const sub = [
-    fmtShortDate(st.start, S.zone.value, loc),
+    differentDays(st.start, st.end, S.zone.value)
+      ? `${fmtShortDate(st.start, S.zone.value, loc)} – ${fmtShortDate(st.end, S.zone.value, loc)}`
+      : fmtShortDate(st.start, S.zone.value, loc),
     `${fmtDistance(st.distanceM, u, loc)} ${u === 'imperial' ? t('unit.mi') : t('unit.km')}`,
     tr.format.toUpperCase(),
   ].join(' · ');
@@ -87,7 +89,7 @@ function TrackDetailsInline({ item }: { item: TrackItem }) {
         <MeasureRow item={item} which="halo" />
         {item.halo !== 'off' && <HaloKey item={item} />}
         {S.items.value.length > 1 && (
-          <button type="button" class="link-btn" onClick={() => S.applyAll(item.id)}>
+          <button type="button" class="link-btn" title={applyAllHint(item)} onClick={() => S.applyAll(item.id)}>
             <IconCopy /><span>{t('colorHalo.applyAll')}</span>
           </button>
         )}
@@ -99,26 +101,36 @@ function TrackDetailsInline({ item }: { item: TrackItem }) {
   );
 }
 
+/** The hover text of "Use on all tracks", naming the measures it copies: "Every track: color by Speed, halo by HDOP". */
+export function applyAllHint(item: TrackItem): string {
+  const color = item.color === 'none' ? t('colorHalo.allPlain') : t('colorHalo.allColor', { m: measureName(item.color) });
+  const halo = item.halo === 'off' ? t('colorHalo.allNoHalo') : t('colorHalo.allHalo', { m: measureName(item.halo) });
+  return t('colorHalo.applyAllHint', { color, halo });
+}
+
+/**
+ * The heading of the color or the halo section. It opens the measure pane
+ * beside the panel, so it reads as a heading with a "go to" arrow rather than
+ * a drop-down list; pressing it again closes the pane.
+ */
 function MeasureRow({ item, which }: { item: TrackItem; which: 'color' | 'halo' }) {
   const key = which === 'color' ? item.color : item.halo;
   const open = S.picker.value?.which === which;
   const relative = key === 'hdop' && item.track.derived.hdopRelative;
-  const name = measureName(key) + (relative ? t('measure.relativeSuffix') : '');
+  const value = key === 'none' || key === 'off' ? measureName(key) : measureTitle(key, relative);
   return (
-    <div class="measure-row">
-      <span class="measure-label" id={`m-${which}`}>{which === 'color' ? t('colorHalo.color') : t('colorHalo.halo')}</span>
-      <button
-        type="button" class="select-btn" aria-haspopup="dialog" aria-expanded={open ? 'true' : 'false'}
-        aria-labelledby={`m-${which} m-${which}-v`}
-        onClick={(e) => {
-          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          S.picker.value = open ? null : { which, anchorTop: r.top };
-        }}
-      >
-        <span id={`m-${which}-v`}>{name}</span>
-        <IconChevronDown />
-      </button>
-    </div>
+    <button
+      type="button" class={`measure-btn${open ? ' is-open' : ''}`} data-picker-trigger
+      aria-haspopup="dialog" aria-expanded={open ? 'true' : 'false'}
+      onClick={(e) => {
+        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        S.picker.value = open ? null : { which, anchorTop: r.top };
+      }}
+    >
+      <span class="measure-label">{which === 'color' ? t('colorHalo.color') : t('colorHalo.halo')}</span>
+      <span class="measure-value">{value}</span>
+      <IconChevronRight />
+    </button>
   );
 }
 
@@ -131,13 +143,10 @@ export function Legend({ item }: { item: TrackItem }) {
   const shares = timeShares(item.track, scale);
   const casing = S.dark.value ? CASING.dark : CASING.light;
   const why = measureHint(item, key, scale);
+  // The heading above names the measure; the calculator explains the steps and the percentages.
   return (
     <div class="legend">
-      <div class="legend-head">
-        <span class="legend-title">{measureTitle(key, scale.relative)}{why && <Computed text={why} />}</span>
-        <span>{t('legend.share')}<Computed text={explain.shares()} /></span>
-      </div>
-      <div class="legend-grid" style={{ gridTemplateColumns: `repeat(${labels.length}, minmax(0, 1fr))` }}>
+      <div class="legend-grid" style={{ gridTemplateColumns: `repeat(${labels.length}, minmax(0, 1fr)) auto` }}>
         {labels.map((lb, i) => (
           <div key={i} class="legend-step">
             <svg width="100%" height="10" viewBox="0 0 60 10" preserveAspectRatio="none" aria-hidden="true">
@@ -148,6 +157,7 @@ export function Legend({ item }: { item: TrackItem }) {
             <span class="mono muted">{fmtPercent(shares[i] ?? 0, S.locale.value)}</span>
           </div>
         ))}
+        <span class="legend-why"><Computed text={why ? `${why} ${explain.shares()}` : explain.shares()} /></span>
       </div>
     </div>
   );

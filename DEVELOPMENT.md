@@ -119,6 +119,10 @@ The site is published at https://ricebucket.github.io/track-log-plotter/. The ba
 Keep your own track logs in `local-tracks/` to try them in the app.
 
 - Git ignores that folder, and the development server won't serve it.
+- The tests also read every log there, so `npm run check` tries the readers on your real files as well as the fixtures:
+  - `npm test` reads each one with the app's own code and checks the result: positions on Earth, times in order, sane derived values, and map data that builds.
+  - `npm run test:e2e` opens up to ten of them in the built app (desktop only) and checks that they load and draw.
+- These checks report file names and counts, never coordinates. Without the folder (on GitHub, for example) they skip themselves.
 - Never commit those logs, and never copy their coordinates into tests. Write synthetic New York City data instead, by extending the fixture generator.
 
 ## Adding a language

@@ -7,6 +7,17 @@ test.beforeEach(async ({ page }) => {
   await page.goto('./');
 });
 
+test('opens the Options menu from the basemap button', async ({ page }) => {
+  const vp = page.viewportSize()!;
+  await page.getByRole('button', { name: /Options/ }).click();
+  const menu = page.getByRole('dialog', { name: 'Options' });
+  await expect(menu.getByRole('heading', { name: 'Language' })).toBeVisible();
+  await expect(menu.getByRole('heading', { name: 'Units' })).toBeVisible();
+  const b = (await menu.boundingBox())!;
+  expect(b.x).toBeGreaterThanOrEqual(0);
+  expect(b.x + b.width).toBeLessThanOrEqual(vp.width);
+});
+
 test('docks the panel as a bottom sheet and the timeline above it', async ({ page }) => {
   await page.getByRole('button', { name: 'Try the sample ride' }).click();
   await expect(page.getByText('3 of 3 shown · 3 loaded')).toBeVisible();

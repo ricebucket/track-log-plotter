@@ -5,6 +5,25 @@ import { load } from '../helpers/fixtures';
 beforeEach(() => S.resetForTests());
 
 describe('store', () => {
+  it('removes every track at once and starts the letters over', () => {
+    S.addLoaded([load('central-park-loop.nmea'), load('roosevelt-island-run.gpx')]);
+    S.select('B');
+    S.cursorT.value = S.items.value[0].track.cols.t[10];
+    S.clearAll();
+    expect(S.items.value).toEqual([]);
+    expect(S.selected.value).toBeNull();
+    expect(S.cursorT.value).toBeNull();
+    S.addLoaded([load('roosevelt-island-run.gpx')]);
+    expect(S.items.value.map((x) => x.id)).toEqual(['A']);
+  });
+
+  it('closes the fix card by removing the cursor', () => {
+    S.addLoaded([load('central-park-loop.nmea')]);
+    S.cursorT.value = S.items.value[0].track.cols.t[10];
+    S.clearCursor();
+    expect(S.cursorT.value).toBeNull();
+  });
+
   it('takes speed and elevation steps from the shown tracks only', () => {
     const ride = load('central-park-loop.nmea');
     const run = load('roosevelt-island-run.gpx');
