@@ -92,6 +92,8 @@ export function MapTools() {
   // two-finger twist). Its needle points north; pressing it turns the map back.
   const v = S.mapView.value;
   const turned = Math.abs(v.bearing) > 0.5 || v.pitch > 0.5;
+  // Fit lives in the timeline's header; while the timeline is minimized it shows here instead.
+  const fitHere = S.items.value.length > 0 && S.timelineMin.value;
   return (
     <div class="map-tools">
       {/* One button for every option: it keeps showing the basemap, and the gear says it holds more. */}
@@ -100,10 +102,10 @@ export function MapTools() {
         <span class="bm-button-text"><span class="eyebrow">{t('basemap.title')}</span><span class="bm-current">{t(`basemap.${id}`)}</span></span>
         <span class="bm-opts"><IconGear size={21} /><span class="sr-only">{t('options.title')}</span></span>
       </button>
-      <div class="zoom-stack">
+      <div class={`zoom-stack${turned ? ' has-compass' : ''}${fitHere ? ' has-fit' : ''}`}>
         <button type="button" class="zoom-btn" aria-label={t('map.zoomIn')} title={t('map.zoomIn')} onClick={() => mapApi.zoomIn()}><IconZoomIn /></button>
         <button type="button" class="zoom-btn" aria-label={t('map.zoomOut')} title={t('map.zoomOut')} onClick={() => mapApi.zoomOut()}><IconZoomOut /></button>
-        <button type="button" aria-label={t('map.fit')} title={t('map.fit')} onClick={() => mapApi.fit()}><IconFit /></button>
+        {fitHere && <button type="button" aria-label={t('map.fit')} title={t('map.fit')} onClick={() => mapApi.fit()}><IconFit /></button>}
         {turned && (
           <button type="button" class="compass" aria-label={t('map.north')} title={t('map.north')} onClick={() => mapApi.north()}>
             <span style={{ transform: `rotate(${-v.bearing}deg)` }}><IconCompass /></span>

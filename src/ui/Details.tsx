@@ -6,8 +6,8 @@ import { differentDays, fmtClock, fmtDate, fmtDateClock, localZoneId, offsetLabe
 import type { TrackItem } from '../state/logic';
 import { useEffect } from 'preact/hooks';
 import { formatName, noteText, problemBody, problemTitle, unitOf } from './labels';
-import { badgeOf } from './TrackRow';
-import { IconBack, IconChevronRight, IconFlag, IconTrash, IconWarn } from './icons';
+import { Badge } from './Badge';
+import { IconBack, IconChevronRight, IconFlag, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
 
@@ -78,7 +78,7 @@ export function Details({ id }: { id: string }) {
         <span class="eyebrow">{t('track.details')}</span>
       </div>
       <div class="details-title">
-        <span class="badge big" style={{ background: badgeOf(item) }}>{item.id}</span>
+        <Badge item={item} size="big" />
         <span class="details-name">
           <span class="track-name">{tr.file}</span>
           <span class="track-sub">{[formatName(tr.format), fmtBytes(tr.sizeBytes, loc), tr.creator, tr.name].filter(Boolean).join(' · ')}</span>
@@ -138,7 +138,6 @@ export function Details({ id }: { id: string }) {
         </section>
       )}
 
-      <button type="button" class="btn-outline danger" onClick={() => S.remove(item.id)}><IconTrash />{t('details.remove')}</button>
     </div>
   );
 }

@@ -42,6 +42,16 @@ test('loads the sample ride and draws the tracks', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('shows Fit on the map only while the timeline is minimized', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  const fit = page.getByRole('button', { name: 'Fit the tracks' });
+  await expect(fit).toHaveCount(1);
+  await expect(page.locator('.timeline').getByRole('button', { name: 'Fit the tracks' })).toBeVisible();
+  await page.getByRole('button', { name: 'Minimize the timeline' }).click();
+  await expect(page.locator('.map-tools').getByRole('button', { name: 'Fit the tracks' })).toBeVisible();
+  await expect(fit).toHaveCount(1);
+});
+
 test('minimizes and restores both panes', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
   // On a desktop the panel is at the side: its arrow points left to hide it.
@@ -68,11 +78,12 @@ test('switches to Chinese from the Options menu and remembers it', async ({ page
 test('explains each measure and recolors the track', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
   await page.getByRole('button', { name: /^Color/ }).click();
-  const pane = page.getByRole('dialog', { name: 'Color track A by' });
+  const pane = page.getByRole('dialog', { name: 'Color, halo and timeline' });
   await expect(pane.getByText(/How many satellites the logger used/)).toBeVisible();
-  await pane.getByRole('radio', { name: /Elevation/ }).click();
+  await pane.getByRole('radio', { name: 'Elevation as the line color' }).check();
+  await expect(page.getByRole('button', { name: /^Color Elevation \(m\)/ })).toBeVisible();
+  await pane.getByRole('button', { name: 'Done' }).click();
   await expect(pane).toHaveCount(0);
-  await expect(page.getByText('Elevation (m)')).toBeVisible();
 });
 
 test('closes the Options menu and the color pane on a second press', async ({ page }) => {
@@ -82,11 +93,11 @@ test('closes the Options menu and the color pane on a second press', async ({ pa
   await expect(page.getByRole('dialog', { name: 'Options' })).toBeVisible();
   await options.click();
   await expect(page.getByRole('dialog', { name: 'Options' })).toHaveCount(0);
-  const color = page.getByRole('button', { name: 'Color Speed (km/h)' });
+  const color = page.getByRole('button', { name: /^Color Speed \(km\/h\)/ });
   await color.click();
-  await expect(page.getByRole('dialog', { name: 'Color track A by' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Color, halo and timeline' })).toBeVisible();
   await color.click();
-  await expect(page.getByRole('dialog', { name: 'Color track A by' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Color, halo and timeline' })).toHaveCount(0);
 });
 
 test('closes the fix card with its button and with a click on an empty spot', async ({ page }) => {
@@ -205,8 +216,9 @@ test('opens a Columbus Fusion log with motion data and shows its acceleration', 
   await expect(page.getByText(/· Columbus Fusion$/)).toBeVisible();
   await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
   await page.getByRole('button', { name: /^Color/ }).click();
-  await page.getByRole('dialog', { name: 'Color track A by' }).getByRole('radio', { name: /Acceleration/ }).click();
-  await expect(page.getByRole('button', { name: 'Color Acceleration (g)' })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Color, halo and timeline' }).getByRole('radio', { name: 'Acceleration as the line color' }).check();
+  await expect(page.getByRole('button', { name: /^Color Acceleration \(g\)/ })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Color, halo and timeline' }).getByRole('button', { name: 'Done' }).click();
 });
 
 test('snaps the cursor to a fix when hovering a gap', async ({ page }) => {
@@ -259,8 +271,9 @@ test('opens a 10-hour log with motion data and draws its acceleration without st
   await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 60_000 });
   const loadMs = Date.now() - t0;
   await page.getByRole('button', { name: /^Color/ }).click();
-  await page.getByRole('dialog', { name: 'Color track A by' }).getByRole('radio', { name: /Acceleration/ }).click();
-  await expect(page.getByRole('button', { name: 'Color Acceleration (g)' })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Color, halo and timeline' }).getByRole('radio', { name: 'Acceleration as the line color' }).check();
+  await expect(page.getByRole('button', { name: /^Color Acceleration \(g\)/ })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Color, halo and timeline' }).getByRole('button', { name: 'Done' }).click();
   // Zoom in on the timeline and back out: each step redraws from every reading.
   const lanes = (await page.locator('.tl-lanes').boundingBox())!;
   await page.mouse.move(lanes.x + 150 + (lanes.width - 150) * 0.5, lanes.y + 20);
@@ -273,6 +286,46 @@ test('opens a 10-hour log with motion data and draws its acceleration without st
   // About 2 s and 0.4 s on a laptop with software WebGL; the time limits leave room for slow CI machines.
   expect(loadMs).toBeLessThan(15_000);
   expect(zoomMs).toBeLessThan(5_000);
+});
+
+test('hovering a lane snaps to that track, and clicking a collapsed lane selects it', async ({ page }) => {
+  // Two loggers carried together: lined up by clock, so both lanes cover the same time.
+  await open(page, 'central-park-loop.nmea', 'central-park-loop-vendor.gpx');
+  await expect(page.locator('.track-row[data-track="A"]')).toHaveClass(/is-selected/);
+  const laneB = (await page.locator('.lane[data-track="B"]').boundingBox())!;
+  const x = laneB.x + 150 + (laneB.width - 150) * 0.3;
+  await page.mouse.move(x, laneB.y + laneB.height / 2);
+  // The readout follows the lane under the pointer.
+  await expect(page.locator('.tl-head .badge')).toHaveText('B');
+  await page.mouse.click(x, laneB.y + laneB.height / 2);
+  await expect(page.locator('.track-row[data-track="B"]')).toHaveClass(/is-selected/);
+  await expect.poll(async () => (await page.locator('.lane[data-track="B"]').boundingBox())!.height).toBeGreaterThan(40);
+});
+
+test('fits the zoomed part of the timeline on the map', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  // The map's zoom, read from the Google Maps link (in the menu of its button).
+  const zoomOf = async () => {
+    const menu = page.getByRole('button', { name: 'Open in Google Maps' });
+    if ((await menu.getAttribute('aria-expanded')) !== 'true') await menu.click();
+    const href = await page.getByRole('link', { name: /This map view/ }).getAttribute('href');
+    await page.keyboard.press('Escape');
+    return Number(/zoom=([\d.]+)/.exec(href!)![1]);
+  };
+  const fit = page.getByRole('button', { name: 'Fit the tracks' });
+  await fit.click();
+  await expect.poll(zoomOf).toBeGreaterThan(10);
+  const whole = await zoomOf();
+  // Zoom the timeline into a tenth of the ride: Fit now fits just that part, closer in.
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  const xAt = (f: number) => lanes.x + 150 + (lanes.width - 150) * f;
+  await page.mouse.move(xAt(0.2), lanes.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(xAt(0.3), lanes.y + 20, { steps: 5 });
+  await page.mouse.up();
+  await page.getByRole('button', { name: 'Fit the zoomed part of the timeline on the map' }).click();
+  await expect.poll(zoomOf).toBeGreaterThan(whole + 0.5);
 });
 
 test('shows at most three tracks', async ({ page }) => {

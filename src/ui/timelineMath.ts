@@ -3,6 +3,7 @@
 import type { LoadedTrack, MeasureKey } from '../model/types';
 import { stepOf, valueAt, type Scale } from '../color/scale';
 import { nearestIndex } from '../state/logic';
+import { drawnSteps } from '../map/geojson';
 
 const STEPS_S = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400];
 
@@ -122,6 +123,11 @@ export function columns(tr: LoadedTrack, key: MeasureKey | null, scale: Scale | 
   const value = (i: number) => (motion ? motion.g[i] : key ? valueAt(tr, key, i) : 0);
   const isGap = motion ? (i: number) => times[i] - times[i - 1] > 2000 : (i: number) => tr.derived.gap[i] === 1;
   const colOf = (t: number) => Math.floor(((t + offset - t0) / span) * W);
+  // Acceleration is colored as on the map: every reading takes its second's
+  // color, which comes from that second's strongest reading.
+  const fixSteps = motion && scale && key ? drawnSteps(tr, key, scale) : null;
+  const fixT = tr.cols.t;
+  let owner = 0;
   for (let i = 0; i < n; i++) {
     const x = colOf(times[i]);
     if (x < 0 || x >= W) continue;
@@ -131,7 +137,11 @@ export function columns(tr: LoadedTrack, key: MeasureKey | null, scale: Scale | 
       for (let k = a; k < x; k++) out[k] = { step: -1, min: NaN, max: NaN, gap: true };
     }
     const v = value(i);
-    const s = scale && key ? stepOf(scale, v) : 0;
+    let s = 0;
+    if (fixSteps) {
+      while (owner + 1 < fixT.length && fixT[owner + 1] <= times[i]) owner++;
+      s = fixSteps[owner];
+    } else if (scale && key) s = stepOf(scale, v);
     let col = out[x];
     if (!col || col.gap) { col = { step: s, min: v, max: v, gap: false }; out[x] = col; }
     if (v < col.min || Number.isNaN(col.min)) col.min = v;

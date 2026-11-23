@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildMarks, buildPaths, buildRuns, metersPerPixel, stepsFor, type MapCtx } from '../../src/map/geojson';
+import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildMarks, buildPaths, buildRuns, drawnSteps, metersPerPixel, stepsFor, type MapCtx } from '../../src/map/geojson';
 import { addTracks } from '../../src/state/logic';
-import { buildScale } from '../../src/color/scale';
+import { buildScale, stepOf } from '../../src/color/scale';
 import type { LoadedTrack, MeasureKey } from '../../src/model/types';
 import { FAMILIES, SINGLE } from '../../src/color/palettes';
 import { columns, MIN_ZOOM_MS, panView, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from '../../src/ui/timelineMath';
@@ -70,6 +70,21 @@ describe('map features', () => {
   });
 });
 
+describe('fitting part of the timeline', () => {
+  it('bounds only the fixes inside the time range', () => {
+    const items = addTracks([], [load('central-park-loop.nmea')]).items;
+    const c = items[0].track.cols;
+    const all = boundsOf(items)!;
+    const part = boundsIn(items, {}, [c.t[0], c.t[200]])!;
+    // A tenth of the ride covers a smaller area, inside the whole ride's box.
+    expect((part[2] - part[0]) * (part[3] - part[1])).toBeLessThan((all[2] - all[0]) * (all[3] - all[1]) / 2);
+    expect(part[0]).toBeGreaterThanOrEqual(all[0]);
+    expect(part[3]).toBeLessThanOrEqual(all[3]);
+    // Offsets move a track along the timeline; nothing in range means nothing to fit.
+    expect(boundsIn(items, { A: 1e9 }, [c.t[0], c.t[200]])).toBeNull();
+  });
+});
+
 describe('dots for tiny tracks', () => {
   it('marks a shown track only when it is too small to see', () => {
     const items = addTracks([], [load('central-park-loop.nmea'), load('roosevelt-island-run.gpx')]).items;
@@ -77,6 +92,9 @@ describe('dots for tiny tracks', () => {
     const far = buildMarks(items, 5).features;
     expect(far.map((f) => f.properties.id)).toEqual(['A', 'B']);
     expect(far[0].properties.c).toBe(FAMILIES[items[0].fam % 3].badge);
+    // Each dot takes its badge's shape: square for NMEA, circle for GPX.
+    expect(far[0].properties.icon).toBe(`tlp-mark-square-${String(far[0].properties.c).slice(1)}`);
+    expect(far[1].properties.icon).toMatch(/^tlp-mark-circle-[0-9a-f]{6}$/);
     // The dot sits in the middle of the track's box.
     const box = items[0].track.derived.stats.bbox;
     expect(far[0].geometry.coordinates).toEqual([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]);
@@ -104,6 +122,24 @@ describe('timeline math', () => {
     const coarse = columns({ ...tr, motion: undefined }, 'accel', s, from, to, 20, 0).flatMap((col) => (col ? [col.max] : []));
     expect(new Set(coarse.map((v) => v.toFixed(4))).size).toBeLessThanOrEqual(2);
     expect(new Set(fine.map((v) => v.toFixed(4))).size).toBeGreaterThan(5);
+  });
+
+  it('colors acceleration on the timeline as the map does: each second by its strongest reading', () => {
+    // Three seconds in a row, each with one 2.2 g jolt among calm readings.
+    const base = load('central-park-loop-motion.csv');
+    const g = base.motion!.g.slice(), accel = base.cols.accel.slice(), i = 100;
+    for (const k of [i - 1, i, i + 1]) {
+      g[base.motion!.t.findIndex((t) => t >= base.cols.t[k]) + 3] = 2.2;
+      accel[k] = 2.2;
+    }
+    const tr: LoadedTrack = { ...base, cols: { ...base.cols, accel }, motion: { t: base.motion!.t, g } };
+    const s = buildScale('accel', [tr]);
+    const steps = drawnSteps(tr, 'accel', s);
+    expect(steps[i]).toBe(stepOf(s, 2.2));
+    // Most of that second's readings are calm, but every column shows the jolt's color, as the map does.
+    const cols = columns(tr, 'accel', s, tr.cols.t[i], tr.cols.t[i] + 1000, 10, 0);
+    expect(cols.filter((col) => stepOf(s, col!.max) === steps[i])).toHaveLength(1);
+    expect(cols.map((col) => col!.step)).toEqual(Array(10).fill(steps[i]));
   });
 
   it('zooms with the scroll wheel around the time under the pointer', () => {

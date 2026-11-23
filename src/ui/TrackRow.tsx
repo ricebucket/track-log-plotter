@@ -2,18 +2,17 @@ import type { MeasureKey } from '../model/types';
 import type { TrackItem } from '../state/logic';
 import * as S from '../state/store';
 import { t } from '../state/store';
-import { palette, haloExtra, haloStyle, CASING, FAMILIES, HIDDEN_BADGE } from '../color/palettes';
+import { palette, haloExtra, haloStyle, CASING } from '../color/palettes';
+import { Badge } from './Badge';
 import { timeShares, type Scale } from '../color/scale';
 import { fmtDistance, fmtDuration, fmtPercent, fmtSpeed } from '../format';
 import { differentDays, fmtShortDate } from '../time/zones';
 import { formatName, measureName, measureTitle, stepLabels, unitOf } from './labels';
-import { IconChevronRight, IconCopy, IconDoc, IconEye, IconEyeOff, IconWarn } from './icons';
+import { IconChevronRight, IconCopy, IconDoc, IconEye, IconEyeOff, IconTrash, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
 
-export function badgeOf(it: TrackItem): string {
-  return it.vis ? FAMILIES[it.fam % 3].badge : HIDDEN_BADGE;
-}
+export { badgeOf } from './Badge';
 
 export function TrackRow({ item }: { item: TrackItem }) {
   const sel = S.selected.value?.id === item.id;
@@ -43,7 +42,7 @@ export function TrackRow({ item }: { item: TrackItem }) {
           {item.vis ? <IconEye /> : <IconEyeOff />}
         </button>
         <button type="button" class="track-main" aria-expanded={sel ? 'true' : 'false'} onClick={() => S.select(item.id)}>
-          <span class="badge" style={{ background: badgeOf(item) }}>{item.id}</span>
+          <Badge item={item} />
           <span class="track-text">
             <span class="track-name">{tr.file}</span>
             <span class="track-sub" title={`${t('stat.distance')}: ${explain.distance()}`}>{sub}</span>
@@ -83,20 +82,23 @@ function TrackDetailsInline({ item }: { item: TrackItem }) {
           </div>
         ))}
       </dl>
-      <div class="color-halo" role="group" aria-label={t('colorHalo.label')}>
-        <MeasureRow item={item} which="color" />
-        {item.color !== 'none' && <Legend item={item} />}
-        <MeasureRow item={item} which="halo" />
-        {item.halo !== 'off' && <HaloKey item={item} />}
-        {S.items.value.length > 1 && (
+      <SettingsCard item={item} />
+      {S.items.value.length > 1 && (
+        <div class="card-links">
           <button type="button" class="link-btn" title={applyAllHint(item)} onClick={() => S.applyAll(item.id)}>
             <IconCopy /><span>{t('colorHalo.applyAll')}</span>
           </button>
-        )}
+        </div>
+      )}
+      <div class="card-actions">
+        <button type="button" class="btn-outline" onClick={() => S.openDetails(item.id)}>
+          {/* Files whose times have no zone: a reminder that the zone is set there. */}
+          <IconDoc />{item.track.clock ? t('track.detailsClock') : t('track.details')}
+        </button>
+        <button type="button" class="icon-btn outline danger" aria-label={t('details.remove')} title={t('details.remove')} onClick={() => S.remove(item.id)}>
+          <IconTrash />
+        </button>
       </div>
-      <button type="button" class="btn-outline" onClick={() => S.openDetails(item.id)}>
-        <IconDoc />{t('track.details')}
-      </button>
     </div>
   );
 }
@@ -109,28 +111,34 @@ export function applyAllHint(item: TrackItem): string {
 }
 
 /**
- * The heading of the color or the halo section. It opens the measure pane
- * beside the panel, so it reads as a heading with a "go to" arrow rather than
- * a drop-down list; pressing it again closes the pane.
+ * The track's color, halo and timeline settings, shown as one button that
+ * opens the settings sheet (pressing it again closes the sheet). The button
+ * covers the whole card; the keys' calculator buttons sit on top of it.
  */
-function MeasureRow({ item, which }: { item: TrackItem; which: 'color' | 'halo' }) {
-  const key = which === 'color' ? item.color : item.halo;
-  const open = S.picker.value?.which === which;
-  const relative = key === 'hdop' && item.track.derived.hdopRelative;
-  const value = key === 'none' || key === 'off' ? measureName(key) : measureTitle(key, relative);
+function SettingsCard({ item }: { item: TrackItem }) {
+  const open = S.picker.value?.id === item.id;
+  const relative = item.track.derived.hdopRelative;
+  const color = item.color === 'none' ? measureName('none') : measureTitle(item.color, item.color === 'hdop' && relative);
+  const halo = item.halo === 'off' ? t('settings.none') : measureTitle(item.halo, item.halo === 'hdop' && relative);
+  // The timeline graphs the color measure (speed for a one-color line), and the halo measure too when asked.
+  const first = measureName(item.color === 'none' ? 'speed' : item.color);
+  const timeline = S.showHaloGraph.value && item.halo !== 'off' ? t('settings.both', { a: first, b: measureName(item.halo) }) : first;
+  const id = `sc-${item.id}`;
   return (
-    <button
-      type="button" class={`measure-btn${open ? ' is-open' : ''}`} data-picker-trigger
-      aria-haspopup="dialog" aria-expanded={open ? 'true' : 'false'}
-      onClick={(e) => {
-        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        S.picker.value = open ? null : { which, anchorTop: r.top };
-      }}
-    >
-      <span class="measure-label">{which === 'color' ? t('colorHalo.color') : t('colorHalo.halo')}</span>
-      <span class="measure-value">{value}</span>
-      <IconChevronRight />
-    </button>
+    <div class={`settings-card${open ? ' is-open' : ''}`}>
+      <button
+        type="button" class="settings-hit" id={`${id}-btn`} data-picker-trigger aria-haspopup="dialog" aria-expanded={open ? 'true' : 'false'}
+        aria-labelledby={`${id}-cc ${id}-c ${id}-hc ${id}-h ${id}-tc ${id}-t ${id}-go`}
+        onClick={() => { S.picker.value = open ? null : { id: item.id }; }}
+      />
+      <div class="settings-row"><span class="settings-cap" id={`${id}-cc`}>{t('colorHalo.color')}</span><span class="settings-val" id={`${id}-c`}>{color}</span></div>
+      {item.color !== 'none' && <Legend item={item} />}
+      <div class="settings-row"><span class="settings-cap" id={`${id}-hc`}>{t('colorHalo.halo')}</span><span class="settings-val" id={`${id}-h`}>{halo}</span></div>
+      {item.halo !== 'off' && <HaloKey item={item} />}
+      <div class="settings-row"><span class="settings-cap" id={`${id}-tc`}>{t('settings.timeline')}</span><span class="settings-val" id={`${id}-t`}>{timeline}</span></div>
+      <span class="settings-chev" aria-hidden="true"><IconChevronRight size={18} /></span>
+      <span class="sr-only" id={`${id}-go`}>{t('settings.change')}</span>
+    </div>
   );
 }
 

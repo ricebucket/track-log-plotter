@@ -6,6 +6,8 @@ import * as S from '../../src/state/store';
 import { tipXY } from '../../src/map/bridge';
 import { clockShift } from '../../src/time/zones';
 import { hint } from '../../src/ui/Computed';
+import { drawnSteps } from '../../src/map/geojson';
+import { palette } from '../../src/color/palettes';
 import { load } from '../helpers/fixtures';
 
 const NoMap = () => <div data-testid="map" />;
@@ -18,6 +20,7 @@ beforeEach(() => {
   S.resetForTests();
   tipXY.value = null;
   hint.value = null;
+  S.showHaloGraph.value = false;
 });
 
 describe('empty state', () => {
@@ -28,6 +31,12 @@ describe('empty state', () => {
     expect(screen.getByRole('button', { name: 'Try the sample ride' })).toBeTruthy();
     expect(screen.getByText('GPX')).toBeTruthy();
     expect(screen.getByText('NMEA')).toBeTruthy();
+  });
+
+  it('shows each file format\'s badge shape as a key', () => {
+    render(<App Map={NoMap} />);
+    const pills = [...document.querySelectorAll('.supports .pill')];
+    expect(pills.map((p) => [p.textContent, p.querySelector('.badge-shape')!.classList[1]])).toEqual([['GPX', 'circle'], ['NMEA', 'square'], ['Columbus Fusion', 'hexagon']]);
   });
 
   it('switches the whole interface to Chinese from the Options menu', () => {
@@ -50,6 +59,67 @@ describe('tracks panel', () => {
     expect(screen.getByText('1 problem')).toBeTruthy();
     expect(screen.getByText('2 of 3 shown · 2 loaded')).toBeTruthy();
     expect(screen.getByRole('status').textContent).toContain('loaded with 1 problem');
+  });
+
+  it('shapes each track\'s letter badge by its file format, and names the format on hover', () => {
+    loadFixtures('central-park-loop.nmea', 'roosevelt-island-run.gpx', 'central-park-loop-motion.csv');
+    render(<App Map={NoMap} />);
+    const badge = (id: string) => document.querySelector(`.track-row[data-track="${id}"] .badge`)!;
+    expect([badge('A').classList.contains('square'), badge('A').getAttribute('title')]).toEqual([true, 'NMEA']);
+    expect([badge('B').classList.contains('circle'), badge('B').getAttribute('title')]).toEqual([true, 'GPX']);
+    expect([badge('C').classList.contains('hexagon'), badge('C').getAttribute('title')]).toEqual([true, 'Columbus Fusion']);
+    // The same shape follows the track into the timeline.
+    const lane = [...document.querySelectorAll('.lane .badge')].find((b) => b.textContent === 'C')!;
+    expect(lane.classList.contains('hexagon')).toBe(true);
+  });
+
+  it('swaps the color and halo measures with one click in the settings sheet', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    expect([S.items.value[0].color, S.items.value[0].halo]).toEqual(['speed', 'hdop']);
+    fireEvent.click(screen.getByRole('button', { name: /^Color Speed \(km\/h\) Halo HDOP/ }));
+    const swap = () => fireEvent.click(within(screen.getByRole('dialog', { name: 'Color, halo and timeline' })).getByRole('button', { name: 'Swap' }));
+    swap();
+    expect([S.items.value[0].color, S.items.value[0].halo]).toEqual(['hdop', 'speed']);
+    expect(screen.getByRole('button', { name: /^Color HDOP Halo Speed \(km\/h\)/ })).toBeTruthy();
+    // "One color" and no halo turn into each other.
+    act(() => { S.setMeasure('A', 'color', 'none'); });
+    swap();
+    expect([S.items.value[0].color, S.items.value[0].halo]).toEqual(['speed', 'off']);
+    expect(screen.getByRole('button', { name: /^Color Speed \(km\/h\) Halo None/ })).toBeTruthy();
+  });
+
+  it('hides every track at once, and shows the same ones again', () => {
+    loadFixtures('central-park-loop.nmea', 'roosevelt-island-run.gpx', 'central-park-loop-vendor.gpx', 'hudson-greenway-evening.log');
+    act(() => { S.toggleVisible('B'); S.toggleVisible('D'); });
+    expect(S.visible.value.map((x) => x.id)).toEqual(['A', 'C', 'D']);
+    render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide all tracks' }));
+    expect(S.visible.value).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Show the tracks again' }));
+    expect(S.visible.value.map((x) => x.id)).toEqual(['A', 'C', 'D']);
+  });
+
+  it('graphs the halo measure too, under the selected track\'s lane', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    expect(document.querySelector('.lane[data-role="halo"]')).toBeNull();
+    expect(screen.getByRole('button', { name: /Timeline Speed Change/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Color/ }));
+    const toggle = () => screen.getByRole('switch', { name: 'Also graph the halo measure on the timeline' });
+    expect(toggle().getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle());
+    expect(toggle().getAttribute('aria-checked')).toBe('true');
+    const lane = document.querySelector('.lane[data-role="halo"]')!;
+    expect(lane.querySelector('.lane-measure')!.textContent).toBe('HDOP');
+    expect(lane.querySelector('.lane-note')!.textContent).toBe('halo');
+    // The card says what the timeline graphs.
+    expect(screen.getByRole('button', { name: /Timeline Speed and HDOP Change/ })).toBeTruthy();
+    // No halo, no halo graph: the switch is off and can't be turned on.
+    act(() => { S.setMeasure('A', 'halo', 'off'); });
+    expect(document.querySelector('.lane[data-role="halo"]')).toBeNull();
+    expect(toggle().getAttribute('aria-checked')).toBe('false');
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('hides and shows tracks, refusing a fourth', () => {
@@ -82,22 +152,25 @@ describe('tracks panel', () => {
     expect(screen.getByRole('region', { name: 'Timeline' })).toBeTruthy();
   });
 
-  it('explains every measure in the color pane and marks the missing ones', () => {
+  it('explains every measure the file has in the settings sheet, and leaves out the others', () => {
     loadFixtures('central-park-loop-vendor.gpx');
     render(<App Map={NoMap} />);
     fireEvent.click(screen.getByRole('button', { name: /^Color/ }));
-    const pane = screen.getByRole('dialog', { name: 'Color track A by' });
-    const radios = within(pane).getAllByRole('radio');
-    expect(radios.map((r) => r.querySelector('.opt-name')!.textContent)).toEqual(['Speed', 'Elevation', 'Grade', 'HDOP', 'Satellites used', 'Fix type', 'One color']);
-    expect(within(pane).getByText(/Horizontal dilution of precision/)).toBeTruthy();
-    // This logger writes no satellite count or fix type.
-    const sats = radios[4];
-    expect(sats.getAttribute('aria-disabled')).toBe('true');
-    expect(within(sats).getByText('Not in this file.')).toBeTruthy();
-    expect(within(pane).getByText(/ranked against itself/)).toBeTruthy();
-    fireEvent.click(radios[1]);
-    expect(screen.queryByRole('dialog', { name: 'Color track A by' })).toBeNull();
+    const sheet = screen.getByRole('dialog', { name: 'Color, halo and timeline' });
+    // This logger writes no satellite count or fix type: those rows aren't there at all.
+    expect(within(sheet).getAllByRole('radio').map((r) => r.getAttribute('aria-label'))).toEqual([
+      'Speed as the line color', 'Speed as the halo', 'Elevation as the line color', 'Elevation as the halo', 'Grade as the line color', 'Grade as the halo',
+      'HDOP as the line color', 'HDOP as the halo', 'One color for the line', 'No halo',
+    ]);
+    expect(within(sheet).getByText(/Horizontal dilution of precision/)).toBeTruthy();
+    expect(within(sheet).queryByText(/How many satellites/)).toBeNull();
+    expect(within(sheet).getByText(/ranked against itself/)).toBeTruthy();
+    // A choice applies at once, and the sheet stays open until Done.
+    fireEvent.click(within(sheet).getByRole('radio', { name: 'Elevation as the line color' }));
     expect(S.items.value[0].color).toBe('ele');
+    expect(screen.getByRole('dialog', { name: 'Color, halo and timeline' })).toBeTruthy();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Done' }));
+    expect(screen.queryByRole('dialog', { name: 'Color, halo and timeline' })).toBeNull();
   });
 
   it('copies the color and halo measures to the other tracks, naming them on hover', () => {
@@ -130,20 +203,23 @@ describe('tracks panel', () => {
     expect(screen.getByText(/^Jul 11, 7:30:00\sPM – Jul 12, 8:\d{2}:\d{2}\sAM/)).toBeTruthy();
   });
 
-  it('opens the color pane from a heading, not a drop-down, and closes it on a second press', () => {
+  it('opens the settings sheet from the whole card, and closes it on a second press or Escape', () => {
     loadFixtures('central-park-loop.nmea');
     render(<App Map={NoMap} />);
-    const heading = screen.getByRole('button', { name: 'Color Speed (km/h)' });
-    expect(heading.getAttribute('aria-haspopup')).toBe('dialog');
-    fireEvent.click(heading);
-    expect(screen.getByRole('dialog', { name: 'Color track A by' })).toBeTruthy();
-    expect(heading.getAttribute('aria-expanded')).toBe('true');
-    // A real press starts with pointerdown, which closes popovers outside; the heading is exempt.
-    fireEvent.pointerDown(heading);
-    fireEvent.click(heading);
-    expect(screen.queryByRole('dialog', { name: 'Color track A by' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Halo HDOP' }));
-    expect(screen.getByRole('dialog', { name: 'Halo around track A' })).toBeTruthy();
+    const card = screen.getByRole('button', { name: 'Color Speed (km/h) Halo HDOP Timeline Speed Change the color, halo and timeline' });
+    expect(card.getAttribute('aria-haspopup')).toBe('dialog');
+    // The card still explains its keys with calculator buttons of their own.
+    expect(document.querySelector('.settings-card .legend .computed-btn')).toBeTruthy();
+    fireEvent.click(card);
+    expect(screen.getByRole('dialog', { name: 'Color, halo and timeline' })).toBeTruthy();
+    expect(card.getAttribute('aria-expanded')).toBe('true');
+    // A real press starts with pointerdown, which closes popovers outside; the card is exempt.
+    fireEvent.pointerDown(card);
+    fireEvent.click(card);
+    expect(screen.queryByRole('dialog', { name: 'Color, halo and timeline' })).toBeNull();
+    fireEvent.click(card);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Color, halo and timeline' })).toBeNull();
   });
 
   it('explains the percentages behind the calculator, not in a heading', () => {
@@ -197,6 +273,41 @@ describe('tracks panel', () => {
     expect(document.querySelector('.tooltip')).toBeNull();
   });
 
+  it('highlights the measures on the color and the halo in the fix card', () => {
+    loadFixtures('central-park-loop.nmea');
+    S.cursorT.value = S.items.value[0].track.cols.t[100];
+    tipXY.value = { x: 600, y: 300 };
+    render(<App Map={NoMap} />);
+    const card = () => document.querySelector('.tooltip') as HTMLElement;
+    const drawn = () => [...card().querySelectorAll('.tip-rows .is-drawn dt')].map((d) => d.textContent);
+    expect(drawn()).toEqual(['Speed, shown as the line color', 'HDOP, shown as the halo']);
+    // The swatch is the line's color at this fix, as the map draws it.
+    const item = S.items.value[0];
+    const step = drawnSteps(item.track, 'speed', S.scaleFor(item.track, 'speed'))[100];
+    const hex = palette(item.fam, 'speed', false, true)[step];
+    const rgb = `rgb(${[1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16)).join(', ')})`;
+    expect([hex, rgb]).toContain((card().querySelector('.tip-swatch') as HTMLElement).style.backgroundColor);
+    expect(card().querySelector('.tip-halo')).toBeTruthy();
+    // It follows the track's settings.
+    act(() => { S.setMeasure('A', 'color', 'ele'); });
+    expect(drawn()).toEqual(['Elevation, shown as the line color', 'HDOP, shown as the halo']);
+    act(() => { S.setMeasure('A', 'color', 'none'); S.setMeasure('A', 'halo', 'off'); });
+    expect(drawn()).toEqual([]);
+    expect(card().querySelector('.tip-swatch, .tip-halo')).toBeNull();
+  });
+
+  it('removes a track from its card with the trash icon; the properties page has no remove button', () => {
+    loadFixtures('central-park-loop.nmea', 'roosevelt-island-run.gpx');
+    render(<App Map={NoMap} />);
+    const trash = screen.getByRole('button', { name: 'Remove this track' });
+    expect(trash.textContent).toBe('');
+    act(() => { S.openDetails('A'); });
+    expect(screen.queryByRole('button', { name: 'Remove this track' })).toBeNull();
+    act(() => { S.page.value = { kind: 'tracks' }; });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove this track' }));
+    expect(S.items.value.map((x) => x.id)).toEqual(['B']);
+  });
+
   it('opens the properties page with the problem explained', () => {
     loadFixtures('central-park-loop-truncated.nmea');
     render(<App Map={NoMap} />);
@@ -211,6 +322,7 @@ describe('tracks panel', () => {
   it('links Street View to the selected point, and only when there is one', () => {
     loadFixtures('central-park-loop.nmea');
     render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Google Maps' }));
     expect(screen.queryByRole('link', { name: /Street View/ })).toBeNull();
     act(() => { S.cursorT.value = S.items.value[0].track.cols.t[100]; });
     const sv = screen.getByRole('link', { name: /Street View at the selected point/ });
@@ -223,13 +335,16 @@ describe('tracks panel', () => {
   it('points to Google My Maps for seeing the track on Google', () => {
     loadFixtures('central-park-loop.nmea');
     render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Google Maps' }));
     expect(screen.getByRole('link', { name: /Google My Maps/ }).getAttribute('href')).toBe('https://mymaps.google.com/');
+    expect(screen.getByText('Import a GPX file there to see the track')).toBeTruthy();
     expect(screen.getByText(/choose Import under its layer and pick your GPX file/)).toBeTruthy();
   });
 
   it('explains My Maps on hover instead of in the panel', () => {
     loadFixtures('central-park-loop.nmea');
     render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Google Maps' }));
     const link = screen.getByRole('link', { name: /Google My Maps/ });
     expect(screen.queryByRole('tooltip')).toBeNull();
     fireEvent.mouseEnter(link);
@@ -277,29 +392,46 @@ describe('tracks panel', () => {
     render(<App Map={NoMap} />);
     expect(screen.getByText(/· Columbus Fusion$/)).toBeTruthy();
     // No fix quality in the file, so the halo starts on acceleration.
-    fireEvent.click(screen.getByRole('button', { name: 'Halo Acceleration (g)' }));
-    const pane = screen.getByRole('dialog', { name: 'Halo around track A' });
-    expect(within(pane).getByText(/strongest reading in that second/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Color Speed \(km\/h\) Halo Acceleration \(g\)/ }));
+    const pane = screen.getByRole('dialog', { name: 'Color, halo and timeline' });
+    // The description says how it's worked out: the magnitude of the three-axis vector.
+    expect(within(pane).getByText(/magnitude of that three-axis vector, √\(x² \+ y² \+ z²\)/)).toBeTruthy();
     fireEvent.click(within(pane).getByRole('button', { name: 'Close' }));
     const card = document.querySelector('.tooltip') as HTMLElement;
-    expect(within(card).getByText('Acceleration')).toBeTruthy();
-    // All ten readings of that second, lowest first, with the two middle ones (the median) highlighted.
-    const readings = [...card.querySelectorAll('.tip-readings span')].map((e) => Number(e.textContent));
+    expect(within(card).getByText('Acceleration (g)')).toBeTruthy();
+    expect(within(card).getByText('Coordinates')).toBeTruthy();
+    // All ten readings of that second, lowest first. Two are highlighted: the
+    // strongest (the map's value) and the 5th highest (the upper middle one).
+    const spans = [...card.querySelectorAll('.tip-readings span')];
+    const readings = spans.map((e) => Number(e.textContent));
     expect(readings).toHaveLength(10);
     expect([...readings].sort((x, y) => x - y)).toEqual(readings);
-    expect(card.querySelectorAll('.tip-readings .is-median')).toHaveLength(2);
-    expect(within(card).getByText(/^median \d\.\d\d g$/)).toBeTruthy();
+    const median = card.querySelectorAll('.tip-readings .is-median');
+    const peak = card.querySelectorAll('.tip-readings .is-peak');
+    expect([median.length, peak.length]).toEqual([1, 1]);
+    expect([spans.indexOf(median[0]), spans.indexOf(peak[0])]).toEqual([5, 9]);
+    expect(readings[9]).toBeCloseTo(S.items.value[0].track.cols.accel[60], 2);
+    // No separate "median 1.02 g" text: the highlight shows it.
+    expect(card.textContent).not.toMatch(/median \d/i);
+    // Hovering a highlighted reading says what it is.
+    fireEvent.mouseEnter(median[0]);
+    expect(screen.getByRole('tooltip').textContent).toMatch(/^MedianThe median of this second's 10 readings \(the upper of the two middle ones\): \d\.\d\d g$/);
+    fireEvent.mouseLeave(median[0]);
+    fireEvent.mouseEnter(peak[0]);
+    expect(screen.getByRole('tooltip').textContent).toMatch(/^StrongestThe strongest of this second's 10 readings: \d\.\d\d g\. The map and the timeline color this second by it\.$/);
+    fireEvent.mouseLeave(peak[0]);
     // A GPX track without motion data doesn't list it.
     fireEvent.click(screen.getByRole('button', { name: /^B roosevelt-island-run.gpx/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Color/ }));
-    expect(within(screen.getByRole('dialog', { name: 'Color track B by' })).queryByText('Acceleration')).toBeNull();
+    expect(within(screen.getByRole('dialog', { name: 'Color, halo and timeline' })).queryByRole('radio', { name: 'Acceleration as the line color' })).toBeNull();
   });
 
   it('lets the time zone of a Columbus Fusion log be changed on its properties page', () => {
     loadFixtures('roosevelt-island-run.csv');
     const before = S.items.value[0].track.cols.t[0];
     render(<App Map={NoMap} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Properties' }));
+    // The button says the time zone is set there.
+    fireEvent.click(screen.getByRole('button', { name: 'Properties & time zone' }));
     expect(screen.getByRole('heading', { name: 'Time zone of the file' })).toBeTruthy();
     const clock = document.querySelector('[data-clock-trigger]') as HTMLElement;
     expect(clock.textContent).toBe('UTC');
@@ -316,9 +448,46 @@ describe('tracks panel', () => {
     expect(screen.getByRole('button', { name: /^Tokyo \(UTC\+9\)/ })).toBeTruthy();
   });
 
+  it('keeps the Google Maps links in one button\'s menu', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    const button = screen.getByRole('button', { name: 'Open in Google Maps' });
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('link', { name: /This map view/ })).toBeNull();
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    expect(within(document.getElementById('google-menu')!).getAllByRole('link').map((a) => a.textContent)).toEqual(['This map view', 'Google My MapsImport a GPX file there to see the track']);
+    // Escape closes it and puts the focus back on the button.
+    fireEvent.keyDown(screen.getByRole('link', { name: /This map view/ }), { key: 'Escape' });
+    expect(screen.queryByRole('link', { name: /This map view/ })).toBeNull();
+    expect(document.activeElement).toBe(button);
+    // So does a press anywhere else; following a link closes it too.
+    fireEvent.click(button);
+    fireEvent.pointerDown(document.body);
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(button);
+    fireEvent.click(screen.getByRole('link', { name: /This map view/ }));
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('shows the On the map switches as icons, named on hover', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    const arrows = screen.getByRole('button', { name: 'Heading arrows' });
+    // No visible text: the name is read out and shown on hover.
+    expect(arrows.textContent).toBe('');
+    expect(arrows.classList.contains('icon-only')).toBe(true);
+    fireEvent.mouseEnter(arrows);
+    expect(screen.getByRole('tooltip').textContent).toBe('Heading arrowsArrows along the line show the direction of travel, from zoom 14.');
+    fireEvent.mouseLeave(arrows);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Gaps' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('links to Google Maps for the current view', () => {
     loadFixtures('central-park-loop.nmea');
     render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Google Maps' }));
     const link = screen.getByRole('link', { name: /This map view/ });
     expect(link.getAttribute('href')).toContain('https://www.google.com/maps/@?api=1&map_action=map');
     expect(link.getAttribute('target')).toBe('_blank');

@@ -6,7 +6,8 @@ import { signal } from '@preact/signals';
 export const mapApi = {
   zoomIn: () => {},
   zoomOut: () => {},
-  fit: () => {},
+  /** Fits the shown tracks, or with a range (timeline time) only their fixes inside it. */
+  fit: (_range?: [number, number]) => {},
   north: () => {},
 };
 

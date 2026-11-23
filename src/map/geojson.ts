@@ -4,6 +4,7 @@ import type { LoadedTrack, MeasureKey } from '../model/types';
 import type { TrackItem } from '../state/logic';
 import { nearestIndex } from '../state/logic';
 import { haversine } from '../derive/geo';
+import { FORMAT_SHAPE } from '../color/shapes';
 import { stepOf, valueAt, type Scale } from '../color/scale';
 import { FAMILIES, haloExtra, haloStyle, palette, UNKNOWN } from '../color/palettes';
 
@@ -30,9 +31,42 @@ export function stepsFor(track: LoadedTrack, key: MeasureKey, scale: Scale): Int
   return s;
 }
 
+const drawn = new WeakMap<Scale, WeakMap<LoadedTrack, Int8Array>>();
+
+/**
+ * The steps the map draws a track's fixes in (single-fix blips smoothed, as on
+ * the map), kept per scale so the fix card can show the color at any fix.
+ */
+export function drawnSteps(track: LoadedTrack, key: MeasureKey, scale: Scale): Int8Array {
+  let per = drawn.get(scale);
+  if (!per) { per = new WeakMap(); drawn.set(scale, per); }
+  let s = per.get(track);
+  if (!s) { s = stepsFor(track, key, scale); per.set(track, s); }
+  return s;
+}
+
 /** Badge color of a track (its range's badge), used for its pins and fix rings. */
 export function badgeColor(item: TrackItem, _single: boolean): string {
   return FAMILIES[item.fam % 3].badge;
+}
+
+/** Bounds of the shown tracks' fixes inside a stretch of timeline time; offsets move each track onto the timeline. */
+export function boundsIn(items: TrackItem[], offsets: Record<string, number>, range: [number, number]): [number, number, number, number] | null {
+  let w = 180, s = 90, e = -180, n = -90, any = false;
+  for (const it of items) {
+    if (!it.vis) continue;
+    const c = it.track.cols, off = offsets[it.id] ?? 0;
+    let lo = 0, hi = c.n;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (c.t[mid] + off < range[0]) lo = mid + 1; else hi = mid; }
+    for (let i = lo; i < c.n && c.t[i] + off <= range[1]; i++) {
+      any = true;
+      if (c.lon[i] < w) w = c.lon[i];
+      if (c.lon[i] > e) e = c.lon[i];
+      if (c.lat[i] < s) s = c.lat[i];
+      if (c.lat[i] > n) n = c.lat[i];
+    }
+  }
+  return any ? [w, s, e, n] : null;
 }
 
 /** Meters per screen pixel at a latitude and zoom (MapLibre tiles are 512 pixels wide). */
@@ -54,7 +88,8 @@ export function buildMarks(items: TrackItem[], zoom: number, minPx = 24): FC<Poi
     const lat = (s + n) / 2, lon = (w + e) / 2;
     const sizeM = Math.max(haversine(lat, w, lat, e), haversine(s, lon, n, lon));
     if (sizeM / metersPerPixel(lat, zoom) >= minPx) continue;
-    out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: { id: it.id, c: badgeColor(it, false) } });
+    const c = badgeColor(it, false);
+    out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: { id: it.id, c, icon: `tlp-mark-${FORMAT_SHAPE[it.track.format]}-${c.slice(1)}` } });
   }
   return { type: 'FeatureCollection', features: out };
 }

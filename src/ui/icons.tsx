@@ -31,7 +31,17 @@ export const IconPause = ({ size = 16 }: P) => (
   <svg width={size} height={size} viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path d="M5.5 4.5h2.4v9H5.5zM10.1 4.5h2.4v9h-2.4z" fill="currentColor" /></svg>
 );
 export const IconDoc = ({ size = 15 }: P) => svg(size, [<path key="a" d="M4.5 2.5h6l3 3v10h-9z" />, <path key="b" d="M10.5 2.5v3h3M7 9.5h4.5M7 12.5h4.5" />]);
+/** Two arrows, up and down: swap. */
+export const IconSwap = ({ size = 15 }: P) => svg(size, <path d="M6 15V3.5M6 3.5L3.2 6.3M6 3.5l2.8 2.8M12 3v11.5M12 14.5l-2.8-2.8M12 14.5l2.8-2.8" />, 1.6);
+/** A small line graph. */
+export const IconGraph = ({ size = 15 }: P) => svg(size, [<path key="a" d="M2.5 14.5h13" />, <path key="b" d="M3.5 11.5l3.2-4 2.8 2.2 4.5-6" />], 1.6);
 export const IconCopy = ({ size = 15 }: P) => svg(size, [<rect key="a" x="2.5" y="5.5" width="9" height="9" rx="2" />, <path key="b" d="M6.5 3.5h6a2 2 0 0 1 2 2v6" />]);
+/** A folded map (Google Maps links). */
+export const IconMap = ({ size = 18 }: P) => svg(size, [<path key="a" d="M2.5 4.5l4-1.5 5 1.5 4-1.5v10.5l-4 1.5-5-1.5-4 1.5z" />, <path key="b" d="M6.5 3v10.5M11.5 4.5V15" />], 1.6);
+/** A standing figure (Street View). */
+export const IconPegman = ({ size = 18 }: P) => svg(size, [<circle key="a" cx="9" cy="4" r="1.8" />, <path key="b" d="M6.5 16l1-5.5H6V8.2a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2.3h-1.5l1 5.5" />], 1.6);
+/** Stacked layers (Google My Maps). */
+export const IconLayers = ({ size = 18 }: P) => svg(size, [<path key="a" d="M9 2.5l6.5 3.5L9 9.5 2.5 6z" />, <path key="b" d="M2.5 9.5L9 13l6.5-3.5" />, <path key="c" d="M2.5 12.5L9 16l6.5-3.5" />], 1.6);
 export const IconExternal = ({ size = 13 }: P) => svg(size, <path d="M7 4H4.5A1.5 1.5 0 0 0 3 5.5v8A1.5 1.5 0 0 0 4.5 15h8a1.5 1.5 0 0 0 1.5-1.5V11M10 3h5v5M15 3l-7 7" />, 1.9);
 export const IconWarn = ({ size = 13 }: P) => (
   <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden="true" focusable="false"><path d="M7 1.4l5.8 10.2H1.2zM7 5.3v2.9M7 10.1v0.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
@@ -41,6 +51,10 @@ export const IconUpload = ({ size = 20 }: P) => svg(size, <path d="M9 12.3V4.4M5
 export const IconLock = ({ size = 16 }: P) => svg(size, <path d="M5 8.5h8a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1zM6.5 8.5V6.3a2.5 2.5 0 0 1 5 0v2.2" />, 1.6);
 export const IconZoomIn = ({ size = 18 }: P) => svg(size, <path d="M9 4v10M4 9h10" />, 2);
 export const IconZoomOut = ({ size = 18 }: P) => svg(size, <path d="M4 9h10" />, 2);
+/** A clock face (time zones). */
+export const IconClock = ({ size = 16 }: P) => svg(size, [<circle key="a" cx="9" cy="9" r="6.5" />, <path key="b" d="M9 5.5V9l2.4 1.6" />], 1.7);
+/** A magnifier with a minus (zoom back out). */
+export const IconZoomReset = ({ size = 16 }: P) => svg(size, [<circle key="a" cx="8" cy="8" r="5" />, <path key="b" d="M5.8 8h4.4M11.7 11.7L15 15" />], 1.8);
 export const IconFit = ({ size = 18 }: P) => svg(size, <path d="M3 7V3h4M11 3h4v4M15 11v4h-4M7 15H3v-4" />, 1.8);
 /** A compass needle: the red half points north. */
 export const IconCompass = ({ size = 20 }: P) => (

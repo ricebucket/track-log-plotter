@@ -4,7 +4,7 @@ import * as S from '../state/store';
 import { t } from '../state/store';
 import { Panel, PanelButton } from './Panel';
 import { Timeline, TimelineButton } from './Timeline';
-import { MeasurePicker } from './MeasurePicker';
+import { SettingsSheet } from './SettingsSheet';
 import { MapFooter, MapTools } from './MapTools';
 import { Tooltip } from './Tooltip';
 import { Toasts } from './Toasts';
@@ -12,10 +12,13 @@ import { EmptyState } from './EmptyState';
 import { IconUpload } from './icons';
 import { HintLayer, hint } from './Computed';
 import { ZonePicker } from './ZonePicker';
+import { NARROW, useMedia } from './hooks';
 
 const ACCEPT = '.gpx,.GPX,.nmea,.NMEA,.nma,.log,.LOG,.txt,.csv,.CSV';
 
 export function App({ Map }: { Map: ComponentType }) {
+  // On a phone the time zone list also offers Local and UTC (the header has one zone button).
+  const narrow = useMedia(NARROW);
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
@@ -57,10 +60,10 @@ export function App({ Map }: { Map: ComponentType }) {
           {S.panelMin.value ? <PanelButton /> : <Panel />}
           {S.timelineMin.value ? <TimelineButton /> : <Timeline />}
           <Tooltip />
-          {S.picker.value && <MeasurePicker />}
+          {S.picker.value && <SettingsSheet />}
           {S.zoneOpen.value && (
             <ZonePicker
-              at={S.cursorT.value ?? S.selected.value?.track.derived.stats.start ?? 0} value={S.zone.value} title={t('zone.pick')}
+              at={S.cursorT.value ?? S.selected.value?.track.derived.stats.start ?? 0} value={S.zone.value} title={t('zone.pick')} quick={narrow}
               onPick={(z) => { S.zone.value = z; }} onClose={() => { S.zoneOpen.value = false; }} trigger="[data-zone-trigger]"
             />
           )}

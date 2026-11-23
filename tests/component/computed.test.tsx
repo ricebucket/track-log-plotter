@@ -71,11 +71,11 @@ describe('computed values', () => {
     expect(why).toContain('This file has no speed');
     expect(why).toContain('share of the track');
     fireEvent.click(screen.getByRole('button', { name: /^Color/ }));
-    const pane = screen.getByRole('dialog', { name: 'Color track A by' });
-    const radios = within(pane).getAllByRole('radio');
-    expect(within(radios[0]).getByText('Computed')).toBeTruthy(); // speed
-    expect(within(radios[2]).getByText('Computed')).toBeTruthy(); // grade
-    expect(within(radios[1]).queryByText('Computed')).toBeNull(); // elevation is in the file
+    const pane = screen.getByRole('dialog', { name: 'Color, halo and timeline' });
+    const rows = [...pane.querySelectorAll('tbody tr')] as HTMLElement[];
+    expect(within(rows[0]).getByText('Computed')).toBeTruthy(); // speed
+    expect(within(rows[2]).getByText('Computed')).toBeTruthy(); // grade
+    expect(within(rows[1]).queryByText('Computed')).toBeNull(); // elevation is in the file
   });
 
   it('explains grade wherever it is shown', () => {

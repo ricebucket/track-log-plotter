@@ -1,6 +1,7 @@
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { openFilePicker } from './Panel';
+import { FormatShape } from './Badge';
 import { IconFolder, IconLock, IconUpload } from './icons';
 
 /** Before any track is open. */
@@ -24,9 +25,9 @@ export function EmptyState() {
           <div class="drop-hint"><IconUpload /><span>{loading ? t('empty.loading') : t('empty.drop')}</span></div>
           <div class="supports">
             <span class="eyebrow">{t('empty.supports')}</span>
-            <span class="pill">GPX</span>
-            <span class="pill">NMEA</span>
-            <span class="pill">Columbus Fusion</span>
+            <span class="pill"><FormatShape format="gpx" />GPX</span>
+            <span class="pill"><FormatShape format="nmea" />NMEA</span>
+            <span class="pill"><FormatShape format="fusion" />Columbus Fusion</span>
           </div>
           <div class="privacy"><IconLock /><span>{t('empty.privacy')}</span></div>
         </main>

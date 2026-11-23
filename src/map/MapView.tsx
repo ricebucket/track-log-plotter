@@ -7,8 +7,9 @@ import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import * as S from '../state/store';
 import { trackUid, type TrackItem } from '../state/logic';
 import { BASEMAPS, TEXT_FONT, ZH_LABEL } from './basemaps';
-import { boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildMarks, buildPaths, buildRuns } from './geojson';
+import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildMarks, buildPaths, buildRuns } from './geojson';
 import { CASING, GAP } from '../color/palettes';
+import { traceShape, type BadgeShape } from '../color/shapes';
 import { haversine } from '../derive/geo';
 import { mapApi, mapFailed, tipXY } from './bridge';
 
@@ -52,6 +53,22 @@ function arrowImage(): ImageData {
   return arrow;
 }
 
+/** A dot for a tiny track: its badge's shape and color, with a white rim. Made when the map first asks for it. */
+function markImage(shape: BadgeShape, color: string): ImageData {
+  const s = 56; // 28 px, drawn at twice the size
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d', { willReadFrequently: true })!;
+  traceShape(g, shape, s / 2, s / 2, 22);
+  g.fillStyle = color;
+  g.fill();
+  g.strokeStyle = '#ffffff';
+  g.lineWidth = 5;
+  g.lineJoin = 'round';
+  g.stroke();
+  return g.getImageData(0, 0, s, s);
+}
+
 function addOwnLayers(map: MlMap) {
   const d = S.dark.value;
   if (!map.hasImage('tlp-arrow')) map.addImage('tlp-arrow', arrowImage(), { pixelRatio: 2 });
@@ -75,7 +92,7 @@ function addOwnLayers(map: MlMap) {
   map.addLayer({ id: 'tlp-flag', type: 'circle', source: 'tlp-flags', paint: { 'circle-radius': 10, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } });
   map.addLayer({ id: 'tlp-flag-text', type: 'symbol', source: 'tlp-flags', layout: { 'text-field': ['get', 'label'], 'text-font': TEXT_FONT, 'text-size': 10, 'text-allow-overlap': true }, paint: { 'text-color': '#ffffff' } });
   // Dots for tracks too small to see at this zoom; clicking one zooms to it.
-  map.addLayer({ id: 'tlp-mark', type: 'circle', source: 'tlp-marks', paint: { 'circle-radius': 11, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2.5 } });
+  map.addLayer({ id: 'tlp-mark', type: 'symbol', source: 'tlp-marks', layout: { 'icon-image': ['get', 'icon'], 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
   map.addLayer({ id: 'tlp-mark-text', type: 'symbol', source: 'tlp-marks', layout: { 'text-field': ['get', 'id'], 'text-font': TEXT_FONT, 'text-size': 12, 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#ffffff' } });
   map.addLayer({ id: 'tlp-cursor-ring', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 10, 'circle-color': '#ffffff' } });
   map.addLayer({ id: 'tlp-cursor', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 7, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#101820', 'circle-stroke-width': 3 } });
@@ -147,8 +164,8 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     shrink('top', 'bottom', H);
     return p;
   };
-  const fit = () => {
-    const b = boundsOf(S.visible.value);
+  const fit = (range?: [number, number]) => {
+    const b = range ? boundsIn(S.visible.peek(), S.offsets.peek(), range) : boundsOf(S.visible.peek());
     if (!b) return;
     map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: padding(), maxZoom: 16, duration: 500 });
   };
@@ -179,6 +196,11 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     tipXY.value = { x: p.x, y: p.y };
   };
 
+  // The dot images are made on demand, also after a basemap change clears them.
+  map.on('styleimagemissing', (e: { id: string }) => {
+    const m = /^tlp-mark-(circle|square|hexagon)-([0-9a-f]{6})$/i.exec(e.id);
+    if (m && !map.hasImage(e.id)) map.addImage(e.id, markImage(m[1] as BadgeShape, `#${m[2]}`), { pixelRatio: 2 });
+  });
   map.on('style.load', () => {
     addOwnLayers(map);
     applyLabels(map);
@@ -370,7 +392,7 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     if (f === lastFit) return;
     lastFit = f;
     // Fit after the panel and timeline have rendered, so the padding sees them.
-    if (ready.peek()) requestAnimationFrame(() => requestAnimationFrame(fit)); else map.once('idle', fit);
+    if (ready.peek()) requestAnimationFrame(() => requestAnimationFrame(() => fit())); else map.once('idle', () => fit());
   }));
 
   const ro = new ResizeObserver(() => map.resize());

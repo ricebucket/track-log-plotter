@@ -21,7 +21,8 @@ test.describe('your own logs', () => {
   test.skip(files.length === 0, 'No logs there to check.');
 
   test('load, then draw each one', async ({ page }) => {
-    test.setTimeout(180_000);
+    // Nine long logs drawn in a software renderer while other tests run: give it time.
+    test.setTimeout(300_000);
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await stubNetwork(page);
@@ -31,7 +32,7 @@ test.describe('your own logs', () => {
     const map = page.locator('.map');
     const drawn = async () => Number(await map.getAttribute('data-lines')) + Number(await map.getAttribute('data-marks'));
     // Something shows for the tracks that are on: lines, or dots for tracks too small to see.
-    await expect.poll(drawn, { timeout: 60_000 }).toBeGreaterThan(0);
+    await expect.poll(drawn, { timeout: 150_000 }).toBeGreaterThan(0);
     // Each log on its own, fitted: its colored line is drawn.
     for (let i = 0; i < files.length; i++) {
       await showOnly(page, i);

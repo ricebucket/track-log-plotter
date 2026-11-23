@@ -34,8 +34,9 @@ test('docks the panel as a bottom sheet and the timeline above it', async ({ pag
   const panel = (await page.locator('.panel').boundingBox())!;
   expect(Math.round(panel.y + panel.height)).toBe(vp.height);
   expect(Math.round(panel.width)).toBe(vp.width);
-  // The timeline starts minimized on a phone.
+  // The timeline starts minimized on a phone, so Fit is on the map.
   await expect(page.getByRole('region', { name: 'Timeline' })).toHaveCount(0);
+  await expect(page.locator('.map-tools').getByRole('button', { name: 'Fit the tracks' })).toBeVisible();
   await page.getByRole('button', { name: 'Show the timeline' }).click();
   const tl = (await page.getByRole('region', { name: 'Timeline' }).boundingBox())!;
   expect(tl.y + tl.height).toBeLessThanOrEqual(panel.y + 1);
@@ -43,10 +44,13 @@ test('docks the panel as a bottom sheet and the timeline above it', async ({ pag
     const b = (await lane.boundingBox())!;
     expect(b.y + b.height).toBeLessThanOrEqual(tl.y + tl.height);
   }
-  await expect(page.locator('.tl-values')).toContainText('km/h');
+  // One header row: no readout line; the graph shows its value at the cursor instead.
+  await expect(page.locator('.tl-values')).toHaveCount(0);
+  expect((await page.locator('.tl-head').boundingBox())!.height).toBeLessThan(48);
+  await expect(page.locator('.lane[data-role="color"] .lane-value').first()).toContainText('km/h');
   await expect(page.getByRole('button', { name: 'Fit the tracks' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Zoom in' })).toBeHidden();
-  await expect(page.getByRole('button', { name: 'UTC' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Time zone: Local' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(vp.width);
 });
 
@@ -54,15 +58,19 @@ test('opens the color pane and the time zone list as bottom sheets', async ({ pa
   await open(page, 'central-park-loop.nmea');
   const vp = page.viewportSize()!;
   await page.getByRole('button', { name: /^Color/ }).click();
-  const pane = (await page.getByRole('dialog', { name: 'Color track A by' }).boundingBox())!;
+  const pane = (await page.getByRole('dialog', { name: 'Color, halo and timeline' }).boundingBox())!;
   expect(Math.round(pane.width)).toBe(vp.width);
   expect(Math.round(pane.y + pane.height)).toBe(vp.height);
-  await page.getByRole('dialog', { name: 'Color track A by' }).getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('dialog', { name: 'Color, halo and timeline' }).getByRole('button', { name: 'Close' }).click();
   await page.getByRole('button', { name: 'Show the timeline' }).click();
-  await page.getByRole('button', { name: /Other/ }).click();
-  const zones = (await page.getByRole('dialog', { name: 'Pick a time zone' }).boundingBox())!;
+  await page.getByRole('button', { name: 'Time zone: Local' }).click();
+  const list = page.getByRole('dialog', { name: 'Pick a time zone' });
+  const zones = (await list.boundingBox())!;
   expect(Math.round(zones.width)).toBe(vp.width);
   expect(Math.round(zones.y + zones.height)).toBe(vp.height);
+  // The phone's one zone button offers UTC at the top of the list (the zone list itself has UTC too).
+  await list.getByRole('radio', { name: /^UTC/ }).first().click();
+  await expect(page.getByRole('button', { name: 'Time zone: UTC' })).toBeVisible();
 });
 
 test('opens the properties page at the top', async ({ page }) => {

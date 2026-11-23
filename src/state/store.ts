@@ -1,7 +1,7 @@
 import { batch, computed, effect, signal } from '@preact/signals';
 import type { ColorKey, HaloKey, LoadedTrack, MeasureKey, ParseResult } from '../model/types';
 import { initialLang, LOCALE, translate, type Lang, type Params } from '../i18n/i18n';
-import { addTracks, alignOffsets, applyToAll, removeTrack, setColor, setHalo, setVisible, trackUid, type TrackItem } from './logic';
+import { addTracks, alignOffsets, applyToAll, removeTrack, setColor, setHalo, setVisible, SHOW_LIMIT, trackUid, type TrackItem } from './logic';
 import { buildScale, type Scale } from '../color/scale';
 import { eleFactor, speedFactor, type Units } from '../format';
 import { clockShift, isValidZone, type ZoneSel } from '../time/zones';
@@ -13,7 +13,7 @@ import { hasFixNear } from './inspect';
 // ---------- preferences (remembered in this browser) ----------
 
 const KEY = 'tlp.prefs.v1';
-interface Prefs { lang?: Lang; basemap?: BasemapId; dim?: number; zone?: ZoneSel; lastZone?: ZoneSel; units?: Units; panelMin?: boolean; timelineMin?: boolean; arrows?: boolean; fixes?: boolean; gaps?: boolean }
+interface Prefs { lang?: Lang; basemap?: BasemapId; dim?: number; zone?: ZoneSel; lastZone?: ZoneSel; units?: Units; panelMin?: boolean; timelineMin?: boolean; arrows?: boolean; fixes?: boolean; gaps?: boolean; haloGraph?: boolean }
 
 function readPrefs(): Prefs {
   try { return JSON.parse(localStorage.getItem(KEY) || '{}') as Prefs; } catch { return {}; }
@@ -43,11 +43,13 @@ export const timelineMin = signal(saved.timelineMin ?? narrow);
 export const showArrows = signal(saved.arrows ?? true);
 export const showFixes = signal(saved.fixes ?? false);
 export const showGaps = signal(saved.gaps ?? true);
+/** The selected track's halo measure as a second graph on the timeline. */
+export const showHaloGraph = signal(saved.haloGraph ?? false);
 
 effect(() => {
   const p: Prefs = {
     lang: lang.value, basemap: basemap.value, dim: dim.value, zone: zone.value, lastZone: lastZone.value ?? undefined, units: units.value,
-    panelMin: panelMin.value, timelineMin: timelineMin.value, arrows: showArrows.value, fixes: showFixes.value, gaps: showGaps.value,
+    panelMin: panelMin.value, timelineMin: timelineMin.value, arrows: showArrows.value, fixes: showFixes.value, gaps: showGaps.value, haloGraph: showHaloGraph.value,
   };
   try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* private mode: nothing to remember */ }
   if (typeof document !== 'undefined') document.documentElement.lang = LOCALE[p.lang!];
@@ -125,6 +127,8 @@ export const cursorItem = computed<TrackItem | null>(() => {
   const sel = selected.value;
   const ct = cursorT.value;
   if (ct === null) return sel;
+  const lane = laneTrack.value ? visible.value.find((x) => x.id === laneTrack.value) : undefined;
+  if (lane && hasFixNear(lane.track, trackTime(lane.id, ct))) return lane;
   if (sel?.vis && hasFixNear(sel.track, trackTime(sel.id, ct))) return sel;
   return visible.value.find((it) => hasFixNear(it.track, trackTime(it.id, ct))) ?? sel;
 });
@@ -133,9 +137,12 @@ export const cursorItem = computed<TrackItem | null>(() => {
 
 export type Page = { kind: 'tracks' } | { kind: 'details'; id: string };
 export const page = signal<Page>({ kind: 'tracks' });
-export const picker = signal<{ which: 'color' | 'halo'; anchorTop: number } | null>(null);
+/** The track whose color, halo and timeline settings sheet is open. */
+export const picker = signal<{ id: string } | null>(null);
 export const basemapOpen = signal(false);
 export const zoneOpen = signal(false);
+/** The track whose timeline lane the pointer last moved the cursor on; its values show at the cursor. */
+export const laneTrack = signal<string | null>(null);
 /** The part of the timeline shown when zoomed in, or null for all of it. */
 export const timelineView = signal<[number, number] | null>(null);
 /** The track whose file time zone is being picked (properties page), or null. */
@@ -209,6 +216,8 @@ export function toggleVisible(id: string) {
 export function select(id: string) {
   batch(() => {
     selectedId.value = id;
+    laneTrack.value = null;
+    hiddenTogether = [];
     limitNotice.value = null;
     picker.value = null;
   });
@@ -216,6 +225,34 @@ export function select(id: string) {
 
 export function setMeasure(id: string, which: 'color' | 'halo', key: ColorKey | HaloKey) {
   items.value = which === 'color' ? setColor(items.value, id, key as ColorKey) : setHalo(items.value, id, key as HaloKey);
+}
+
+/** Swaps a track's color and halo measures; "one color" and "off" turn into each other. */
+export function swapMeasures(id: string) {
+  const it = items.value.find((x) => x.id === id);
+  if (!it) return;
+  const color: ColorKey = it.halo === 'off' ? 'none' : it.halo;
+  const halo: HaloKey = it.color === 'none' ? 'off' : it.color;
+  items.value = items.value.map((x) => (x.id === id ? { ...x, color, halo } : x));
+}
+
+/** The tracks hidden together by "Hide all", to bring back by "Show all". */
+let hiddenTogether: string[] = [];
+
+/** Hides every track, or shows again the ones hidden together (else the first few). */
+export function toggleAllVisible() {
+  const all = items.value;
+  const shown = all.filter((x) => x.vis);
+  if (shown.length) {
+    hiddenTogether = shown.map((x) => x.id);
+    items.value = all.map((x) => (x.vis ? { ...x, vis: false } : x));
+  } else {
+    const back = hiddenTogether.filter((id) => all.some((x) => x.id === id));
+    let next = all;
+    for (const id of (back.length ? back : all.map((x) => x.id)).slice(0, SHOW_LIMIT)) next = setVisible(next, id, true).items;
+    items.value = next;
+  }
+  limitNotice.value = null;
 }
 
 export function applyAll(id: string) {
@@ -279,6 +316,8 @@ export function clearAll() {
     zoneOpen.value = false;
     clockPicker.value = null;
     timelineView.value = null;
+    laneTrack.value = null;
+    hiddenTogether = [];
     limitNotice.value = null;
     loadNotice.value = null;
     loadErrors.value = [];
@@ -303,6 +342,7 @@ export function resetForTests() {
     zoneOpen.value = false;
     clockPicker.value = null;
     timelineView.value = null;
+    laneTrack.value = null;
     limitNotice.value = null;
     loadNotice.value = null;
     loadErrors.value = [];
