@@ -10,7 +10,7 @@ import { fmtNum } from '../format';
 import { measureTitle, metresText, valueText, unitOf } from './labels';
 import { isCombined, Use, type ComboTrack } from '../combine/combine';
 import { haversine } from '../derive/geo';
-import { LogNumber } from './Combined';
+import { SourceBadge, sourceNames } from './Combined';
 import { Badge } from './Badge';
 import { IconClose, IconFlag } from './icons';
 import { Computed, hintHandlers, useHintId } from './Computed';
@@ -141,8 +141,8 @@ export function Tooltip() {
         {/* Decimal degrees: 5 places is about a meter, and pastes into map search boxes. */}
         <div class="tip-coords"><dt>{t('inspect.position')}</dt><dd class="mono coords">{f.lat.toFixed(5)}, {f.lon.toFixed(5)}</dd></div>
       </dl>
-      {isCombined(sel.track) && Number.isFinite(f.ele) && sel.track.combo.eleOffset && <div class="tip-amber">{eleOffsetText(sel.track.combo.eleOffset)}</div>}
-      {isCombined(sel.track) && <LogRows track={sel.track} i={f.i} />}
+      {isCombined(sel.track) && Number.isFinite(f.ele) && sel.track.combo.eleOffset && <div class="tip-amber">{eleOffsetText(sel.track.combo.eleOffset, sourceNames(sel, sel.track))}</div>}
+      {isCombined(sel.track) && <LogRows track={sel.track} names={sourceNames(sel, sel.track)} i={f.i} />}
       {others.length > 0 && (
         <div class="tip-others">
           {others.map((o) => <div key={o.id}><Badge item={o.item} size="tiny" /><span class="mono small">{o.text}</span></div>)}
@@ -156,13 +156,13 @@ export function Tooltip() {
 }
 
 /** A steady height difference between two logs, worked out but not applied: "log 2 reads 32 m lower than log 1 throughout". */
-export function eleOffsetText(o: { from: number; to: number; m: number }): string {
-  const p = { a: o.from + 1, b: o.to + 1, m: metresText(Math.abs(o.m)) };
+export function eleOffsetText(o: { from: number; to: number; m: number }, names: readonly string[]): string {
+  const p = { a: names[o.from], b: names[o.to], m: metresText(Math.abs(o.m)) };
   return o.m < 0 ? t('combine.eleLower', p) : t('combine.eleHigher', p);
 }
 
 /** Where each of a combined track's logs is at this point: how far away, or why it doesn't count. */
-function LogRows({ track, i }: { track: ComboTrack; i: number }) {
+function LogRows({ track, names, i }: { track: ComboTrack; names: readonly string[]; i: number }) {
   const { combo, cols } = track;
   return (
     <ul class="tip-logs">
@@ -170,11 +170,10 @@ function LogRows({ track, i }: { track: ComboTrack; i: number }) {
         const la = combo.srcLat[k][i], lo = combo.srcLon[k][i], u = combo.use[k][i];
         const d = la === la ? metresText(haversine(cols.lat[i], cols.lon[i], la, lo)) : '';
         const text = u === Use.LeftOut ? t('inspect.logOut', { d })
-          : u === Use.Held ? t('inspect.logHeld')
           : u === Use.Idle ? t('inspect.logIdle')
           : la !== la ? t('inspect.logNone')
           : t('inspect.logAway', { d });
-        return <li key={k} class={u === Use.LeftOut ? 'is-out' : undefined} data-log={k + 1}><LogNumber k={k} /><span><span class="sr-only">{t('combine.logLabel', { k: k + 1 })}: </span>{text}</span></li>;
+        return <li key={k} class={u === Use.LeftOut ? 'is-out' : undefined} data-log={names[k]}><SourceBadge track={track} k={k} name={names[k]} size="tiny" /><span><span class="sr-only">{t('combine.logLabel', { k: names[k] })}: </span>{text}</span></li>;
       })}
     </ul>
   );

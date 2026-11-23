@@ -88,7 +88,7 @@ function addOwnLayers(map: MlMap) {
   const out = ['==', ['get', 'out'], 1];
   map.addLayer({
     id: 'tlp-log-line', type: 'line', source: 'tlp-logs', layout: round,
-    paint: { 'line-color': ['case', out, LEFT_OUT, ['get', 'c']] as never, 'line-opacity': ['case', out, 0.95, 0.55] as never, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.1, 14, 1.6, 17, 2.4, 20, 3.2] },
+    paint: { 'line-color': ['case', out, LEFT_OUT, ['get', 'c']] as never, 'line-opacity': ['case', out, 0.85, 0.3] as never, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.1, 14, 1.6, 17, 2.4, 20, 3.2] },
   });
   map.addLayer({
     id: 'tlp-arrows', type: 'symbol', source: 'tlp-paths', minzoom: 14,
@@ -217,10 +217,14 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   };
 
   // The dot images are made on demand, also after a basemap change clears them.
-  map.on('styleimagemissing', (e: { id: string }) => {
-    const m = /^tlp-mark-(circle|square|hexagon)-([0-9a-f]{6})$/i.exec(e.id);
-    if (m && !map.hasImage(e.id)) map.addImage(e.id, markImage(m[1] as BadgeShape, `#${m[2]}`), { pixelRatio: 2 });
-  });
+  /** The icon of a dot for a track too small to see: its badge shape in its color, drawn the first time it's needed. */
+  const markIcon = (id: string) => {
+    const m = /^tlp-mark-(circle|square|hexagon|diamond)-([0-9a-f]{6})$/i.exec(id);
+    if (m && !map.hasImage(id)) map.addImage(id, markImage(m[1] as BadgeShape, `#${m[2]}`), { pixelRatio: 2 });
+  };
+  // A fallback: the dots' icons are drawn before their data is sent (see the marks effect), so MapLibre
+  // never has to ask; when it asks for an icon it doesn't have, the dot may never be drawn.
+  map.on('styleimagemissing', (e: { id: string }) => markIcon(e.id));
   map.on('style.load', () => {
     addOwnLayers(map);
     applyLabels(map);
@@ -376,6 +380,7 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     if (!ready.value) return;
     const vis = S.visible.value;
     const marks = buildMarks(vis, zoomStep.value || map.getZoom());
+    for (const f of marks.features) markIcon(String(f.properties.icon));
     send('tlp-marks', `${visKey(vis)}#${marks.features.map((f) => f.properties.id).join(',')}`, () => marks);
   }));
   disposers.push(effect(() => {

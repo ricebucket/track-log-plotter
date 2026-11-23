@@ -3,7 +3,7 @@
 // used because nearly everything here is custom drawing (colored step bands,
 // gaps, button presses, lanes of different heights). If the timeline ever
 // needs zooming and panning, uPlot is the library worth adding back.
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Fragment } from 'preact';
 import type { MeasureKey } from '../model/types';
 import type { TrackItem } from '../state/logic';
@@ -14,12 +14,12 @@ import { axisRange } from '../state/logic';
 import { fixAt } from '../state/inspect';
 import { LEFT_OUT, LOG_COLORS, palette, UNKNOWN } from '../color/palettes';
 import { isCombined, Use } from '../combine/combine';
-import { LogNumber } from './Combined';
+import { SourceBadge, sourceNames } from './Combined';
 import { differentDays, fmtClock, fmtDateClock, fmtShortDate, isMidnight, offsetLabel, offsetMinutes, zoneCity } from '../time/zones';
-import { columns, graphRange, MIN_ZOOM_MS, panView, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from './timelineMath';
+import { centerView, columns, graphRange, MIN_ZOOM_MS, panView, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from './timelineMath';
 import { measureName, valueText } from './labels';
 import { Badge } from './Badge';
-import { IconChevronDown, IconClock, IconFit, IconPause, IconPlay, IconTimeline, IconZoomOut, IconZoomReset } from './icons';
+import { IconChevronDown, IconClock, IconFit, IconPause, IconPlay, IconTarget, IconTimeline, IconZoomOut, IconZoomReset } from './icons';
 import { mapApi } from '../map/bridge';
 import { NARROW, useMedia } from './hooks';
 import { Computed } from './Computed';
@@ -173,6 +173,7 @@ function LogLane({ item, k, t0, t1, narrow, labelW }: { item: TrackItem; k: numb
   const h = narrow ? 9 : 12;
   const offset = S.offsets.value[item.id] ?? 0;
   const tr = item.track;
+  const name = isCombined(tr) ? sourceNames(item, tr)[k] : String(k + 1);
   useEffect(() => {
     const el = canvas.current;
     const g = el?.getContext?.('2d');
@@ -205,11 +206,11 @@ function LogLane({ item, k, t0, t1, narrow, labelW }: { item: TrackItem; k: numb
     for (let x = 0; x < W; x++) if (out[x]) g.fillRect(x, h / 2 - 0.9, 1.2, 1.8);
   }, [w, h, tr, k, t0, t1, offset]);
   return (
-    <div class="lane log-lane" data-track={item.id} data-log={k + 1} style={{ height: `${h}px` }}>
+    <div class="lane log-lane" data-track={item.id} data-log={name} style={{ height: `${h}px` }}>
       <div class="lane-label" style={{ width: `${labelW - 10}px` }}>
         <span class="badge-space" aria-hidden="true" />
-        <LogNumber k={k} />
-        {!narrow && <span class="lane-note">{t('timeline.logLane', { k: k + 1 })}</span>}
+        {isCombined(tr) && <SourceBadge track={tr} k={k} name={name} size="tiny" />}
+        {!narrow && <span class="lane-note">{t('timeline.logLane', { k: name })}</span>}
       </div>
       <canvas ref={canvas} class="lane-canvas" style={{ height: `${h}px` }} aria-hidden="true" />
     </div>
@@ -248,6 +249,19 @@ function ZoneButtons({ at }: { at: number }) {
 }
 
 export function Timeline() {
+  // The pane is as tall as its lanes need (a combined track's sources add some): what sits above it, the
+  // map's scale and credits and the time zone list, follows its height.
+  const pane = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = pane.current, app = el?.closest('.app') as HTMLElement | null;
+    if (!el || !app) return;
+    const set = () => app.style.setProperty('--tl-h', `${Math.round(el.getBoundingClientRect().height)}px`);
+    set();
+    if (typeof ResizeObserver === 'undefined') return () => app.style.removeProperty('--tl-h');
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => { ro.disconnect(); app.style.removeProperty('--tl-h'); };
+  }, []);
   const vis = S.visible.value;
   const sel = S.selected.value;
   const offsets = S.offsets.value;
@@ -265,6 +279,10 @@ export function Timeline() {
   const lanesRef = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false);
   const cursor = S.cursorT.value ?? t0;
+  // Zoomed in, with the point picked on the map outside the zoomed part: a button brings it back into view.
+  const ct = S.cursorT.value;
+  const away = zoomed && ct !== null && (ct < t0 || ct > t1);
+  const toPoint = () => { if (view && ct !== null) S.timelineView.value = centerView(view, [full0, full1], ct); };
   const raw = (cursor - t0) / Math.max(1, t1 - t0);
   const frac = Math.min(1, Math.max(0, raw));
   const loc = S.locale.value;
@@ -429,7 +447,7 @@ export function Timeline() {
   const multiDay = differentDays(t0, t1, z);
 
   return (
-    <section class="timeline" aria-label={t('timeline.label')}>
+    <section class="timeline" ref={pane} aria-label={t('timeline.label')}>
       <div class="tl-head">
         <button type="button" class="round-btn" aria-label={playing ? t('timeline.pause') : t('timeline.play')} title={playing ? t('timeline.pause') : t('timeline.play')} onClick={() => setPlaying(!playing)}>
           {playing ? <IconPause /> : <IconPlay />}
@@ -444,6 +462,11 @@ export function Timeline() {
         {narrow ? (
           // One row on a phone: icons, and one time zone button.
           <>
+            {away && (
+              <button type="button" class="icon-btn outline" aria-label={t('timeline.toPoint')} title={t('timeline.toPointHint')} onClick={toPoint}>
+                <IconTarget size={15} />
+              </button>
+            )}
             {/* Reset zoom comes and goes; Fit, always there, keeps its place on the right. */}
             {zoomed && (
               <button type="button" class="icon-btn outline" aria-label={t('timeline.resetZoom')} title={t('timeline.resetZoomHint')} onClick={() => { S.timelineView.value = null; }}>
@@ -457,6 +480,11 @@ export function Timeline() {
           </>
         ) : (
           <>
+            {away && (
+              <button type="button" class="btn-outline small" title={t('timeline.toPointHint')} onClick={toPoint}>
+                <IconTarget size={14} />{t('timeline.toPoint')}
+              </button>
+            )}
             {zoomed && (
               <button type="button" class="btn-outline small" title={t('timeline.resetZoomHint')} onClick={() => { S.timelineView.value = null; }}>
                 <IconZoomOut size={14} />{t('timeline.resetZoom')}

@@ -83,7 +83,8 @@ export type Note =
   | { kind: 'eleZero' }
   | { kind: 'zeroSats'; count: number; stale: number }
   | { kind: 'route' }
-  | { kind: 'motion'; rate: number };
+  | { kind: 'motion'; rate: number }
+  | { kind: 'repeatsDropped'; count: number; long: number };
 
 /** Fields a file can contain, for the properties page. */
 export type FieldKey =
@@ -110,10 +111,17 @@ export interface ParsedTrack {
   motion?: { t: Float64Array; g: Float32Array };
   /**
    * Combined tracks only: 1 where the set of logs giving the height changes
-   * (one has a gap, is left out or holds), so the height may jump there.
+   * (one has a gap or is left out), so the height may jump there.
    * Grade and climb are worked out as if the track broke at those points.
    */
   eleBreak?: Uint8Array;
+  /**
+   * 1 where the step into a fix crosses fixes dropped when the file was read
+   * because they only repeated the position before (a logger that repeats its
+   * last position until it has a new one). Up to two minutes, such a step
+   * isn't a gap: the logger was running, without a new position.
+   */
+  bridged?: Uint8Array;
   /**
    * For files whose times have no time zone: the zone they're read in
    * ('local', 'utc' or an IANA id). The user can change it on the properties page.
@@ -180,8 +188,6 @@ export interface Derived {
   accuracy: Float64Array;
   /** The middle of the positive HDOPs, which `accuracy` is measured against; NaN without HDOP. */
   hdopBase: number;
-  /** For each fix, the first fix of its run of identical positions (a logger holding its position repeats it). */
-  runStart: Int32Array;
 }
 
 export interface LoadedTrack extends ParsedTrack {

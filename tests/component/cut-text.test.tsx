@@ -16,16 +16,16 @@ function widths(el: Element, full: number, shown: number) {
 beforeEach(() => S.resetForTests());
 
 describe('fullTextIfCut', () => {
-  it('sets the full text as the title only while the text is cut off', () => {
+  it('sets the full text as the hover text only while the text is cut off', () => {
     const { container } = render(<span class="name" onMouseEnter={fullTextIfCut('a-long-file-name.gpx')}>a-long-file-name.gpx</span>);
     const el = container.querySelector('.name')!;
     widths(el, 300, 120);
     fireEvent.mouseEnter(el);
-    expect(el.getAttribute('title')).toBe('a-long-file-name.gpx');
+    expect(el.getAttribute('data-tip')).toBe('a-long-file-name.gpx');
     // Wider again (the panel grew): the title goes.
     widths(el, 300, 300);
     fireEvent.mouseEnter(el);
-    expect(el.hasAttribute('title')).toBe(false);
+    expect(el.hasAttribute('data-tip')).toBe(false);
   });
 
   it('can measure a part of the element that does the cutting off', () => {
@@ -38,7 +38,7 @@ describe('fullTextIfCut', () => {
     widths(button, 200, 200);
     widths(button.querySelector('.btn-label')!, 180, 90);
     fireEvent.mouseEnter(button);
-    expect(button.getAttribute('title')).toBe('Properties & time zone');
+    expect(button.getAttribute('data-tip')).toBe('Properties & time zone');
   });
 
   it('shows a cut-off track name in full when the pointer is on it in the track list', () => {
@@ -47,6 +47,6 @@ describe('fullTextIfCut', () => {
     const name = container.querySelector('.track-row .track-name')!;
     widths(name, 420, 180);
     fireEvent.mouseEnter(name);
-    expect(name.getAttribute('title')).toBe('a-track-log-with-a-name-far-too-long-for-the-panel.nmea');
+    expect(name.getAttribute('data-tip')).toBe('a-track-log-with-a-name-far-too-long-for-the-panel.nmea');
   });
 });

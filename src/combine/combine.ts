@@ -7,12 +7,13 @@
 //     reference as a steady offset minus (clock difference x velocity),
 //     rounded to tenths of a second and applied from 0.2 s up to 10 s.
 //  2. Points on whole seconds; each log placed there from its own fixes,
-//     interpolated between fixes at most 10 s apart.
+//     interpolated between them unless the log has a gap there (a step
+//     across repeats dropped when the file was read isn't one).
 //  3. Each fix's accuracy (HDOP, else satellites, against the log's own
 //     median; corrected fixes count double) averaged over 10 s: worked out
-//     when the log loaded (derived.accuracy), as are its held positions.
-//  4. Held positions (the third or later identical fix in a row) don't count
-//     while another log moves more than 10 m.
+//     when the log loaded (derived.accuracy).
+//  4. (A logger that repeats its last position while it has no new one has
+//     those repeats dropped when its file is read: see parse/gpx.)
 //  5. Each logger's typical error from the spread between the logs.
 //  6. A log too far from the others to be believed is left out at that second.
 //  7. Weights: trust / error^2. A log at 0% trust only fills gaps.
@@ -25,17 +26,13 @@ import type { Columns, FieldKey, LoadedTrack } from '../model/types';
 import { ACCURACY_SMOOTH_S, derive } from '../derive/derive';
 
 export const MAX_LOGS = 3;
-/** Fixes further apart than this are not interpolated across (ms). */
-export const MAX_SPAN_MS = 10_000;
 /** Each fix's accuracy is averaged over this many seconds (when the log loads). */
 export const SMOOTH_S = ACCURACY_SMOOTH_S;
-/** Held fixes stop counting once another log has moved this far (m). */
-export const HOLD_MOVE_M = 10;
 /** Expected errors never go below this (m). */
 export const MIN_ERROR_M = 0.5;
 
 /** What happened to a log at one second of the combined track. Idle: at 0% trust and not needed to fill a gap. */
-export const Use = { Absent: 0, Used: 1, LeftOut: 2, Held: 3, Idle: 4 } as const;
+export const Use = { Absent: 0, Used: 1, LeftOut: 2, Idle: 3 } as const;
 
 export interface ComboSource {
   /** The log as it was when combined; later changes to it don't reach the combined track. */
@@ -101,7 +98,9 @@ export function checkCombine(tracks: LoadedTrack[]): CheckResult {
 interface Src {
   t: Float64Array; x: Float64Array; y: Float64Array;
   now: Float64Array; v: Float64Array; course: Float32Array; ele: Float32Array;
-  runStart: Int32Array; standard: boolean; medH: number; n: number;
+  standard: boolean; medH: number; n: number;
+  /** 1 where the log has a gap before a fix: it is never drawn across one. */
+  gap: Uint8Array;
 }
 
 function toSrc(tr: LoadedTrack, lat0: number, lon0: number): Src {
@@ -115,9 +114,9 @@ function toSrc(tr: LoadedTrack, lat0: number, lon0: number): Src {
     const sp = c.speed[i];
     v[i] = fromFile && sp === sp ? sp : d.kmh[i] / 3.6;
   }
-  // Accuracy over time, what it's measured against, and held positions: kept since the log loaded.
+  // Accuracy over time, and what it's measured against: kept since the log loaded.
   const hasH = tr.fields.includes('hdop');
-  return { t: c.t, x, y, now: d.accuracy, v, course: c.course, ele: c.ele, runStart: d.runStart, standard: hasH && !d.hdopRelative, medH: d.hdopBase, n };
+  return { t: c.t, x, y, now: d.accuracy, v, course: c.course, ele: c.ele, standard: hasH && !d.hdopRelative, medH: d.hdopBase, n, gap: d.gap };
 }
 
 // ---------------------------------------------------------------- 1. clocks
@@ -139,7 +138,7 @@ class Cursor {
     if (i + 1 < n) {
       const tj = t[i + 1] - sh;
       if (tj - T <= 1) { this.fixAt = i + 1; return true; }
-      if (ti < T && t[i + 1] - t[i] <= MAX_SPAN_MS) { this.fixAt = -1; this.f = (T - ti) / (tj - ti); return true; }
+      if (ti < T && !this.s.gap[i + 1]) { this.fixAt = -1; this.f = (T - ti) / (tj - ti); return true; }
     }
     return false;
   }
@@ -199,8 +198,8 @@ interface Prepared {
   lat0: number; lon0: number; kx: number; ky: number;
   /** Position in metres east and north of lat0/lon0 (NaN where the log has none), accuracy factor, speed, height, course. */
   x: Float64Array; y: Float64Array; now: Float64Array; v: Float64Array; ele: Float32Array; crs: Float32Array;
-  /** 1 where a log's fix is held, or left out. */
-  held: Uint8Array; left: Uint8Array;
+  /** 1 where a log's fix is left out. */
+  left: Uint8Array;
   /** The seconds where some log counts, in order, and what doesn't change with trust there. */
   idx: Int32Array; t: Float64Array; srcLat: Float64Array[]; srcLon: Float64Array[]; disagree: Uint8Array;
   apart: boolean; eleOffset: ComboInfo['eleOffset'];
@@ -246,35 +245,15 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
   for (let k = 0; k < K; k++) { t0 = Math.min(t0, S[k].t[0] - shift[k] * 1000); t1 = Math.max(t1, S[k].t[S[k].n - 1] - shift[k] * 1000); }
   t0 = Math.ceil(t0 / 1000) * 1000; t1 = Math.floor(t1 / 1000) * 1000;
   const M = Math.max(0, Math.round((t1 - t0) / 1000) + 1), MK = M * K;
-  const x = NaN64(MK), y = NaN64(MK), now = new Float64Array(MK), v = new Float64Array(MK), hold0 = NaN64(MK);
+  const x = NaN64(MK), y = NaN64(MK), now = new Float64Array(MK), v = new Float64Array(MK);
   const ele = new Float32Array(MK).fill(NaN), crs = new Float32Array(MK).fill(NaN);
   for (let k = 0; k < K; k++) {
-    const s = S[k], sh = shift[k] * 1000, cur = new Cursor(s, sh), rs = s.runStart;
+    const s = S[k], sh = shift[k] * 1000, cur = new Cursor(s, sh);
     for (let m = 0, j = k; m < M; m++, j += K) {
       if (!cur.at(t0 + m * 1000)) continue;
       x[j] = cur.val(s.x); y[j] = cur.val(s.y); now[j] = cur.val(s.now); v[j] = cur.val(s.v);
       const f = cur.fixAt;
       if (f >= 0) { ele[j] = s.ele[f]; crs[j] = s.course[f]; } else { ele[j] = cur.val(s.ele); crs[j] = s.course[cur.lo]; }
-      // Inside a hold (the third or later identical fix): when it began. Between two fixes of one hold, the same.
-      const i = f >= 0 ? f : rs[cur.lo + 1] === rs[cur.lo] ? cur.lo + 1 : -1;
-      if (i >= 0 && i - rs[i] >= 2) hold0[j] = s.t[rs[i]] - sh;
-    }
-  }
-
-  // 4. A held fix stops counting once another log has moved over 10 m since the hold began.
-  const held = new Uint8Array(MK), holdMove2 = HOLD_MOVE_M * HOLD_MOVE_M;
-  for (let m = 0, b = 0; m < M; m++, b += K) {
-    for (let k = 0; k < K; k++) {
-      const st = hold0[b + k];
-      if (st !== st) continue;
-      let m0 = Math.round((st - t0) / 1000);
-      m0 = m0 < 0 ? 0 : m0 >= M ? M - 1 : m0;
-      const b0 = m0 * K;
-      for (let o = 0; o < K; o++) {
-        if (o === k) continue;
-        const dx = x[b + o] - x[b0 + o], dy = y[b + o] - y[b0 + o];
-        if (dx * dx + dy * dy > holdMove2) { held[b + k] = 1; break; } // NaN compares false: absent logs never count
-      }
     }
   }
 
@@ -282,7 +261,7 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
   const left = new Uint8Array(MK), dis = new Uint8Array(M);
   const e = new Float64Array(K), here = new Int8Array(K), T = new Float64Array(K);
   for (let pass = 0; pass < 2; pass++) {
-    const T2 = typicalErrors(S, x, y, now, held, left, K, M, pass === 0);
+    const T2 = typicalErrors(S, x, y, now, left, K, M, pass === 0);
     left.fill(0);
     dis.fill(0);
     for (let k = 0; k < K; k++) T[k] = Math.sqrt(T2[k]);
@@ -290,7 +269,7 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
       let nh = 0;
       for (let k = 0; k < K; k++) {
         const j = b + k;
-        if (x[j] !== x[j] || held[j]) continue;
+        if (x[j] !== x[j]) continue;
         here[nh++] = k;
         const ek = T[k] * now[j];
         e[k] = ek > MIN_ERROR_M ? ek : MIN_ERROR_M;
@@ -317,14 +296,14 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
     }
   }
 
-  // The seconds where some log counts (present, not held, not left out), and
+  // The seconds where some log counts (present, not left out), and
   // whether two logs are over 100 m apart for most of the time they share.
   const idx = new Int32Array(M);
   const apartN = new Float64Array(9), sharedN = new Float64Array(9);
   let n = 0;
   for (let m = 0, b = 0; m < M; m++, b += K) {
     let counts = false;
-    for (let k = 0; k < K; k++) { const j = b + k; if (x[j] === x[j] && !held[j] && !left[j]) counts = true; }
+    for (let k = 0; k < K; k++) { const j = b + k; if (x[j] === x[j] && !left[j]) counts = true; }
     for (let i = 0; i < K; i++) for (let j = i + 1; j < K; j++) {
       const dx = x[b + i] - x[b + j], dy = y[b + i] - y[b + j], dd = dx * dx + dy * dy;
       if (dd !== dd) continue;
@@ -346,14 +325,14 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
     srcLat.push(la); srcLon.push(lo);
   }
   return {
-    ref, K, n, shift, T, lat0, lon0, kx, ky, x, y, now, v, ele, crs, held, left,
+    ref, K, n, shift, T, lat0, lon0, kx, ky, x, y, now, v, ele, crs, left,
     idx: idx.slice(0, n), t, srcLat, srcLon, disagree, apart, eleOffset: elevationOffset(ele, K, ref, M),
   };
 }
 
 /** Steps 7 and 8: the weighted averages for this trust, and the combined track. */
 function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: string): ComboTrack {
-  const { K, n, idx, x, y, now, v, ele, crs, held, left, T, lat0, lon0, kx, ky } = p;
+  const { K, n, idx, x, y, now, v, ele, crs, left, T, lat0, lon0, kx, ky } = p;
   const lat = new Float64Array(n), lon = new Float64Array(n), oEle = new Float32Array(n), speed = new Float32Array(n), course = new Float32Array(n);
   const use = new Uint8Array(n * K), eleBreak = new Uint8Array(n);
   const shareSum = new Float64Array(K), shareN = new Float64Array(K), w = new Float64Array(K), counted = new Int8Array(K);
@@ -364,7 +343,6 @@ function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: s
     for (let k = 0; k < K; k++) {
       const j = b + k;
       if (x[j] !== x[j]) continue; // Use.Absent
-      if (held[j]) { use[u + k] = Use.Held; continue; }
       if (left[j]) { use[u + k] = Use.LeftOut; continue; }
       counted[nc++] = k;
       if (trust[k] > 0) nTrusted++;
@@ -461,13 +439,13 @@ function tallyMedian(values: Float64Array, count: number, maxV: number): number 
  * all three down; two are taken as equally accurate unless both report
  * standard HDOP. The first pass uses medians, so jumps don't inflate it.
  */
-function typicalErrors(S: Src[], x: Float64Array, y: Float64Array, now: Float64Array, held: Uint8Array, left: Uint8Array, K: number, M: number, robust: boolean): Float64Array {
+function typicalErrors(S: Src[], x: Float64Array, y: Float64Array, now: Float64Array, left: Uint8Array, K: number, M: number, robust: boolean): Float64Array {
   const s = new Float64Array(9), a = new Float64Array(9).fill(1);
   const d = new Float64Array(M);
   for (let i = 0; i < K; i++) for (let j = i + 1; j < K; j++) {
     let n = 0, sum = 0, si = 0, sj = 0, maxD = 0;
     for (let bi = i, bj = j, end = M * K; bi < end; bi += K, bj += K) {
-      if (held[bi] || held[bj] || left[bi] || left[bj]) continue;
+      if (left[bi] || left[bj]) continue;
       const dx = x[bi] - x[bj], dy = y[bi] - y[bj], dd = dx * dx + dy * dy;
       if (dd !== dd) continue;
       const dist = Math.sqrt(dd);

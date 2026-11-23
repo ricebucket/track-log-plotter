@@ -5,7 +5,7 @@ import { addTracks } from '../../src/state/logic';
 import { buildScale, stepOf } from '../../src/color/scale';
 import type { LoadedTrack, MeasureKey } from '../../src/model/types';
 import { FAMILIES, LOG_COLORS, SINGLE } from '../../src/color/palettes';
-import { columns, graphRange, MIN_ZOOM_MS, panView, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from '../../src/ui/timelineMath';
+import { centerView, columns, graphRange, MIN_ZOOM_MS, panView, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from '../../src/ui/timelineMath';
 import { scaleBar } from '../../src/ui/scaleBar';
 import { load } from '../helpers/fixtures';
 
@@ -291,5 +291,13 @@ describe("a combined track's logs on the map", () => {
     expect(dots.map((f) => [f.properties.k, f.properties.out])).toEqual([[0, 0], [1, 1]]);
     expect(buildLogCursors([item([true, true])], {}, null).features).toEqual([]);
     expect(buildLogCursors([item([false, true])], {}, c.cols.t[k]).features.map((f) => f.properties.k)).toEqual([1]);
+  });
+});
+
+describe('centering a zoomed timeline on a point', () => {
+  it('keeps the zoomed width, centers the point, and stops at either end of the timeline', () => {
+    expect(centerView([100, 200], [0, 1000], 500)).toEqual([450, 550]);
+    expect(centerView([100, 200], [0, 1000], 20)).toEqual([0, 100]);
+    expect(centerView([100, 200], [0, 1000], 990)).toEqual([900, 1000]);
   });
 });

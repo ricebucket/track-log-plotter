@@ -11,6 +11,7 @@ import { Toasts } from './Toasts';
 import { EmptyState } from './EmptyState';
 import { IconUpload } from './icons';
 import { HintLayer, hint } from './Computed';
+import { TipLayer } from './TipLayer';
 import { ZonePicker } from './ZonePicker';
 import { NARROW, useMedia } from './hooks';
 
@@ -81,6 +82,7 @@ export function App({ Map }: { Map: ComponentType }) {
       <MapFooter />
       <Toasts />
       <HintLayer />
+      <TipLayer />
       {dragging && (
         <div class="drop-overlay" aria-hidden="true"><div><IconUpload size={28} /><span>{t('drop.overlay')}</span></div></div>
       )}

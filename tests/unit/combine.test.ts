@@ -36,7 +36,7 @@ function combined(tracks: LoadedTrack[], trust?: number[]): ComboTrack {
 }
 
 // ---------- synthetic walks in Central Park ----------
-interface Walk { offsetM?: number; shiftS?: number; seconds?: number; gap?: [number, number]; hold?: [number, number]; hdop?: (i: number) => number; seed?: number; drop?: number[]; speed?: boolean; ele?: number }
+interface Walk { offsetM?: number; shiftS?: number; seconds?: number; gap?: [number, number]; hold?: [number, number]; holds?: (i: number) => boolean; holdSpeed?: number; creator?: string; hdop?: (i: number) => number; seed?: number; drop?: number[]; speed?: boolean; ele?: number }
 /**
  * A walk at 1.5 m/s, a fix a second, as GPX: east for 150 s, then north (a clock
  * offset only shows where the way turns). `offsetM` puts it that far north.
@@ -52,15 +52,17 @@ function walk(o: Walk = {}): LoadedTrack {
     const east = Math.min(i, 150) * 1.5, north = Math.max(0, i - 150) * 1.5;
     let lat = 40.7712 + ((o.offsetM ?? 0) + north + rnd() * 0.8) / KY;
     let lon = -73.9742 + (east + rnd() * 0.8) / (KY * Math.cos((40.7712 * Math.PI) / 180));
-    if (o.hold && i > o.hold[0] && i < o.hold[1]) { lat = lastLat; lon = lastLon; }
+    // A logger holding its position: it repeats its last fix (and, some, a speed of 0) until it has a new one.
+    const holding = (o.hold && i > o.hold[0] && i < o.hold[1]) || o.holds?.(i);
+    if (holding) { lat = lastLat; lon = lastLon; }
     lastLat = lat; lastLon = lon;
     if (o.gap && i >= o.gap[0] && i < o.gap[1]) continue;
     if (o.drop?.includes(i)) continue;
     const time = new Date(t0 + i * 1000).toISOString().replace('.000Z', 'Z');
-    const extra = `${o.ele === undefined ? '' : `<ele>${o.ele}</ele>`}${o.hdop ? `<hdop>${o.hdop(i).toFixed(1)}</hdop>` : ''}${o.speed === false ? '' : `<extensions><gpxtpx:TrackPointExtension><gpxtpx:speed>1.50</gpxtpx:speed></gpxtpx:TrackPointExtension></extensions>`}`;
+    const extra = `${o.ele === undefined ? '' : `<ele>${o.ele}</ele>`}${o.hdop ? `<hdop>${o.hdop(i).toFixed(1)}</hdop>` : ''}${o.speed === false ? '' : `<extensions><gpxtpx:TrackPointExtension><gpxtpx:speed>${holding && o.holdSpeed !== undefined ? o.holdSpeed.toFixed(2) : '1.50'}</gpxtpx:speed></gpxtpx:TrackPointExtension></extensions>`}`;
     lines.push(`<trkpt lat="${lat.toFixed(7)}" lon="${lon.toFixed(7)}"><time>${time}</time>${extra}</trkpt>`);
   }
-  const gpx = `<?xml version="1.0"?><gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v2"><trk><trkseg>${lines.join('')}</trkseg></trk></gpx>`;
+  const gpx = `<?xml version="1.0"?><gpx version="1.1" creator="${o.creator ?? 'test'}" xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v2"><trk><trkseg>${lines.join('')}</trkseg></trk></gpx>`;
   const r = parseText(gpx, `walk-${o.offsetM ?? 0}-${o.seed ?? 1}.gpx`);
   if (!r.ok) throw new Error(r.error);
   return r.track;
@@ -198,20 +200,53 @@ describe('combining logs: the Stanford drive', () => {
 });
 
 describe('combining logs: corner cases', () => {
-  it('leaves out held fixes while the other log keeps moving', () => {
-    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [100, 140] });
+  // A logger that repeats its last fix while it has no new one (i-gotU, recording a speed of 0 meanwhile):
+  // the repeats are dropped when its file is read, and the step across them isn't a gap.
+  const IGOTU = 'igotU_GPS_WIN';
+
+  it('draws a log across the repeats dropped from it, straight from where it stopped to where it moved on', () => {
+    // The stuck log repeats its fix from 100 s to 140 s while both walk east at 1.5 m/s.
+    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [100, 140], holdSpeed: 0, creator: IGOTU });
+    expect(stuck.cols.n).toBe(300 - 39);
     const c = combined([moving, stuck]);
     const T0 = moving.cols.t[0];
-    const heldS: number[] = [];
-    for (let i = 0; i < c.cols.n; i++) if (c.combo.use[1][i] === Use.Held) heldS.push((c.cols.t[i] - T0) / 1000);
-    // The hold starts counting as held once the moving log is over 10 m away (about 7 s at 1.5 m/s).
-    expect(heldS.length).toBeGreaterThan(25);
-    expect(Math.min(...heldS)).toBeGreaterThanOrEqual(102);
-    expect(Math.max(...heldS)).toBeLessThan(140);
-    // Meanwhile the combined track follows the moving log.
+    const at = (s: number) => c.cols.t.findIndex((t) => t === T0 + s * 1000);
+    // It counts throughout.
+    for (let s = 101; s < 140; s++) expect(c.combo.use[1][at(s)]).toBe(Use.Used);
+    // Halfway, it's on the line between its fixes at 100 s and 140 s: near the moving log, not where it stopped.
+    const k = moving.cols.t.findIndex((t) => t === T0 + 120_000), mid = at(120);
+    expect(metres(c.combo.srcLat[1][mid], c.combo.srcLon[1][mid], moving.cols.lat[k], moving.cols.lon[k])).toBeLessThan(5);
+    // Its recorded 0s went with the repeats: the combined speed stays at walking pace.
+    for (let s = 101; s < 140; s++) expect(Math.abs(c.cols.speed[at(s)] - 1.5)).toBeLessThan(0.2);
+  });
+
+  it('treats repeats over two minutes as a gap in that log, following the logs that move', () => {
+    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [20, 200], creator: IGOTU });
+    const c = combined([moving, stuck]);
+    const T0 = moving.cols.t[0];
     const i = c.cols.t.findIndex((t) => t === T0 + 130_000);
+    expect(c.combo.use[1][i]).toBe(Use.Absent);
     const j = moving.cols.t.findIndex((t) => t === T0 + 130_000);
     expect(metres(c.cols.lat[i], c.cols.lon[i], moving.cols.lat[j], moving.cols.lon[j])).toBeLessThan(1);
+  });
+
+  it("doesn't zigzag between the logs while one keeps repeating its fix and catching up", () => {
+    // 8 m apart; the second log repeats its fix 15 s out of every 20, like a logger that only now and then gets
+    // a new one. With the repeats counted, the combined line went to the stale fix and snapped back.
+    const a = walk({ seed: 4 }), b = walk({ seed: 5, offsetM: 8, holds: (i) => i % 20 > 4 && i < 150, holdSpeed: 0, creator: IGOTU });
+    const c = combined([a, b]);
+    const T0 = a.cols.t[0];
+    // The walk heads east until 150 s: the combined line's north offset there should hold steady.
+    const north: number[] = [];
+    for (let i = 0; i < c.cols.n; i++) {
+      const s = (c.cols.t[i] - T0) / 1000;
+      if (s >= 30 && s < 140) north.push((c.cols.lat[i] - 40.7712) * KY);
+    }
+    north.sort((x, y) => x - y);
+    expect(north[Math.floor(north.length * 0.95)] - north[Math.floor(north.length * 0.05)]).toBeLessThan(2.5);
+    // And its speed never drops to the stuck log's recorded 0s.
+    const slow = Array.from(c.cols.speed).filter((v, i) => (c.cols.t[i] - T0) / 1000 < 140 && v < 1).length;
+    expect(slow).toBe(0);
   });
 
   it('works out an elevation offset only from the seconds both logs have', () => {

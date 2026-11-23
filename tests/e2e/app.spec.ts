@@ -177,7 +177,7 @@ test('keeps Properties and Remove? on one line inside the card in a wide fallbac
   // The whole label is still its name, and shows on hover once it's cut off.
   await expect(props).toHaveAccessibleName('Properties & time zone');
   await props.hover();
-  await expect(props).toHaveAttribute('title', 'Properties & time zone');
+  await expect(page.locator('.tip-bubble')).toHaveText('Properties & time zone');
 });
 
 test('shows a track name cut off in the list in full on hover, and only then', async ({ page }) => {
@@ -186,10 +186,17 @@ test('shows a track name cut off in the list in full on hover, and only then', a
   await openAs(page, 'central-park-loop-vendor.gpx', 'short.gpx');
   const longName = page.locator('.track-row .track-name', { hasText: long });
   const shortName = page.locator('.track-row .track-name', { hasText: 'short.gpx' });
+  // Both loaded (and the list settled) before pointing at a name.
+  await expect(page.locator('.track-row')).toHaveCount(2);
+  await expect(page.locator('.track-row[data-track="B"]')).toHaveClass(/is-selected/);
+  // The app's own bubble (its short pause is pinned in tests/component/tips.test.tsx).
   await longName.hover();
-  await expect(longName).toHaveAttribute('title', long);
+  await expect(page.locator('.tip-bubble')).toHaveText(long);
+  await page.mouse.move(5, 5);
+  await expect(page.locator('.tip-bubble')).toHaveCount(0);
   await shortName.hover();
-  await expect(shortName).not.toHaveAttribute('title');
+  await page.waitForTimeout(500);
+  await expect(page.locator('.tip-bubble')).toHaveCount(0);
 });
 
 test('combines two logs from select mode: the new track, its logs on the map and the timeline, and its trust', async ({ page }) => {
@@ -209,35 +216,69 @@ test('combines two logs from select mode: the new track, its logs on the map and
   await bar.getByRole('button', { name: 'Combine' }).click();
 
   const row = page.locator('.track-row[data-track="C"]');
-  await expect(row.locator('.track-name')).toHaveText('Combined track');
+  await expect(row.locator('.track-name')).toHaveText('A+B Combined Track');
   await expect(row).toHaveClass(/is-selected/);
-  await expect(row.getByRole('region', { name: 'Its logs' }).getByRole('listitem')).toHaveCount(2);
+  await expect(row.getByRole('region', { name: 'Sources' }).getByRole('listitem')).toHaveCount(2);
   // On the map: the combined track, and its two logs as thin lines, the phone's jump in red.
   const map = page.locator('.map');
   await expect(map).toHaveAttribute('data-log-lines', /^[1-9]\d*$/, { timeout: 20_000 });
   await expect(map).toHaveAttribute('data-log-out', /^[1-9]\d*$/);
   // On the timeline: a thin lane for each log under the combined track's lane.
   await expect(page.locator('.lane.log-lane')).toHaveCount(2);
-  await row.getByRole('button', { name: 'Hide log 2' }).click();
+  await row.getByRole('button', { name: 'Hide source B' }).click();
   await expect(page.locator('.lane.log-lane')).toHaveCount(1);
-  await row.getByRole('button', { name: 'Show log 2' }).click();
+  await row.getByRole('button', { name: 'Show source B' }).click();
 
   // Trust: open the line and drag the handle most of the way to log 2.
   await expect(row.locator('.trust-val')).toHaveText('equal');
   await row.getByRole('button', { name: 'Adjust' }).click();
   const shape = row.locator('.trust-shape');
   const box = (await shape.boundingBox())!;
-  const handle = (await row.getByRole('slider', { name: 'Trust in each log' }).boundingBox())!;
+  const handle = (await row.getByRole('slider', { name: 'Trust in each source' }).boundingBox())!;
   await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.8, box.y + box.height / 2, { steps: 6 });
   await page.mouse.up();
-  await expect(row.locator('.trust-val')).toHaveText(/^1 at \d+%, 2 at \d+%$/);
-  const [, one, , two] = (await row.locator('.trust-val').textContent())!.match(/\d+/g)!.map(Number);
+  await expect(row.locator('.trust-val')).toHaveText(/^A at \d+%, B at \d+%$/);
+  const [one, two] = (await row.locator('.trust-val').textContent())!.match(/\d+/g)!.map(Number);
   expect(two).toBeGreaterThan(one);
   // Clicking the center mark makes them equal again.
   await row.getByRole('button', { name: 'Make them equal' }).click();
   await expect(row.locator('.trust-val')).toHaveText('equal');
+});
+
+test("grows the timeline pane to hold a combined track's source lanes, and keeps the map footer above it", async ({ page }) => {
+  await open(page, 'stanford-drive-car.nmea', 'stanford-drive-phone.gpx', 'stanford-drive-logger.gpx');
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  for (const id of ['A', 'B', 'C']) await page.getByRole('checkbox', { name: new RegExp(`^Select track ${id}:`) }).click();
+  await page.getByRole('button', { name: 'Combine' }).click();
+  await expect(page.locator('.lane.log-lane')).toHaveCount(3);
+  // Two of its sources shown beside it as tracks of their own: two more lanes.
+  await page.getByRole('button', { name: 'Show track A' }).click();
+  await page.getByRole('button', { name: 'Show track B' }).click();
+  await expect(page.locator('.tl-lanes > .lane:not(.log-lane)')).toHaveCount(3);
+  const pane = (await page.locator('.timeline').boundingBox())!;
+  const lanes = page.locator('.tl-lanes .lane');
+  for (let k = 0; k < await lanes.count(); k++) {
+    const b = (await lanes.nth(k).boundingBox())!;
+    expect(b.y + b.height).toBeLessThanOrEqual(pane.y + pane.height);
+  }
+  const ticks = (await page.locator('.tl-ticks').boundingBox())!;
+  expect(ticks.y + ticks.height).toBeLessThanOrEqual(pane.y + pane.height);
+  const footer = (await page.locator('.map-footer').boundingBox())!;
+  expect(footer.y + footer.height).toBeLessThanOrEqual(pane.y);
+});
+
+test('draws a dot for each track too small to see, a combined track\'s diamond included', async ({ page }) => {
+  // New York and Stanford shown together: fitting both makes each a speck, so each gets a dot.
+  await open(page, 'central-park-loop.nmea', 'stanford-drive-car.nmea', 'stanford-drive-phone.gpx');
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('checkbox', { name: /^Select track B:/ }).click();
+  await page.getByRole('checkbox', { name: /^Select track C:/ }).click();
+  await page.getByRole('button', { name: 'Combine' }).click();
+  await expect(page.locator('.track-row[data-track="D"]')).toBeVisible();
+  await page.getByRole('button', { name: 'Fit the tracks' }).click();
+  await expect(page.locator('.map')).toHaveAttribute('data-marks', '2', { timeout: 20_000 });
 });
 
 test('leaves select mode on Escape, and refuses to combine a combined track again', async ({ page }) => {
@@ -538,6 +579,6 @@ test('has no serious accessibility problems in select mode, or on a combined tra
   await page.getByRole('checkbox', { name: /^Select track C:/ }).click();
   await page.getByRole('button', { name: 'Combine' }).click();
   await page.locator('.track-row[data-track="D"]').getByRole('button', { name: 'Adjust' }).click();
-  await expect(page.getByRole('slider', { name: 'Trust in each log' })).toBeVisible();
+  await expect(page.getByRole('slider', { name: 'Trust in each source' })).toBeVisible();
   expect(await serious()).toEqual([]);
 });

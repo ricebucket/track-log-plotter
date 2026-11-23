@@ -7,28 +7,35 @@ import * as S from '../state/store';
 import { t } from '../state/store';
 import type { ComboTrack } from '../combine/combine';
 import { LOG_COLORS } from '../color/palettes';
+import { FORMAT_SHAPE } from '../color/shapes';
 import { fmtPercent } from '../format';
 import { metresText } from './labels';
 import { fullTextIfCut } from './cutText';
 import { IconChevronDown, IconChevronUp, IconEye, IconEyeOff } from './icons';
 
-/** A log's number, 1 to 3, in its color: numbers, so they aren't taken for the list's letters. */
-export function LogNumber({ k }: { k: number }) {
-  return <span class="log-num" style={{ background: LOG_COLORS[k % LOG_COLORS.length] }} aria-hidden="true">{k + 1}</span>;
+/** What a combined track calls its sources: the letters they had in the list when it was made. */
+export function sourceNames(item: TrackItem, track: ComboTrack): string[] {
+  return track.combo.sources.map((_, k) => item.sources?.[k] ?? String(k + 1));
 }
 
-/** "equal", or each log's share: "1 at 65%, 2 at 35%". */
-export function sharesText(trust: readonly number[]): string {
+/** A source's badge, as in the track list (its letter, its file's shape), in the color of its line on the map. */
+export function SourceBadge({ track, k, name, size = 'small' }: { track: ComboTrack; k: number; name: string; size?: 'small' | 'tiny' }) {
+  const f = track.combo.sources[k].track.format;
+  return <span class={`badge ${FORMAT_SHAPE[f]} ${size}`} style={{ background: LOG_COLORS[k % LOG_COLORS.length] }} aria-hidden="true">{name}</span>;
+}
+
+/** "equal", or each source's share: "B at 65%, C at 35%". */
+export function sharesText(trust: readonly number[], names: readonly string[]): string {
   if (trust.every((v) => Math.abs(v - 1 / trust.length) < 0.005)) return t('combine.equal');
   const loc = S.locale.value;
-  return trust.map((v, k) => t('combine.share', { k: k + 1, p: fmtPercent(v, loc) })).join(t('combine.sep'));
+  return trust.map((v, k) => t('combine.share', { k: names[k], p: fmtPercent(v, loc) })).join(t('combine.sep'));
 }
 
-/** What a log at 0% trust still does: fills gaps. */
-function zeroText(trust: readonly number[]): string | null {
-  const zero = trust.flatMap((v, k) => (v < 0.005 ? [k + 1] : []));
+/** What a source at 0% trust still does: fills gaps. */
+function zeroText(trust: readonly number[], names: readonly string[]): string | null {
+  const zero = trust.flatMap((v, k) => (v < 0.005 ? [names[k]] : []));
   if (zero.length === 1) return t('combine.zeroOne', { k: zero[0] });
-  if (zero.length === 2) return t('combine.zeroTwo', { a: zero[0], b: zero[1], c: trust.findIndex((v) => v >= 0.005) + 1 });
+  if (zero.length === 2) return t('combine.zeroTwo', { a: zero[0], b: zero[1], c: names[trust.findIndex((v) => v >= 0.005)] });
   return null;
 }
 
@@ -37,7 +44,8 @@ export function CombinedLogs({ item, track }: { item: TrackItem; track: ComboTra
   const loc = S.locale.value;
   const src = track.combo.sources;
   const trust = src.map((s) => s.trust);
-  const zero = zeroText(trust);
+  const names = sourceNames(item, track);
+  const zero = zeroText(trust, names);
   const hid = `combo-${item.id}`;
   return (
     <section class="combo" aria-labelledby={hid}>
@@ -45,15 +53,15 @@ export function CombinedLogs({ item, track }: { item: TrackItem; track: ComboTra
       <ul class="combo-logs">
         {src.map((s, k) => {
           const on = item.logs?.[k] ?? true;
-          const label = on ? t('combine.hideLog', { k: k + 1 }) : t('combine.showLog', { k: k + 1 });
+          const label = on ? t('combine.hideLog', { k: names[k] }) : t('combine.showLog', { k: names[k] });
           const sub = [t('combine.counts', { p: fmtPercent(s.share, loc) }), t('combine.typical', { m: metresText(s.typicalM) })];
           if (!on) sub.push(t('combine.hidden'));
           return (
-            <li key={k} class={on ? undefined : 'is-off'} data-log={k + 1}>
+            <li key={k} class={on ? undefined : 'is-off'} data-log={names[k]}>
               <button type="button" class="icon-btn eye" aria-pressed={on ? 'true' : 'false'} aria-label={label} title={label} onClick={() => S.toggleLog(item.id, k)}>
                 {on ? <IconEye size={17} /> : <IconEyeOff size={17} />}
               </button>
-              <LogNumber k={k} />
+              <SourceBadge track={track} k={k} name={names[k]} />
               <span class="combo-log">
                 <span class="combo-file" onMouseEnter={fullTextIfCut(s.track.file)}>{s.track.file}</span>
                 <span class="combo-sub">{sub.join(' · ')}</span>
@@ -64,7 +72,7 @@ export function CombinedLogs({ item, track }: { item: TrackItem; track: ComboTra
       </ul>
       <div class="trust-line">
         <span class="trust-cap">{t('combine.trust')}</span>
-        <span class="trust-val">{sharesText(trust)}</span>
+        <span class="trust-val">{sharesText(trust, names)}</span>
         <button type="button" class="link-btn trust-toggle" aria-expanded={open ? 'true' : 'false'} aria-controls={`${hid}-trust`} onClick={() => setOpen(!open)}>
           <span>{open ? t('combine.hide') : t('combine.adjust')}</span>
           {open ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
@@ -72,7 +80,7 @@ export function CombinedLogs({ item, track }: { item: TrackItem; track: ComboTra
       </div>
       {open && (
         <div class="trust-box" id={`${hid}-trust`}>
-          <TrustShape item={item} trust={trust} />
+          <TrustShape item={item} trust={trust} names={names} />
           <p class="muted small trust-hint">{t('combine.shapeHint')}</p>
           {zero && <p class="trust-zero" role="status">{zero}</p>}
         </div>
@@ -102,7 +110,7 @@ function tidy(w: number[]): number[] {
   return r.map((v) => v / 100);
 }
 
-export function TrustShape({ item, trust }: { item: TrackItem; trust: readonly number[] }) {
+export function TrustShape({ item, trust, names }: { item: TrackItem; trust: readonly number[]; names: readonly string[] }) {
   const K = trust.length;
   const { pts, h } = corners(K);
   const ref = useRef<SVGSVGElement>(null);
@@ -178,22 +186,21 @@ export function TrustShape({ item, trust }: { item: TrackItem; trust: readonly n
         : <path d={`M${pts[0][0]} ${pts[0][1]}L${pts[1][0]} ${pts[1][1]}L${pts[2][0]} ${pts[2][1]}Z`} class="trust-track" />}
       {/* The center: every log counts the same. Clicking it (or Home on the handle) goes back there. */}
       <g
-        class={`trust-center${isEqual ? ' is-on' : ''}`} role="button" tabIndex={0} aria-label={t('combine.makeEqual')}
+        class={`trust-center${isEqual ? ' is-on' : ''}`} role="button" tabIndex={0} aria-label={t('combine.makeEqual')} data-tip={t('combine.makeEqual')}
         onClick={() => set(equal, true)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); set(equal, true); } }}
       >
-        <title>{t('combine.makeEqual')}</title>
         <circle cx={mid[0]} cy={mid[1]} r={9} class="trust-center-hit" />
         <path d={`M${mid[0] - 5} ${mid[1]}H${mid[0] + 5}M${mid[0]} ${mid[1] - 5}V${mid[1] + 5}`} />
       </g>
       {pts.map(([x, y], k) => (
         <g key={k} class="trust-corner" aria-hidden="true">
           <circle cx={x} cy={y} r={9} fill={LOG_COLORS[k]} />
-          <text x={x} y={y + 3.6} text-anchor="middle">{k + 1}</text>
+          <text x={x} y={y + 3.6} text-anchor="middle">{names[k]}</text>
         </g>
       ))}
       <circle
         class="trust-handle" cx={hx} cy={hy} r={8} tabIndex={0} role="slider" aria-label={t('combine.handle')}
-        aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(shown[0] * 100)} aria-valuetext={sharesText(shown)} onKeyDown={onKey}
+        aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(shown[0] * 100)} aria-valuetext={sharesText(shown, names)} onKeyDown={onKey}
       />
     </svg>
   );

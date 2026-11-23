@@ -17,6 +17,7 @@
   --mono: 'Overpass Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --panel-w: 360px;
   --tl-h: 210px;
+  --tl-min: 210px;
   --pane-left: calc(16px + var(--panel-w) + 16px);
   color-scheme: light;
 }
@@ -210,7 +211,7 @@ button:disabled { cursor: default; opacity: 0.5; }
 .note-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; line-height: 18px; color: var(--ink-2); }
 
 /* ---------- timeline ---------- */
-.timeline { position: absolute; left: var(--pane-left); right: 16px; bottom: 16px; height: var(--tl-h); z-index: 10; display: flex; flex-direction: column; gap: 6px; padding: 10px 16px 8px 14px; border-radius: 14px; background: var(--panel-bg); box-shadow: var(--shadow); }
+.timeline { position: absolute; left: var(--pane-left); right: 16px; bottom: 16px; min-height: var(--tl-min); max-height: calc(100vh - 32px); z-index: 10; display: flex; flex-direction: column; gap: 6px; padding: 10px 16px 8px 14px; border-radius: 14px; background: var(--panel-bg); box-shadow: var(--shadow); }
 .tl-head { display: flex; align-items: center; gap: 10px; min-height: 36px; }
 .tl-time { font-size: 15px; font-weight: 700; white-space: nowrap; }
 .tl-divider { flex: none; width: 1px; height: 18px; background: var(--line); }
@@ -232,7 +233,8 @@ button:disabled { cursor: default; opacity: 0.5; }
 .icon-btn.outline.danger.is-asking svg { display: none; }
 .icon-btn.outline.danger.is-asking { width: auto; padding: 0 12px; gap: 5px; background: #8a1c1c; border-color: #8a1c1c; color: #fff; font-size: 12.5px; font-weight: 700; }
 .tl-values { min-width: 0; font-size: 12.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tl-lanes { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; cursor: crosshair; touch-action: none; }
+/* As tall as its lanes, at least filling the pane: the pane grows with them. */
+.tl-lanes { position: relative; flex: 1 0 auto; display: flex; flex-direction: column; gap: 6px; cursor: crosshair; touch-action: none; }
 .lane { display: flex; align-items: stretch; gap: 10px; }
 .lane-label { flex: none; display: flex; align-items: center; gap: 7px; min-width: 0; }
 .lane-text { display: flex; flex-direction: column; min-width: 0; line-height: 14px; }
@@ -366,7 +368,9 @@ button:disabled { cursor: default; opacity: 0.5; }
   .tl-time { font-size: 14px; }
   .tl-values { order: 10; flex: 1 0 100%; font-size: 11.5px; }
   .timeline .seg.small button { height: 28px; padding: 0 7px; }
-  .tl-lanes { flex: none; gap: 4px; }
+  .timeline { min-height: 0; }
+  /* On a phone the pane is capped: its lanes scroll inside it rather than spill out. */
+  .tl-lanes { flex: 0 1 auto; min-height: 0; overflow-y: auto; gap: 4px; }
   .lane-measure { font-size: 11px; }
   .panel-pill { left: 8px; top: auto; bottom: 8px; }
   .timeline-pill { left: 60px; bottom: 8px; }
@@ -421,13 +425,12 @@ button:disabled { cursor: default; opacity: 0.5; }
 .select-why { margin: 6px 4px 0; font-size: 11.5px; line-height: 16px; color: var(--muted); }
 
 /* ---------- a combined track's logs and trust ---------- */
-.log-num { flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: #fff; font-size: 10.5px; font-weight: 800; line-height: 1; }
 .combo { display: flex; flex-direction: column; gap: 6px; }
 .combo-h { margin: 0; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
 .combo-logs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .combo-logs li { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .combo-logs .eye { margin-left: -9px; width: 32px; height: 32px; }
-.combo-logs li.is-off .log-num, .combo-logs li.is-off .combo-file { opacity: 0.5; }
+.combo-logs li.is-off .badge, .combo-logs li.is-off .combo-file { opacity: 0.5; }
 .combo-log { min-width: 0; display: flex; flex-direction: column; }
 .combo-file { font-size: 12.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .combo-sub { font-size: 11px; line-height: 15px; color: var(--muted); }
@@ -455,8 +458,10 @@ button:disabled { cursor: default; opacity: 0.5; }
 .tip-logs { list-style: none; margin: 7px 0 0; padding: 7px 0 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
 .tip-logs li { display: flex; align-items: center; gap: 7px; }
 .tip-logs li.is-out { color: #a3121f; font-weight: 700; }
-.tip-logs .log-num { width: 16px; height: 16px; font-size: 9.5px; }
 
 /* A combined track's logs on the timeline: thin lanes under its own. */
 .log-lane .lane-label { gap: 6px; }
-.log-lane .log-num { width: 14px; height: 14px; font-size: 9px; }
+
+/* Hover text, shown by the app after a short pause instead of the browser's own after a long one. */
+.tip-bubble-wrap { position: fixed; z-index: 80; display: flex; justify-content: center; pointer-events: none; }
+.tip-bubble { max-width: 100%; padding: 5px 9px; border-radius: 7px; background: var(--ink); color: #fff; font-size: 12px; line-height: 16px; font-weight: 500; overflow-wrap: anywhere; box-shadow: var(--shadow); }

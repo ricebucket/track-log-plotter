@@ -93,6 +93,7 @@ export function noteText(n: Note): string {
     case 'gaps': return t('note.gaps', { n: n.count, longest: Math.round(n.longestS) });
     case 'zeroSats': return t('note.zeroSats', { n: n.count, stale: n.stale });
     case 'motion': return t('note.motion', { n: n.rate });
+    case 'repeatsDropped': return t('note.repeatsDropped', { n: n.count, long: n.long });
     default: return t(`note.${n.kind}`);
   }
 }

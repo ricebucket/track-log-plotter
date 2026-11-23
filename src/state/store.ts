@@ -347,12 +347,13 @@ export function combineBlock(ids: readonly string[]): 'few' | 'many' | 'combined
   return !c.ok && c.reason === 'noOverlap' ? 'noOverlap' : null;
 }
 
-/** The name of a new combined track: "Combined track", then "Combined track 2" and so on. */
-function combinedName(): string {
+/** The name of a new combined track, from its sources' letters in the order ticked: "B+C Combined Track", then "B+C Combined Track 2". */
+function combinedName(ids: readonly string[]): string {
   const taken = new Set(items.value.map((x) => x.track.file));
-  const base = t('combine.name');
+  const p = { ids: ids.join('+') };
+  const base = t('combine.name', p);
   if (!taken.has(base)) return base;
-  for (let k = 2; ; k++) { const name = t('combine.nameN', { n: k }); if (!taken.has(name)) return name; }
+  for (let k = 2; ; k++) { const name = t('combine.nameN', { ...p, n: k }); if (!taken.has(name)) return name; }
 }
 
 /**
@@ -371,7 +372,7 @@ export function combineTicked() {
     return;
   }
   if (items.value.length >= LOAD_LIMIT) { comboNotice.value = { kind: 'full' }; return; }
-  const r = combineTracks(its.map((x) => x.track), { name: combinedName() });
+  const r = combineTracks(its.map((x) => x.track), { name: combinedName(its.map((x) => x.id)) });
   if (!r.ok) { comboNotice.value = { kind: r.reason === 'duplicate' ? 'duplicate' : 'empty' }; return; }
   if (r.apart) { comboNotice.value = { kind: 'apart', track: r.track, ids }; return; }
   addCombo(r.track, ids);

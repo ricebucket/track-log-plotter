@@ -183,8 +183,4 @@ describe('what derive works out once, when a track loads', () => {
     expect(s.accuracy[50]).toBeCloseTo(2, 9);
   });
 
-  it('marks each fix with the start of its run of identical positions', () => {
-    const d = derive(fixes(10, (i) => ({ north: i < 3 ? i * 3 : i < 7 ? 9 : i * 3 })));
-    expect(Array.from(d.runStart)).toEqual([0, 1, 2, 3, 3, 3, 3, 7, 8, 9]);
-  });
 });

@@ -35,6 +35,13 @@ export function panView(view: [number, number], full: [number, number], frac: nu
   return [a, a + span];
 }
 
+/** The zoomed view moved to center on time t, keeping its width, never past either end of the timeline. */
+export function centerView(view: [number, number], full: [number, number], t: number): [number, number] {
+  const span = view[1] - view[0];
+  const a = Math.min(full[1] - span, Math.max(full[0], t - span / 2));
+  return [a, a + span];
+}
+
 /**
  * The time of the fix nearest to t (timeline time) on any of the tracks, so
  * the cursor never rests in a gap. Offsets shift each track onto the timeline.

@@ -11,7 +11,7 @@ import { IconBack, IconChevronRight, IconFlag, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
 import { isCombined, type ComboTrack } from '../combine/combine';
-import { LogNumber } from './Combined';
+import { SourceBadge, sourceNames } from './Combined';
 
 /**
  * For files whose times have no time zone: which zone they're read in. The
@@ -107,9 +107,9 @@ export function Details({ id }: { id: string }) {
           {rows.map(([k, v, h]) => (<div key={k}><dt>{k}{h && <Computed text={h} />}</dt><dd>{v}</dd></div>))}
         </dl>
         {/* Next to the elevation figures: a steady difference between the logs' heights, not applied. */}
-        {isCombined(tr) && tr.combo.eleOffset && <p class="amber-note">{eleOffsetNote(tr.combo.eleOffset)}</p>}
+        {isCombined(tr) && tr.combo.eleOffset && <p class="amber-note">{eleOffsetNote(tr.combo.eleOffset, sourceNames(item, tr))}</p>}
       </section>
-      {isCombined(tr) && <CombinedSections track={tr} />}
+      {isCombined(tr) && <CombinedSections track={tr} names={sourceNames(item, tr)} />}
 
       <section class="details-sec" aria-labelledby="d-fields">
         <h3 id="d-fields">{t('details.fields')}</h3>
@@ -147,16 +147,16 @@ export function Details({ id }: { id: string }) {
   );
 }
 
-function eleOffsetNote(o: { from: number; to: number; m: number }): string {
-  return t('details.eleOffset', { a: o.from + 1, b: o.to + 1, m: `${fmtEle(Math.abs(o.m), S.units.value, S.locale.value)} ${unitOf('ele')}`, dir: o.m < 0 ? t('details.lower') : t('details.higher') });
+function eleOffsetNote(o: { from: number; to: number; m: number }, names: readonly string[]): string {
+  return t('details.eleOffset', { a: names[o.from], b: names[o.to], m: `${fmtEle(Math.abs(o.m), S.units.value, S.locale.value)} ${unitOf('ele')}`, dir: o.m < 0 ? t('details.lower') : t('details.higher') });
 }
 
 /** A combined track's logs, and how far each clock was moved to line up with the one that kept its own. */
-function CombinedSections({ track }: { track: ComboTrack }) {
+function CombinedSections({ track, names }: { track: ComboTrack; names: readonly string[] }) {
   const loc = S.locale.value;
   const { sources, ref } = track.combo;
   const clock = (k: number, s: number) => {
-    const p = { k: k + 1, r: ref + 1, s: fmtNum(Math.abs(s), loc, 1, 1) };
+    const p = { k: names[k], r: names[ref], s: fmtNum(Math.abs(s), loc, 1, 1) };
     return s > 0 ? t('details.clockFast', p) : s < 0 ? t('details.clockSlow', p) : t('details.clockSame', p);
   };
   return (
@@ -165,8 +165,8 @@ function CombinedSections({ track }: { track: ComboTrack }) {
         <h3 id="d-logs">{t('details.logs')}</h3>
         <ul class="combo-logs details-logs">
           {sources.map((s, k) => (
-            <li key={k} data-log={k + 1}>
-              <LogNumber k={k} />
+            <li key={k} data-log={names[k]}>
+              <SourceBadge track={track} k={k} name={names[k]} />
               <span class="combo-log">
                 <span class="combo-file">{s.track.file}</span>
                 <span class="combo-sub">{[formatName(s.track.format), t('details.fixesValue', { n: fmtNum(s.track.cols.n, loc, 0, 0), every: fmtNum(s.track.derived.stats.intervalS, loc, 1, 0) })].join(' · ')}</span>

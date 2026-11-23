@@ -186,3 +186,16 @@ export function present(cols: Columns, k: F32Key): boolean {
   for (let i = 0; i < a.length; i++) if (!Number.isNaN(a[i])) return true;
   return false;
 }
+
+/** The fixes with keep[i] set, in order: every column cut down alike (k = how many are kept). */
+export function keepFixes(c: Columns, keep: Uint8Array, k: number): Columns {
+  const out: Record<string, unknown> = { n: k };
+  for (const [name, a] of Object.entries(c)) {
+    if (name === 'n') continue;
+    const src = a as Float64Array;
+    const dst = new (src.constructor as Float64ArrayConstructor)(k);
+    for (let i = 0, j = 0; i < c.n; i++) if (keep[i]) dst[j++] = src[i];
+    out[name] = dst;
+  }
+  return out as unknown as Columns;
+}

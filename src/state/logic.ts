@@ -16,6 +16,8 @@ export interface TrackItem {
   fam: number;
   /** A combined track only: whether each of its logs is drawn (thin lines, dots at the cursor, a timeline lane). */
   logs?: boolean[];
+  /** A combined track only: the letters its sources had in the list when it was made, in its sources' order. */
+  sources?: string[];
 }
 
 // Tracks never change after loading, so a number per track identifies its data.
@@ -105,7 +107,7 @@ export function addCombined(items: TrackItem[], track: LoadedTrack, sourceIds: r
   let out = items.map((x) => (sourceIds.includes(x.id) ? { ...x, vis: false } : x));
   const vis = out.filter((t) => t.vis).length < SHOW_LIMIT;
   const n = 'combo' in track ? (track as { combo: { sources: unknown[] } }).combo.sources.length : 0;
-  const item: TrackItem = { id, track, vis, ...defaultsFor(track), fam: 0, logs: Array.from({ length: n }, () => true) };
+  const item: TrackItem = { id, track, vis, ...defaultsFor(track), fam: 0, logs: Array.from({ length: n }, () => true), sources: [...sourceIds] };
   item.fam = vis ? freeFamily(out, item) : LETTERS.indexOf(id) % 3;
   const at = Math.max(-1, ...sourceIds.map((s) => out.findIndex((x) => x.id === s))) + 1;
   out = [...out.slice(0, at), item, ...out.slice(at)];

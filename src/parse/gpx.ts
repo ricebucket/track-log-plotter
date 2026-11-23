@@ -1,5 +1,5 @@
-import type { FieldKey, Flag, FixQuality, Note, ParsedTrack, Problem } from '../model/types';
-import { ColumnBuilder, present } from './columns';
+import type { Columns, FieldKey, Flag, FixQuality, Note, ParsedTrack, Problem } from '../model/types';
+import { ColumnBuilder, keepFixes, present } from './columns';
 import { scanXml } from './xml';
 import { inferSpeedUnit, UNIT_FACTOR } from './units';
 import { numAt } from './scan';
@@ -224,8 +224,20 @@ export function parseGpx(text: string): ParsedTrack {
 
   const useRoute = b.n === 0 && rb.n > 0;
   const src = useRoute ? rb : b;
-  const cols = src.build();
+  let cols = src.build();
   if (useRoute) notes.push({ kind: 'route' });
+
+  // A logger that repeats its last position, once a second, until it has a new one: the repeats say
+  // nothing (and their speed of 0 misleads), so they go, and the step across them isn't a gap.
+  let bridged: Uint8Array | undefined;
+  if (repeatsLastFix(creator)) {
+    const r = dropRepeats(cols);
+    if (r.dropped) {
+      cols = r.cols;
+      bridged = r.bridged;
+      notes.push({ kind: 'repeatsDropped', count: r.dropped, long: r.long });
+    }
+  }
 
   // Vendor speeds come without a unit: infer it from the positions.
   if (!anyKnownSpeed && anyVendorSpeed) {
@@ -262,5 +274,48 @@ export function parseGpx(text: string): ParsedTrack {
   if (present(cols, 'geoid')) fields.push('geoid');
   if (flags.length) fields.push('flags');
 
-  return { format: 'gpx', creator, name: useRoute ? rteName : trkName, cols, flags, problems, notes, fields, lines: useRoute ? routePoints : points, ...(noZone ? { clock: 'utc' } : {}) };
+  return {
+    format: 'gpx', creator, name: useRoute ? rteName : trkName, cols, flags, problems, notes, fields, lines: useRoute ? routePoints : points,
+    ...(noZone ? { clock: 'utc' } : {}), ...(bridged ? { bridged } : {}),
+  };
+}
+
+/**
+ * Loggers known to repeat their last position, once a second, while they have
+ * no new one (they keep writing satellites, HDOP and a speed of 0 with it),
+ * by the creator their files name: i-gotU's software. Other loggers' repeats
+ * are the logger standing still, and stay.
+ */
+export function repeatsLastFix(creator: string | null): boolean {
+  return creator !== null && /igotu/i.test(creator);
+}
+
+/** A stretch of dropped repeats up to this long (ms) is crossed in a straight line; a longer one is a gap. */
+export const BRIDGE_MS = 120_000;
+
+/**
+ * Drops each fix that repeats the position of the fix before it. The fix that
+ * follows dropped repeats is marked bridged (its step isn't a gap) when the
+ * stretch is at most BRIDGE_MS and no new segment starts in it; `long` counts
+ * the stretches too long to cross.
+ */
+export function dropRepeats(c: Columns): { cols: Columns; bridged: Uint8Array; dropped: number; long: number } {
+  const n = c.n, keep = new Uint8Array(n), mark = new Uint8Array(n);
+  let k = 0, last = -1, dropped = 0, long = 0, segAhead = 0, skipped = false;
+  for (let i = 0; i < n; i++) {
+    if (last >= 0 && c.lat[i] === c.lat[last] && c.lon[i] === c.lon[last]) {
+      dropped++;
+      skipped = true;
+      segAhead |= c.seg[i]; // a segment starting among the repeats starts at the next fix kept
+      continue;
+    }
+    keep[i] = 1;
+    if (segAhead) c.seg[i] = 1;
+    if (skipped && !c.seg[i]) { if (c.t[i] - c.t[last] <= BRIDGE_MS) mark[k] = 1; else long++; }
+    segAhead = 0;
+    skipped = false;
+    last = i;
+    k++;
+  }
+  return { cols: dropped ? keepFixes(c, keep, k) : c, bridged: mark.slice(0, k), dropped, long };
 }

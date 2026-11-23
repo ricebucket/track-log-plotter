@@ -34,7 +34,7 @@ export const ACCURACY_SMOOTH_S = 10;
  * reading worker): distance, speed, gaps, grade, the stats, and the summaries
  * later steps would otherwise rescan the fixes for (which measures it has,
  * its spread of speeds and heights for the color steps, its accuracy over
- * time for combining, its held positions). A handful of passes over the
+ * time for combining). A handful of passes over the
  * fixes; medians and quantiles by selection, not sorting.
  */
 export function derive(p: ParsedTrack): Derived {
@@ -47,7 +47,6 @@ export function derive(p: ParsedTrack): Derived {
   const NONE = new Float64Array(0);
   let hAll = NONE, h6 = NONE, sAll = NONE;
   const eleV = new Float32Array(n);
-  const runStart = new Int32Array(n);
   let nd = 0, nh = 0, n6 = 0, ns = 0, ne = 0, hNonPos = 0, sNonPos = 0, withSats = 0, withSpeed = 0, fixKnown = 0, corrected = 0;
   let w = 180, s = 90, e = -180, nn = -90, anyEle = false, minEle = Infinity, maxEle = -Infinity, maxAccel = -Infinity;
   for (let i = 0; i < n; i++) {
@@ -59,8 +58,6 @@ export function derive(p: ParsedTrack): Derived {
     if (i > 0) {
       const d = (t[i] - t[i - 1]) / 1000;
       if (!seg[i] && d - d === 0) dts[nd++] = d; // d - d === 0: finite
-      // A logger holding its last position repeats it: each fix points to the start of its run of identical positions.
-      runStart[i] = la === lat[i - 1] && lo === lon[i - 1] ? runStart[i - 1] : i;
     }
     const h = hdop[i], sv = sats[i], ev = ele[i], f = fixq[i];
     if (sv >= 0) withSats++;
@@ -126,11 +123,13 @@ export function derive(p: ParsedTrack): Derived {
     if (v > maxKmh) maxKmh = v;
     if (v >= MOVING_KMH) moving[nm++] = v;
   };
+  // A step across repeats dropped when the file was read (see parse/gpx) isn't a gap, however long (up to two minutes).
+  const bridged = p.bridged;
   for (let i = 0; i < n; i++) {
     if (i > 0) {
       dist[i] = dist[i - 1] + haversine(lat[i - 1], lon[i - 1], lat[i], lon[i]);
       const dt = (t[i] - t[i - 1]) / 1000;
-      if (seg[i] || dt > gapS) gap[i] = 1;
+      if (seg[i] || (dt > gapS && !(bridged && bridged[i]))) gap[i] = 1;
       else {
         const d = dist[i] - dist[i - 1];
         distanceM += d;
@@ -147,6 +146,7 @@ export function derive(p: ParsedTrack): Derived {
     now[i] = a;
   }
   if (n) speedAt(n - 1);
+
   // Without HDOP, satellites or corrected fixes it is 1 throughout: nothing to average.
   const accuracy = hasH || hasS || corrected ? movingAverage(t, now, ACCURACY_SMOOTH_S) : now;
 
@@ -204,7 +204,7 @@ export function derive(p: ParsedTrack): Derived {
   return {
     dist, kmh, speedFromFile, grade, gap, hdopRelative, hdopQ, stats, has,
     speedSpread: spread(moving, nm, SPREAD_SIZE), eleSpread: spread(eleV, ne, SPREAD_SIZE),
-    accuracy, hdopBase, runStart,
+    accuracy, hdopBase,
   };
 }
 
