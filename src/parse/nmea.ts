@@ -1,5 +1,6 @@
 import type { FieldKey, FixQuality, Note, ParsedTrack, Problem } from '../model/types';
 import { ColumnBuilder, present } from './columns';
+import { blankAt, isSpace, lastNonSpace, numAt } from './scan';
 
 const KNOT = 1852 / 3600; // m/s
 
@@ -41,14 +42,17 @@ export function nmeaChecksum(body: string): string {
   return x.toString(16).toUpperCase().padStart(2, '0');
 }
 
-/** A dilution of precision; 0 is a placeholder, so it counts as missing. */
-function dopOf(s: string | undefined): number {
-  const v = num(s);
-  return v > 0 ? v : NaN;
-}
-
 const BAD_BYTE = /[^\x20-\x7e]/;
 const BAD_BYTES = /[^\x20-\x7e]/g;
+/** Any byte that can never appear in NMEA but line breaks. */
+const BAD_OR_BREAK = /[^\x20-\x7e\n\r]/;
+
+/** A byte that can never appear in NMEA: BAD_BYTE outside line breaks, or a \r that doesn't end a line. */
+function anyBadByte(text: string): boolean {
+  if (BAD_OR_BREAK.test(text)) return true;
+  for (let p = text.indexOf('\r'); p >= 0; p = text.indexOf('\r', p + 1)) if (p + 1 < text.length && text.charCodeAt(p + 1) !== 10) return true;
+  return false;
+}
 
 /** Value of a hex digit's character code, or -1. */
 function hexDigit(c: number): number {
@@ -58,43 +62,11 @@ function hexDigit(c: number): number {
   return -1;
 }
 
-function num(s: string | undefined): number {
-  if (s === undefined || s === '') return NaN;
-  const v = Number(s);
-  return Number.isFinite(v) ? v : NaN;
-}
-
-/** "hhmmss.sss" → seconds of day, or NaN. */
-function parseTod(s: string | undefined): number {
-  if (!s || s.length < 6) return NaN;
-  const h = Number(s.slice(0, 2)), m = Number(s.slice(2, 4)), sec = Number(s.slice(4));
-  if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(sec) || h > 23 || m > 59 || sec >= 61) return NaN;
-  return h * 3600 + m * 60 + sec;
-}
-
-/** "ddmmyy" → days since 1970-01-01, or null. */
-function parseDate(s: string | undefined): number | null {
-  if (!s || s.length !== 6) return null;
-  const d = Number(s.slice(0, 2)), mo = Number(s.slice(2, 4)), yy = Number(s.slice(4, 6));
-  if (!(d >= 1 && d <= 31 && mo >= 1 && mo <= 12 && yy >= 0)) return null;
-  const y = yy < 80 ? 2000 + yy : 1900 + yy;
-  return Date.UTC(y, mo - 1, d) / 86400000;
-}
-
-/** "ddmm.mmmm" + hemisphere → signed degrees, or NaN. */
-function parseCoord(v: string | undefined, hemi: string | undefined, degDigits: number): number {
-  if (!v || !hemi) return NaN;
-  const dot = v.indexOf('.');
-  const intLen = dot < 0 ? v.length : dot;
-  if (intLen < degDigits + 2) return NaN;
-  const deg = Number(v.slice(0, intLen - 2));
-  const min = Number(v.slice(intLen - 2));
-  if (!Number.isFinite(deg) || !Number.isFinite(min) || min >= 60) return NaN;
-  const out = deg + min / 60;
-  if (hemi === 'S' || hemi === 'W') return -out;
-  if (hemi === 'N' || hemi === 'E') return out;
-  return NaN;
-}
+/** A sentence type (the three letters after the talker) as one number. */
+const code3 = (t: string) => (t.charCodeAt(0) << 16) | (t.charCodeAt(1) << 8) | t.charCodeAt(2);
+const GSA = code3('GSA'), VTG = code3('VTG'), GSV = code3('GSV'), RMC = code3('RMC'), GGA = code3('GGA'), GLL = code3('GLL'), ZDA = code3('ZDA');
+/** Fields past this are never read. */
+const MAX_FIELDS = 32;
 
 function ggaQuality(q: number | null): FixQuality | -1 {
   if (q === null || Number.isNaN(q)) return 0;
@@ -121,73 +93,170 @@ export function parseNmea(text: string): ParsedTrack {
   let garbage = 0, garbageLine = 0;
   let withSum = 0, withoutSum = 0;
   let sawGsv = false, sawSpeed = false;
-  let truncated: { line: number; chars: number } | null = null;
+  // Set inside line() below, which TypeScript's narrowing doesn't follow.
+  let truncated = null as { line: number; chars: number } | null;
 
-  const endsWithNewline = /\n\s*$/.test(text);
-  const lines = text.split('\n');
-  // A trailing newline produces one empty last element.
-  let lastContent = lines.length - 1;
-  while (lastContent >= 0 && lines[lastContent].trim() === '') lastContent--;
+  // The content ends at the last character that isn't space: the line holding
+  // it is the last line, and the file ended cleanly if a newline follows it.
+  const lastNonWs = lastNonSpace(text);
+  const endsWithNewline = text.indexOf('\n', lastNonWs + 1) >= 0;
+  let lastContent = -1;
+  // Bytes that can never appear in NMEA are stripped line by line; most files
+  // have none, and then every line is read in place.
+  const anyBad = anyBadByte(text);
 
-  for (let li = 0; li < lines.length; li++) {
-    let raw = lines[li];
-    if (raw.endsWith('\r')) raw = raw.slice(0, -1);
-    if (raw.trim() === '') continue;
-    const lineNo = li + 1;
+  // The sentence being read: field k is s[FS[k], FE[k]), for k < nf.
+  let s = text, nf = 0;
+  const FS = new Int32Array(MAX_FIELDS), FE = new Int32Array(MAX_FIELDS);
+  const has = (k: number) => k < nf && FE[k] > FS[k];
+  /** A number, or NaN when blank or not finite. */
+  const num = (k: number): number => {
+    if (!has(k)) return NaN;
+    const v = numAt(s, FS[k], FE[k]);
+    return v - v === 0 ? v : NaN;
+  };
+  /** A dilution of precision; 0 is a placeholder, so it counts as missing. */
+  const dop = (k: number): number => { const v = num(k); return v > 0 ? v : NaN; };
+  /** "hhmmss.sss" → seconds of day, or NaN. */
+  const tod = (k: number): number => {
+    if (k >= nf || FE[k] - FS[k] < 6) return NaN;
+    const a = FS[k];
+    const h = numAt(s, a, a + 2), m = numAt(s, a + 2, a + 4), sec = numAt(s, a + 4, FE[k]);
+    if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(sec) || h > 23 || m > 59 || sec >= 61) return NaN;
+    return h * 3600 + m * 60 + sec;
+  };
+  /** "ddmmyy" → days since 1970-01-01, or null; the same date as last time is worked out once. */
+  let dateKey = '', dateDays: number | null = null;
+  const date = (k: number): number | null => {
+    if (k >= nf || FE[k] - FS[k] !== 6) return null;
+    const a = FS[k];
+    if (s.startsWith(dateKey, a) && dateKey.length === 6) return dateDays;
+    dateKey = s.slice(a, a + 6);
+    dateDays = daysAt(a);
+    return dateDays;
+  };
+  const daysAt = (a: number): number | null => {
+    const d = numAt(s, a, a + 2), mo = numAt(s, a + 2, a + 4), yy = numAt(s, a + 4, a + 6);
+    if (!(d >= 1 && d <= 31 && mo >= 1 && mo <= 12 && yy >= 0)) return null;
+    const y = yy < 80 ? 2000 + yy : 1900 + yy;
+    return Date.UTC(y, mo - 1, d) / 86400000;
+  };
+  /** "ddmm.mmmm" + hemisphere → signed degrees, or NaN. */
+  const coord = (k: number, hk: number, degDigits: number): number => {
+    if (!has(k) || !has(hk)) return NaN;
+    const a = FS[k], e = FE[k];
+    let dot = a;
+    while (dot < e && s.charCodeAt(dot) !== 46) dot++;
+    const intLen = dot - a;
+    if (intLen < degDigits + 2) return NaN;
+    const deg = numAt(s, a, a + intLen - 2), min = numAt(s, a + intLen - 2, e);
+    if (!Number.isFinite(deg) || !Number.isFinite(min) || min >= 60) return NaN;
+    const out = deg + min / 60;
+    if (FE[hk] - FS[hk] !== 1) return NaN;
+    const h = s.charCodeAt(FS[hk]);
+    if (h === 83 || h === 87) return -out; // S W
+    if (h === 78 || h === 69) return out; // N E
+    return NaN;
+  };
+  /** Field k as Number() reads it (NaN when absent, 0 when blank). */
+  const plain = (k: number) => (k < nf ? numAt(s, FS[k], FE[k]) : NaN);
 
-    // Strip bytes that can never appear in NMEA.
-    let clean = BAD_BYTE.test(raw) ? raw.replace(BAD_BYTES, '') : raw;
-    let hadGarbage = clean.length !== raw.length;
-    const first = clean.indexOf('$');
-    if (first < 0) { garbage++; if (!garbageLine) garbageLine = lineNo; continue; }
-    if (first > 0) { hadGarbage = true; clean = clean.slice(first); }
+  // The next $ and * at or after a point. Searches only move forward through
+  // `s`, so each answer is kept until the search passes it: the whole file is
+  // searched once, however far apart the marks are (a file with no $ at all
+  // would otherwise be searched to its end from every line).
+  let dq = -1, dp = -1, sq = -1, sp = -1;
+  const nextDollar = (from: number): number => {
+    if (dq < 0 || from < dq || (dp >= 0 && dp < from)) { dq = from; dp = s.indexOf('$', from); }
+    return dp;
+  };
+  const nextStar = (from: number): number => {
+    if (sq < 0 || from < sq || (sp >= 0 && sp < from)) { sq = from; sp = s.indexOf('*', from); }
+    return sp;
+  };
+
+  // The sentences on one line: s[PS[i], PE[i]) for i < np.
+  let PS = new Int32Array(16), PE = new Int32Array(16), np = 0;
+  const addPart = (a: number, b: number) => {
+    if (np === PS.length) {
+      const ps2 = new Int32Array(np * 2); ps2.set(PS); PS = ps2;
+      const pe2 = new Int32Array(np * 2); pe2.set(PE); PE = pe2;
+    }
+    PS[np] = a; PE[np] = b; np++;
+  };
+  const line = (a: number, b: number, lineNo: number, rawLen: number, lastLine: boolean, hadGarbage0: boolean) => {
+    const str = s, fsA = FS, feA = FE;
+    const first = nextDollar(a);
+    if (first < 0 || first >= b) { garbage++; if (!garbageLine) garbageLine = lineNo; return; }
+    const hadGarbage = hadGarbage0 || first > a;
     if (hadGarbage) { garbage++; if (!garbageLine) garbageLine = lineNo; }
+    // Almost every line holds exactly one sentence; glued ones are split at
+    // each $, leaving out empty pieces.
+    np = 0;
+    const second = nextDollar(first + 1);
+    if (second < 0 || second >= b) addPart(first + 1, b);
+    else {
+      let p = first;
+      while (p < b) {
+        let q = nextDollar(p + 1);
+        if (q < 0 || q > b) q = b;
+        if (q > p + 1) addPart(p + 1, q);
+        p = q;
+      }
+    }
+    if (np > 1) { glued += np - 1; if (!gluedLine) gluedLine = lineNo; }
 
-    // Almost every line holds exactly one sentence.
-    const parts = clean.indexOf('$', 1) < 0 ? [clean.slice(1)] : clean.split('$').filter((p) => p.length > 0);
-    if (parts.length > 1) { glued += parts.length - 1; if (!gluedLine) gluedLine = lineNo; }
-
-    for (let pi = 0; pi < parts.length; pi++) {
-      let body = parts[pi];
-      if (body.length && body.charCodeAt(body.length - 1) <= 32) body = body.trimEnd();
-      const star = body.lastIndexOf('*');
-      const isLastSentence = li === lastContent && pi === parts.length - 1;
-      const hi = star >= 0 && body.length === star + 3 ? hexDigit(body.charCodeAt(star + 1)) : -1;
-      const lo = hi >= 0 ? hexDigit(body.charCodeAt(star + 2)) : -1;
+    for (let pi = 0; pi < np; pi++) {
+      const ba = PS[pi];
+      let bb = PE[pi];
+      if (bb > ba && str.charCodeAt(bb - 1) <= 32) while (bb > ba && isSpace(str.charCodeAt(bb - 1))) bb--;
+      let star = -1; // the last * in the sentence
+      for (let q = nextStar(ba); q >= 0 && q < bb; q = nextStar(q + 1)) star = q;
+      const isLastSentence = lastLine && pi === np - 1;
+      const hi = star >= 0 && bb === star + 3 ? hexDigit(str.charCodeAt(star + 1)) : -1;
+      const lo = hi >= 0 ? hexDigit(str.charCodeAt(star + 2)) : -1;
+      // Fields are found on the same pass that checks the checksum.
+      let n = 0, fs = ba;
       if (lo >= 0) {
         withSum++;
         let x = 0;
-        for (let k = 0; k < star; k++) x ^= body.charCodeAt(k);
+        for (let k = ba; k < star; k++) {
+          const c = str.charCodeAt(k);
+          x ^= c;
+          if (c === 44) { if (n < MAX_FIELDS) { fsA[n] = fs; feA[n] = k; } n++; fs = k + 1; }
+        }
         if (x !== hi * 16 + lo) {
           if (!hadGarbage) { checksumBad++; if (!checksumLine) checksumLine = lineNo; }
           continue;
         }
-        body = body.slice(0, star);
+        bb = star;
       } else {
-        if (isLastSentence && !endsWithNewline) { truncated = { line: lineNo, chars: raw.length }; continue; }
+        if (isLastSentence && !endsWithNewline) { truncated = { line: lineNo, chars: rawLen }; continue; }
         if (withSum > withoutSum) { checksumBad++; if (!checksumLine) checksumLine = lineNo; continue; }
         withoutSum++;
-        if (star >= 0) body = body.slice(0, star);
+        if (star >= 0) bb = star;
+        for (let k = ba; k < bb; k++) if (str.charCodeAt(k) === 44) { if (n < MAX_FIELDS) { fsA[n] = fs; feA[n] = k; } n++; fs = k + 1; }
       }
+      if (n < MAX_FIELDS) { fsA[n] = fs; feA[n] = bb; }
+      nf = n + 1 < MAX_FIELDS ? n + 1 : MAX_FIELDS;
 
-      const f = body.split(',');
-      const id = f[0];
-      if (id.length < 5 || id[0] === 'P') continue;
-      const type = id.slice(2);
+      const idLen = FE[0] - FS[0];
+      if (idLen < 5 || s.charCodeAt(FS[0]) === 80 /* P */) continue;
+      const type = idLen === 5 ? (s.charCodeAt(FS[0] + 2) << 16) | (s.charCodeAt(FS[0] + 3) << 8) | s.charCodeAt(FS[0] + 4) : -1;
 
-      if (type === 'GSA') {
+      if (type === GSA) {
         if (cur) {
-          cur.pdop = dopOf(f[15]); cur.hdopGsa = dopOf(f[16]); cur.vdop = dopOf(f[17]);
+          cur.pdop = dop(15); cur.hdopGsa = dop(16); cur.vdop = dop(17);
           cur.lineEnd = lineNo;
         }
         continue;
       }
-      if (type === 'VTG') {
+      if (type === VTG) {
         if (cur) {
-          if (Number.isNaN(cur.course)) cur.course = num(f[1]);
+          if (Number.isNaN(cur.course)) cur.course = num(1);
           if (Number.isNaN(cur.speed)) {
-            const kmh = num(f[7]);
-            const kn = num(f[5]);
+            const kmh = num(7);
+            const kn = num(5);
             cur.speed = Number.isFinite(kmh) ? kmh / 3.6 : kn * KNOT;
           }
           if (Number.isFinite(cur.speed)) sawSpeed = true;
@@ -195,46 +264,69 @@ export function parseNmea(text: string): ParsedTrack {
         }
         continue;
       }
-      if (type === 'GSV') { sawGsv = true; continue; }
-      if (type !== 'RMC' && type !== 'GGA' && type !== 'GLL' && type !== 'ZDA') continue;
+      if (type === GSV) { sawGsv = true; continue; }
+      if (type !== RMC && type !== GGA && type !== GLL && type !== ZDA) continue;
 
-      const todField = type === 'GLL' ? f[5] : f[1];
-      if (!cur || cur.todKey !== todField) {
-        const tod = parseTod(todField);
-        if (Number.isNaN(tod)) continue;
+      // A new time starts a new epoch; the time is kept as text only then.
+      const tk = type === GLL ? 5 : 1;
+      if (!cur || !(tk < nf && FE[tk] - FS[tk] === cur.todKey.length && s.startsWith(cur.todKey, FS[tk]))) {
+        const t = tod(tk);
+        if (Number.isNaN(t)) continue;
         if (cur) epochs.push(cur);
-        cur = newEpoch(todField, tod, lineNo);
+        cur = newEpoch(s.slice(FS[tk], FE[tk]), t, lineNo);
       }
       cur.lineEnd = lineNo;
 
-      if (type === 'RMC') {
-        cur.rmcStatus = f[2] || null;
-        const lat = parseCoord(f[3], f[4], 2), lon = parseCoord(f[5], f[6], 3);
+      if (type === RMC) {
+        cur.rmcStatus = has(2) ? s.slice(FS[2], FE[2]) : null;
+        const lat = coord(3, 4, 2), lon = coord(5, 6, 3);
         if (Number.isFinite(lat) && Number.isFinite(lon)) { cur.lat = lat; cur.lon = lon; cur.hasPos = true; }
-        const sog = num(f[7]);
+        const sog = num(7);
         if (Number.isFinite(sog)) { cur.speed = sog * KNOT; sawSpeed = true; }
-        cur.course = num(f[8]);
-        cur.date = parseDate(f[9]);
-        if (f[12]) cur.mode = f[12][0];
-      } else if (type === 'GGA') {
-        const lat = parseCoord(f[2], f[3], 2), lon = parseCoord(f[4], f[5], 3);
+        cur.course = num(8);
+        cur.date = date(9);
+        if (has(12)) cur.mode = s.charAt(FS[12]);
+      } else if (type === GGA) {
+        const lat = coord(2, 3, 2), lon = coord(4, 5, 3);
         if (Number.isFinite(lat) && Number.isFinite(lon)) { cur.lat = lat; cur.lon = lon; cur.hasPos = true; }
-        const q = num(f[6]);
+        const q = num(6);
         cur.ggaQ = Number.isNaN(q) ? null : q;
-        cur.sats = num(f[7]);
-        cur.hdop = dopOf(f[8]);
-        cur.ele = num(f[9]);
-        cur.geoid = num(f[11]);
-      } else if (type === 'GLL') {
+        cur.sats = num(7);
+        cur.hdop = dop(8);
+        cur.ele = num(9);
+        cur.geoid = num(11);
+      } else if (type === GLL) {
         if (!cur.hasPos) {
-          const lat = parseCoord(f[1], f[2], 2), lon = parseCoord(f[3], f[4], 3);
-          if (Number.isFinite(lat) && Number.isFinite(lon) && f[6] !== 'V') { cur.lat = lat; cur.lon = lon; cur.hasPos = true; }
+          const lat = coord(1, 2, 2), lon = coord(3, 4, 3);
+          const vOid = 6 < nf && FE[6] - FS[6] === 1 && s.charCodeAt(FS[6]) === 86; // "V"
+          if (Number.isFinite(lat) && Number.isFinite(lon) && !vOid) { cur.lat = lat; cur.lon = lon; cur.hasPos = true; }
         }
-      } else if (type === 'ZDA') {
-        const d = Number(f[2]), mo = Number(f[3]), y = Number(f[4]);
+      } else {
+        const d = plain(2), mo = plain(3), y = plain(4);
         if (d >= 1 && mo >= 1 && y > 1900) cur.date = Date.UTC(y, mo - 1, d) / 86400000;
       }
     }
+  };
+
+  const len = text.length;
+  for (let ls = 0, li = 0; ; li++) {
+    let le = text.indexOf('\n', ls);
+    if (le < 0) le = len;
+    const lastLine = ls <= lastNonWs && lastNonWs < le;
+    if (lastLine) lastContent = li;
+    let b = le;
+    if (b > ls && text.charCodeAt(b - 1) === 13) b--; // a \r before the newline
+    if (!blankAt(text, ls, b)) {
+      if (!anyBad) { s = text; line(ls, b, li + 1, b - ls, lastLine, false); }
+      else {
+        const raw = text.slice(ls, b);
+        const clean = BAD_BYTE.test(raw) ? raw.replace(BAD_BYTES, '') : raw;
+        s = clean; dq = -1; sq = -1; // searches start afresh in each cleaned line
+        line(0, clean.length, li + 1, raw.length, lastLine, clean.length !== raw.length);
+      }
+    }
+    if (le >= len) break;
+    ls = le + 1;
   }
   if (cur) epochs.push(cur);
 

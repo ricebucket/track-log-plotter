@@ -70,9 +70,46 @@ function tagEnd(src: string, i: number): number {
 
 const isSpace = (c: number) => c === 32 || c === 10 || c === 13 || c === 9;
 
+/** Slots in the cache of tag names (a power of two). */
+const NAME_SLOTS = 256;
+
 export function scanXml(src: string, sink: XmlSink): XmlScanResult {
   const n = src.length;
   let i = 0;
+  // A file repeats a handful of tag names thousands of times. Each is cut out
+  // of the text once and then handed out again as the same string, whose hash
+  // the sink's lookups have already worked out.
+  const rawNames: string[] = Array.from({ length: NAME_SLOTS }, () => '');
+  const localNames: string[] = Array.from({ length: NAME_SLOTS }, () => '');
+  // A name of up to 14 ASCII characters is its own key: seven characters to a
+  // number, 7 bits each, the first number also holding the length (53 bits at
+  // most, so exact). A hit then needs no check against the text.
+  const key1 = new Float64Array(NAME_SLOTS).fill(-1), key2 = new Float64Array(NAME_SLOTS);
+  const keyNames: string[] = Array.from({ length: NAME_SLOTS }, () => '');
+  /** The local name of the tag name src[a, b). */
+  const nameAt = (a: number, b: number): string => {
+    const len = b - a;
+    if (len <= 14) {
+      let k1 = 0, k2 = 0, c = 0, k = a;
+      const m = a + (len < 7 ? len : 7);
+      for (; k < m; k++) { c = src.charCodeAt(k); if (c > 127) break; k1 = k1 * 128 + c; }
+      if (k === m) for (; k < b; k++) { c = src.charCodeAt(k); if (c > 127) break; k2 = k2 * 128 + c; }
+      if (k === b) {
+        k1 = k1 * 16 + len;
+        const h = (Math.imul((k1 | 0) ^ ((k1 / 4294967296) | 0), 0x9e3779b1) ^ (k2 | 0)) >>> 24;
+        if (key1[h] === k1 && key2[h] === k2) return keyNames[h];
+        key1[h] = k1; key2[h] = k2;
+        return (keyNames[h] = localName(src.slice(a, b)));
+      }
+    }
+    // Longer names (or not ASCII): looked up by length and end characters, then checked.
+    const h = (len * 31 + src.charCodeAt(a) * 7 + src.charCodeAt(b - 1) * 3) & (NAME_SLOTS - 1);
+    const raw = rawNames[h];
+    if (raw.length === len && src.startsWith(raw, a)) return localNames[h];
+    const r = src.slice(a, b);
+    rawNames[h] = r;
+    return (localNames[h] = localName(r));
+  };
   // Line numbers are counted lazily by jumping from newline to newline, so
   // the text is never walked character by character just to count lines.
   let line = 1;
@@ -112,6 +149,22 @@ export function scanXml(src: string, sink: XmlSink): XmlScanResult {
       i = e + 1;
       continue;
     }
+    // The usual tag, <name> or </name>: the name runs straight to the ">", and
+    // the tag is read in one pass. Anything else takes the general way below.
+    {
+      const a0 = c1 === 47 ? i + 2 : i + 1;
+      let k = a0;
+      for (; k < n; k++) {
+        const c = src.charCodeAt(k);
+        if (c <= 32 || c === 62 || c === 60 || c === 34 || c === 39 || c === 47) break;
+      }
+      if (k > a0 && k < n && src.charCodeAt(k) === 62) {
+        if (c1 === 47) sink.close(nameAt(a0, k));
+        else sink.open(nameAt(a0, k), NO_ATTRS, lineAt(i));
+        i = k + 1;
+        continue;
+      }
+    }
     const gt = tagEnd(src, i + 1);
     if (gt === -1) return { complete: false, wellFormed: true, line: lineAt(i) };
     if (gt === -2) return { complete: true, wellFormed: false, line: lineAt(i) };
@@ -119,7 +172,7 @@ export function scanXml(src: string, sink: XmlSink): XmlScanResult {
       let a = i + 2, b = gt;
       while (a < b && isSpace(src.charCodeAt(a))) a++;
       while (b > a && isSpace(src.charCodeAt(b - 1))) b--;
-      sink.close(localName(src.slice(a, b)));
+      sink.close(b > a ? nameAt(a, b) : '');
       i = gt + 1;
       continue;
     }
@@ -135,7 +188,7 @@ export function scanXml(src: string, sink: XmlSink): XmlScanResult {
       b++;
     }
     if (b === a) return { complete: true, wellFormed: false, line: tagLine };
-    const name = localName(src.slice(a, b));
+    const name = nameAt(a, b);
     sink.open(name, b < end ? parseAttrs(src.slice(b, end)) : NO_ATTRS, tagLine);
     if (selfClose) sink.close(name);
     i = gt + 1;

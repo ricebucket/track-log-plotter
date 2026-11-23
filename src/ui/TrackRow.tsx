@@ -1,3 +1,4 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { MeasureKey } from '../model/types';
 import type { TrackItem } from '../state/logic';
 import * as S from '../state/store';
@@ -16,6 +17,14 @@ export { badgeOf } from './Badge';
 
 export function TrackRow({ item }: { item: TrackItem }) {
   const sel = S.selected.value?.id === item.id;
+  // A newly added track scrolls into view, so its open card isn't left below the fold.
+  const row = useRef<HTMLDivElement>(null);
+  const revealing = S.reveal.value === item.id;
+  useLayoutEffect(() => {
+    if (!revealing) return;
+    if (sel) row.current?.scrollIntoView({ block: 'nearest' });
+    S.reveal.value = null;
+  }, [revealing]);
   const tr = item.track;
   const st = tr.derived.stats;
   const loc = S.locale.value;
@@ -31,7 +40,7 @@ export function TrackRow({ item }: { item: TrackItem }) {
   ].join(' · ');
 
   return (
-    <div class={`track-row${sel ? ' is-selected' : ''}${item.vis ? '' : ' is-hidden'}`} data-track={item.id}>
+    <div ref={row} class={`track-row${sel ? ' is-selected' : ''}${item.vis ? '' : ' is-hidden'}`} data-track={item.id}>
       <div class="track-row-head">
         <button
           type="button" class="icon-btn eye" aria-pressed={item.vis ? 'true' : 'false'}
@@ -95,11 +104,31 @@ function TrackDetailsInline({ item }: { item: TrackItem }) {
           {/* Files whose times have no zone: a reminder that the zone is set there. */}
           <IconDoc />{item.track.clock ? t('track.detailsClock') : t('track.details')}
         </button>
-        <button type="button" class="icon-btn outline danger" aria-label={t('details.remove')} title={t('details.remove')} onClick={() => S.remove(item.id)}>
-          <IconTrash />
-        </button>
+        <RemoveButton item={item} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Removes the track on a second click: the first turns the trash icon into a
+ * red "Remove?" for 4 seconds. Pressing anywhere else, or waiting, cancels.
+ */
+function RemoveButton({ item }: { item: TrackItem }) {
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (!asking) return;
+    const timer = setTimeout(() => setAsking(false), 4000);
+    return () => clearTimeout(timer);
+  }, [asking]);
+  return (
+    <button
+      type="button" class={`icon-btn outline danger${asking ? ' is-asking' : ''}`}
+      aria-label={asking ? undefined : t('details.remove')} title={asking ? t('details.removeAgain') : t('details.remove')}
+      onClick={() => { if (asking) S.remove(item.id); else setAsking(true); }} onBlur={() => setAsking(false)}
+    >
+      <IconTrash />{asking && <span>{t('details.removeAsk')}</span>}
+    </button>
   );
 }
 

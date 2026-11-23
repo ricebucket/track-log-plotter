@@ -21,38 +21,66 @@
 //   presses.
 import type { FieldKey, FixQuality, Flag, Note, ParsedTrack, Problem } from '../model/types';
 import { ColumnBuilder, present } from './columns';
+import { isSpace, lastNonSpace, numAt } from './scan';
 
+/** A field's number, or NaN when it is blank. */
+const num = (s: string, a: number, b: number): number => numAt(s, a, b, NaN);
 
-function num(s: string | undefined): number {
-  if (s === undefined) return NaN;
-  const v = s.trim();
-  return v === '' ? NaN : Number(v);
+/**
+ * Decimal degrees, signed or with an N/S/E/W letter after the number
+ * (/^\s*([+-]?\d+(?:\.\d+)?)\s*([NSEWnsew])?\s*$/, read in place).
+ */
+function coord(s: string, a: number, b: number): number {
+  let i = a;
+  while (i < b && isSpace(s.charCodeAt(i))) i++;
+  const n0 = i;
+  let c = s.charCodeAt(i);
+  if (i < b && (c === 43 || c === 45)) i++;
+  const d0 = i;
+  while (i < b && (c = s.charCodeAt(i)) >= 48 && c <= 57) i++;
+  if (i === d0) return NaN;
+  if (i < b && s.charCodeAt(i) === 46) {
+    const f0 = ++i;
+    while (i < b && (c = s.charCodeAt(i)) >= 48 && c <= 57) i++;
+    if (i === f0) return NaN;
+  }
+  const n1 = i;
+  while (i < b && isSpace(s.charCodeAt(i))) i++;
+  let neg = false;
+  if (i < b) {
+    c = s.charCodeAt(i) | 32; // lower case
+    if (c !== 110 && c !== 115 && c !== 101 && c !== 119) return NaN; // n s e w
+    neg = c === 115 || c === 119;
+    i++;
+    while (i < b && isSpace(s.charCodeAt(i))) i++;
+    if (i < b) return NaN;
+  }
+  const v = numAt(s, n0, n1);
+  return neg ? -v : v;
 }
 
-/** Decimal degrees, signed or with an N/S/E/W letter after the number. */
-function coord(s: string | undefined): number {
-  if (s === undefined) return NaN;
-  const m = /^\s*([+-]?\d+(?:\.\d+)?)\s*([NSEWnsew])?\s*$/.exec(s);
-  if (!m) return NaN;
-  const v = Number(m[1]);
-  return m[2] && /[SWsw]/.test(m[2]) ? -v : v;
-}
-
-interface Row {
-  t: number;
-  lat: number;
-  lon: number;
-  ele: number;
-  speed: number;
-  course: number;
-  hdop: number;
-  vdop: number;
-  pdop: number;
-  fixq: FixQuality;
-  line: number;
-  /** This fix's accelerometer readings: [s0, s1) in the reading arrays. */
-  s0: number;
-  s1: number;
+/**
+ * Each fix as the file gives it, before any is dropped: its time, its
+ * accelerometer readings [s0, s1) and its place among the kept fixes (-1 if
+ * dropped). Struct of arrays, so no object per fix.
+ */
+class Rows {
+  n = 0;
+  t = new Float64Array(4096);
+  s0 = new Int32Array(4096);
+  s1 = new Int32Array(4096);
+  kept = new Int32Array(4096);
+  push(t: number, s: number, kept: number) {
+    if (this.n === this.t.length) {
+      const cap = this.n * 2;
+      const t2 = new Float64Array(cap); t2.set(this.t); this.t = t2;
+      const a = new Int32Array(cap); a.set(this.s0); this.s0 = a;
+      const b = new Int32Array(cap); b.set(this.s1); this.s1 = b;
+      const k = new Int32Array(cap); k.set(this.kept); this.kept = k;
+    }
+    this.t[this.n] = t; this.s0[this.n] = s; this.s1[this.n] = s; this.kept[this.n] = kept;
+    this.n++;
+  }
 }
 
 /** Accelerometer readings, in growable typed arrays. */
@@ -72,21 +100,17 @@ class Readings {
 }
 
 /**
- * The strongest accelerometer reading in each fix's second, in g: the three
- * axes combined as √(ax² + ay² + az²), with gravity left in, so a logger at
- * rest reads about 1 g. No filtering: each value is one actual reading.
+ * The strongest accelerometer reading in a fix's second, in g: the three axes
+ * combined as √(ax² + ay² + az²), with gravity left in, so a logger at rest
+ * reads about 1 g. No filtering: each value is one actual reading.
  */
-function accelPeaks(rows: Row[], r: Readings): Float32Array {
-  const out = new Float32Array(rows.length).fill(NaN);
-  rows.forEach((f, k) => {
-    let peak = NaN;
-    for (let j = f.s0; j < f.s1; j++) {
-      const v = Math.sqrt(r.x[j] * r.x[j] + r.y[j] * r.y[j] + r.z[j] * r.z[j]);
-      if (!(v <= peak)) peak = v;
-    }
-    out[k] = peak;
-  });
-  return out;
+function accelPeak(r: Readings, s0: number, s1: number): number {
+  let peak = NaN;
+  for (let j = s0; j < s1; j++) {
+    const v = Math.sqrt(r.x[j] * r.x[j] + r.y[j] * r.y[j] + r.z[j] * r.z[j]);
+    if (!(v <= peak)) peak = v;
+  }
+  return peak;
 }
 
 /**
@@ -94,24 +118,30 @@ function accelPeaks(rows: Row[], r: Readings): Float32Array {
  * time of their own: they follow their fix evenly, `perSecond` to a second (or
  * spread over the time to the next fix, if that's shorter).
  */
-function readingSeries(rows: Row[], r: Readings, perSecond: number): { t: Float64Array; g: Float32Array } {
+function readingSeries(rows: Rows, r: Readings, perSecond: number): { t: Float64Array; g: Float32Array } {
   const t = new Float64Array(r.n), g = new Float32Array(r.n);
   let m = 0, last = -Infinity;
-  rows.forEach((f, k) => {
-    const count = f.s1 - f.s0;
-    if (!count) return;
-    const next = k + 1 < rows.length ? rows[k + 1].t : Infinity;
-    const step = Math.min(1000 / Math.max(1, perSecond), (next - f.t) / count);
-    for (let j = f.s0; j < f.s1; j++) {
-      const at = f.t + (j - f.s0) * step;
+  for (let k = 0; k < rows.n; k++) {
+    const s0 = rows.s0[k], count = rows.s1[k] - s0, ft = rows.t[k];
+    if (!count) continue;
+    const next = k + 1 < rows.n ? rows.t[k + 1] : Infinity;
+    const step = Math.min(1000 / Math.max(1, perSecond), (next - ft) / count);
+    for (let j = s0; j < s0 + count; j++) {
+      const at = ft + (j - s0) * step;
       if (!(at > last)) continue; // a fix out of time order: its readings can't go on the timeline
       t[m] = at;
       g[m] = Math.sqrt(r.x[j] * r.x[j] + r.y[j] * r.y[j] + r.z[j] * r.z[j]);
       last = at;
       m++;
     }
-  });
+  }
   return { t: t.slice(0, m), g: g.slice(0, m) };
+}
+
+/** Two digits as a number, or -1. */
+function two(s: string, i: number): number {
+  const a = s.charCodeAt(i) - 48, b = s.charCodeAt(i + 1) - 48;
+  return a >= 0 && a <= 9 && b >= 0 && b <= 9 ? a * 10 + b : -1;
 }
 
 export function parseFusion(text: string): ParsedTrack {
@@ -119,14 +149,51 @@ export function parseFusion(text: string): ParsedTrack {
   const notes: Note[] = [];
   const flags: Flag[] = [];
   const src = text.includes('\0') ? text.replace(/\0/g, '') : text;
-  const lines = src.split(/\r\n|\r|\n/);
-  const complete = /[\r\n]\s*$/.test(src);
-  let last = lines.length - 1;
-  while (last >= 0 && !lines[last].trim()) last--;
+  const len = src.length;
+  // The content ends at the last character that isn't space; the file is
+  // complete when a line break comes after it.
+  const lastNonWs = lastNonSpace(src);
+  let complete = false;
+  for (let k = lastNonWs + 1; k < len && !complete; k++) { const c = src.charCodeAt(k); complete = c === 10 || c === 13; }
 
-  let h = 0;
-  while (h < lines.length && (!lines[h].trim() || lines[h].trimStart().startsWith('#'))) h++;
-  const names = (lines[h] ?? '').split(',').map((s) => s.trim().toLowerCase());
+  // Lines end at \r\n, \r or \n. Each is read once, character by character,
+  // noting its commas on the way, so no line or field is cut out as a string.
+  let ls = 0, li = 0, nComma = 0;
+  let cut = new Int32Array(64);
+  /** End of the line starting at `ls`; its first `max` commas go into `cut`. */
+  const scanLine = (max: number): number => {
+    let e = ls;
+    nComma = 0;
+    for (; e < len; e++) {
+      const c = src.charCodeAt(e);
+      if (c === 44) { if (nComma < max) cut[nComma] = e; nComma++; }
+      else if (c === 10 || c === 13) break;
+    }
+    return e;
+  };
+  /** Moves to the line after the one ending at `e`; false when there is none. */
+  const nextLine = (e: number): boolean => {
+    if (e >= len) return false;
+    ls = e + (src.charCodeAt(e) === 13 && src.charCodeAt(e + 1) === 10 ? 2 : 1);
+    li++;
+    return true;
+  };
+  /** First character of [a, e) that isn't space, or -1 for a blank line. */
+  const firstChar = (a: number, e: number): number => {
+    for (let k = a; k < e; k++) if (!isSpace(src.charCodeAt(k))) return k;
+    return -1;
+  };
+
+  // The header: the first line that is neither blank nor a comment.
+  let names: string[] = [''];
+  let more = true;
+  while (more) {
+    const a = ls, e = scanLine(0);
+    more = nextLine(e);
+    const fc = firstChar(a, e);
+    if (fc >= 0 && src.charCodeAt(fc) !== 35 /* # */) { names = src.slice(a, e).split(',').map((v) => v.trim().toLowerCase()); break; }
+  }
+  const N = names.length;
   const col = (...alts: string[]) => names.findIndex((n) => alts.includes(n));
   const iTag = col('tag'), iDate = col('date'), iTime = col('time');
   const iLat = col('lat', 'latitude', 'latitude n/s'), iLon = col('lon', 'longitude', 'longitude e/w');
@@ -135,76 +202,121 @@ export function parseFusion(text: string): ParsedTrack {
   const iPdop = col('pdop'), iHdop = col('hdop'), iVdop = col('vdop'), iFix = col('fix mode', 'fix'), iValid = col('valid');
   const motion = iAx >= 0 && iAy >= 0 && iAz >= 0;
 
-  const rows: Row[] = [];
+  const b = new ColumnBuilder();
+  const rows = new Rows();
   const r = new Readings();
-  let ymd: [number, number, number] | null = null;
+  let yr = 0, mo = 0, dy = 0, haveYmd = false;
   let dayShift = 0, lastTod = -1;
   let noDate = false, garbage = 0, garbageLine = 0, voidCount = 0;
   let truncated: { line: number; chars: number } | null = null;
+  if (cut.length < N) cut = new Int32Array(N);
+  // Field k of the current line is src[FS[k], FE[k]).
+  const FS = new Int32Array(N), FE = new Int32Array(N);
+  const field = (k: number) => src.slice(FS[k], FE[k]);
+  const numField = (k: number) => num(src, FS[k], FE[k]);
 
   if (iTime >= 0 && iLat >= 0 && iLon >= 0) {
-    for (let i = h + 1; i <= last; i++) {
-      const raw = lines[i];
-      if (!raw.trim() || raw.trimStart().startsWith('#')) continue;
-      const f = raw.split(',');
-      if (f.length !== names.length) {
-        if (i === last && !complete && f.length < names.length) truncated = { line: i + 1, chars: raw.length };
-        else { if (!garbage) garbageLine = i + 1; garbage++; }
+    while (more) {
+      const a = ls, e = scanLine(N), lineNo = li + 1;
+      more = nextLine(e);
+      const fc = firstChar(a, e);
+      if (fc < 0 || src.charCodeAt(fc) === 35) continue;
+      if (nComma + 1 !== N) {
+        const lastLine = a <= lastNonWs && lastNonWs < e;
+        if (lastLine && !complete && nComma + 1 < N) truncated = { line: lineNo, chars: e - a };
+        else { if (!garbage) garbageLine = lineNo; garbage++; }
         continue;
       }
-      const time = f[iTime].trim();
-      const lat = coord(f[iLat]), lon = coord(f[iLon]);
-      if (time) {
-        const ds = iDate >= 0 ? f[iDate].trim() : '';
-        if (/^\d{6}$/.test(ds)) {
-          const next: [number, number, number] = [2000 + Number(ds.slice(0, 2)), Number(ds.slice(2, 4)), Number(ds.slice(4, 6))];
-          if (!ymd || next.join() !== ymd.join()) { ymd = next; dayShift = 0; }
+      FS[0] = a;
+      for (let k = 1; k < N; k++) { FE[k - 1] = cut[k - 1]; FS[k] = cut[k - 1] + 1; }
+      FE[N - 1] = e;
+
+      let t0 = FS[iTime], t1 = FE[iTime];
+      while (t0 < t1 && isSpace(src.charCodeAt(t0))) t0++;
+      while (t1 > t0 && isSpace(src.charCodeAt(t1 - 1))) t1--;
+      const lat = coord(src, FS[iLat], FE[iLat]), lon = coord(src, FS[iLon], FE[iLon]);
+      if (t1 > t0) {
+        let d0 = 0, d1 = 0;
+        if (iDate >= 0) {
+          d0 = FS[iDate]; d1 = FE[iDate];
+          while (d0 < d1 && isSpace(src.charCodeAt(d0))) d0++;
+          while (d1 > d0 && isSpace(src.charCodeAt(d1 - 1))) d1--;
         }
-        const tm = /^(\d{2})(\d{2})(\d{2})(\.\d+)?$/.exec(time);
-        if (tm && Number.isFinite(lat) && Number.isFinite(lon)) {
-        if (!ymd) { ymd = [1970, 1, 1]; noDate = true; }
-        const tod = Number(tm[1]) * 3600 + Number(tm[2]) * 60 + Number(tm[3]);
-        // Past midnight with no new date written: the day moves on.
-        if (!ds && lastTod >= 0 && tod < lastTod - 43200) dayShift++;
-        lastTod = tod;
-        const ms = tm[4] ? Math.round(Number(tm[4]) * 1000) : 0;
-        const t = Date.UTC(ymd[0], ymd[1] - 1, ymd[2] + dayShift, Number(tm[1]), Number(tm[2]), Number(tm[3]), ms);
-        const valid = iValid >= 0 ? f[iValid].trim().toUpperCase() : '';
-        const mode = iFix >= 0 ? f[iFix].trim().toUpperCase() : '';
-        const fixq: FixQuality = valid.includes('DGPS') ? 2 : /[23]D/.test(mode) ? 1 : 0;
-        rows.push({
-          t, lat, lon, ele: iAlt >= 0 ? num(f[iAlt]) : NaN, speed: iSpeed >= 0 ? num(f[iSpeed]) / 3.6 : NaN,
-          course: iHead >= 0 ? num(f[iHead]) : NaN, hdop: iHdop >= 0 ? num(f[iHdop]) : NaN,
-          vdop: iVdop >= 0 ? num(f[iVdop]) : NaN, pdop: iPdop >= 0 ? num(f[iPdop]) : NaN,
-          fixq, line: i + 1, s0: r.n, s1: r.n,
-        });
-        const tag = iTag >= 0 ? f[iTag].trim().toUpperCase() : '';
-        if (tag === 'C' || tag === 'V') flags.push({ n: flags.length + 1, t, lat, lon, name: null });
+        const dated = d1 > d0;
+        // A date is YYMMDD, six digits.
+        if (d1 - d0 === 6) {
+          const yy = two(src, d0), mm = two(src, d0 + 2), dd = two(src, d0 + 4);
+          if (yy >= 0 && mm >= 0 && dd >= 0 && (!haveYmd || 2000 + yy !== yr || mm !== mo || dd !== dy)) {
+            yr = 2000 + yy; mo = mm; dy = dd; haveYmd = true; dayShift = 0;
+          }
+        }
+        // A time is HHMMSS, perhaps with a fraction of a second.
+        let hh = -1, mi = -1, ss = -1, ms = 0, timed = false;
+        const tl = t1 - t0;
+        if (tl >= 6) {
+          hh = two(src, t0); mi = two(src, t0 + 2); ss = two(src, t0 + 4);
+          if (hh >= 0 && mi >= 0 && ss >= 0) {
+            if (tl === 6) timed = true;
+            else if (tl > 7 && src.charCodeAt(t0 + 6) === 46) {
+              timed = true;
+              for (let k = t0 + 7; k < t1 && timed; k++) { const c = src.charCodeAt(k); timed = c >= 48 && c <= 57; }
+              if (timed) ms = Math.round(numAt(src, t0 + 6, t1) * 1000);
+            }
+          }
+        }
+        if (timed && Number.isFinite(lat) && Number.isFinite(lon)) {
+          if (!haveYmd) { yr = 1970; mo = 1; dy = 1; haveYmd = true; noDate = true; }
+          const tod = hh * 3600 + mi * 60 + ss;
+          // Past midnight with no new date written: the day moves on.
+          if (!dated && lastTod >= 0 && tod < lastTod - 43200) dayShift++;
+          lastTod = tod;
+          const t = Date.UTC(yr, mo - 1, dy + dayShift, hh, mi, ss, ms);
+          const valid = iValid >= 0 ? field(iValid).trim().toUpperCase() : '';
+          const mode = iFix >= 0 ? field(iFix).trim().toUpperCase() : '';
+          const fixq: FixQuality = valid.includes('DGPS') ? 2 : /[23]D/.test(mode) ? 1 : 0;
+          const kept = b.push({
+            t, lat, lon, ele: iAlt >= 0 ? numField(iAlt) : NaN, speed: iSpeed >= 0 ? numField(iSpeed) / 3.6 : NaN,
+            course: iHead >= 0 ? numField(iHead) : NaN, hdop: iHdop >= 0 ? numField(iHdop) : NaN,
+            vdop: iVdop >= 0 ? numField(iVdop) : NaN, pdop: iPdop >= 0 ? numField(iPdop) : NaN,
+            fixq, line: lineNo,
+          });
+          rows.push(t, r.n, kept ? b.n - 1 : -1);
+          if (iTag >= 0) {
+            // C marks a saved point and V a voice note.
+            let g0 = FS[iTag], g1 = FE[iTag];
+            while (g0 < g1 && isSpace(src.charCodeAt(g0))) g0++;
+            while (g1 > g0 && isSpace(src.charCodeAt(g1 - 1))) g1--;
+            const c = g1 - g0 === 1 ? src.charCodeAt(g0) | 32 : 0;
+            if (c === 99 || c === 118) flags.push({ n: flags.length + 1, t, lat, lon, name: null });
+          }
         } else voidCount++;
       } else if (Number.isFinite(lat) || Number.isFinite(lon)) {
         voidCount++;
       }
       // An accelerometer reading belongs to the fix above it.
-      if (motion && rows.length) {
-        const x = num(f[iAx]), y = num(f[iAy]), z = num(f[iAz]);
+      if (motion && rows.n) {
+        const x = numField(iAx), y = numField(iAy), z = numField(iAz);
         if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
           r.push(x, y, z);
-          rows[rows.length - 1].s1 = r.n;
+          rows.s1[rows.n - 1] = r.n;
         }
       }
     }
   }
+  while (more) more = nextLine(scanLine(0)); // count the lines left
+  const lineCount = li + 1;
 
   // Readings a second: the usual count per fix where fixes are a second apart.
-  const counts: number[] = [];
-  for (let k = 0; k + 1 < rows.length; k++) if (rows[k + 1].t - rows[k].t === 1000 && rows[k].s1 > rows[k].s0) counts.push(rows[k].s1 - rows[k].s0);
-  counts.sort((a, b) => a - b);
-  const perSecond = counts.length ? counts[counts.length >> 1] : 1;
-  const accel = accelPeaks(rows, r);
+  const counts = new Int32Array(rows.n);
+  let nc = 0;
+  for (let k = 0; k + 1 < rows.n; k++) if (rows.t[k + 1] - rows.t[k] === 1000 && rows.s1[k] > rows.s0[k]) counts[nc++] = rows.s1[k] - rows.s0[k];
+  const sorted = counts.subarray(0, nc).sort();
+  const perSecond = nc ? sorted[nc >> 1] : 1;
+  for (let k = 0; k < rows.n; k++) {
+    const at = rows.kept[k];
+    if (at >= 0) { const peak = accelPeak(r, rows.s0[k], rows.s1[k]); b.accel[at] = Number.isFinite(peak) ? peak : NaN; }
+  }
   const series = r.n ? readingSeries(rows, r, perSecond) : undefined;
-
-  const b = new ColumnBuilder();
-  rows.forEach((x, k) => b.push({ ...x, accel: accel[k] }));
   const cols = b.build();
 
   if (truncated) problems.push({ kind: 'truncated', line: truncated.line, chars: truncated.chars, kept: cols.n });
@@ -231,5 +343,5 @@ export function parseFusion(text: string): ParsedTrack {
   if (present(cols, 'accel')) fields.push('accel');
   if (flags.length) fields.push('flags');
 
-  return { format: 'fusion', creator: null, name: null, cols, flags, problems, notes, fields, lines: lines.length, clock: 'utc', ...(series ? { motion: series } : {}) };
+  return { format: 'fusion', creator: null, name: null, cols, flags, problems, notes, fields, lines: lineCount, clock: 'utc', ...(series ? { motion: series } : {}) };
 }

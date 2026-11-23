@@ -51,19 +51,19 @@ export function parseText(text: string, file: string, sizeBytes = text.length): 
  * about the logger, and noted.
  */
 export function checkPlaceholders(p: ParsedTrack) {
-  const c = p.cols;
+  const c = p.cols, n = c.n, ele = c.ele, sats = c.sats, lat = c.lat, lon = c.lon;
   let withEle = 0, nonZero = 0;
-  for (let i = 0; i < c.n; i++) if (Number.isFinite(c.ele[i])) { withEle++; if (c.ele[i] !== 0) nonZero++; }
+  for (let i = 0; i < n; i++) { const e = ele[i]; if (e - e === 0) { withEle++; if (e !== 0) nonZero++; } } // e - e === 0: finite
   if (withEle > 10 && nonZero === 0) {
     c.ele.fill(NaN);
     p.fields = p.fields.filter((f) => f !== 'ele');
     p.notes.push({ kind: 'eleZero' });
   }
   let zero = 0, stale = 0;
-  for (let i = 0; i < c.n; i++) {
-    if (c.sats[i] !== 0) continue;
+  for (let i = 0; i < n; i++) {
+    if (sats[i] !== 0) continue;
     zero++;
-    if (i > 0 && c.lat[i] === c.lat[i - 1] && c.lon[i] === c.lon[i - 1]) stale++;
+    if (i > 0 && lat[i] === lat[i - 1] && lon[i] === lon[i - 1]) stale++;
   }
   if (zero) p.notes.push({ kind: 'zeroSats', count: zero, stale });
 }

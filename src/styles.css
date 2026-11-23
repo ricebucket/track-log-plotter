@@ -50,7 +50,8 @@ button:disabled { cursor: default; opacity: 0.5; }
 .btn-outline { align-self: flex-start; height: 34px; padding: 0 12px 0 10px; display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-2); border-radius: 9px; background: #fff; color: var(--ink); font-size: 12.5px; font-weight: 700; }
 .btn-outline.small { height: 32px; padding: 0 10px 0 6px; }
 .btn-outline.danger { color: #8a1c1c; border-color: rgba(138, 28, 28, 0.3); }
-.big { height: 46px; padding: 0 18px 0 15px; font-size: 14px; border-radius: 10px; }
+/* The big buttons on the start screen (a bare .big would also stretch the big badge). */
+.btn-dark.big, .btn-outline.big { height: 46px; padding: 0 18px 0 15px; font-size: 14px; border-radius: 10px; }
 .link-btn { align-self: flex-start; min-height: 32px; padding: 0 8px; margin-left: -8px; display: inline-flex; align-items: center; gap: 7px; border: 0; border-radius: 8px; background: transparent; font-size: 12.5px; font-weight: 700; text-align: left; }
 .link-btn span { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgba(16, 24, 32, 0.35); }
 .btn-amber { flex: none; height: 30px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--amber-ink); color: #fff; font-size: 12px; font-weight: 700; white-space: nowrap; }
@@ -71,6 +72,7 @@ button:disabled { cursor: default; opacity: 0.5; }
 /* The badge's shape is the file format: GPX a circle, NMEA a rounded square, Columbus Fusion a hexagon. */
 .badge.square, .badge-shape.square { border-radius: 24%; }
 .badge.hexagon, .badge-shape.hexagon { border-radius: 0; clip-path: polygon(25% 3%, 75% 3%, 100% 50%, 75% 97%, 25% 97%, 0 50%); }
+.badge.diamond, .badge-shape.diamond { border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 .badge-shape { flex: none; display: inline-block; width: 11px; height: 11px; margin-right: 6px; border-radius: 50%; background: var(--ink-3); }
 
 /* ---------- panel ---------- */
@@ -156,7 +158,7 @@ button:disabled { cursor: default; opacity: 0.5; }
 .card-links { display: flex; }
 .card-links .link-btn { margin-left: 0; }
 /* The settings sheet: beside the panel, over it in a narrow window, a bottom sheet on a phone. */
-.settings-sheet { position: absolute; z-index: 40; left: calc(16px + var(--panel-w) + 12px); top: 16px; bottom: calc(16px + var(--tl-h) + 10px); width: 480px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 8px; padding: 14px 14px 12px; border-radius: 14px; background: var(--card); box-shadow: var(--shadow-pop); overflow-y: auto; }
+.settings-sheet { position: absolute; z-index: 40; left: calc(16px + var(--panel-w) + 12px); top: 16px; max-height: calc(100vh - 32px); width: 480px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 8px; padding: 14px 14px 12px; border-radius: 14px; background: var(--card); box-shadow: var(--shadow-pop); overflow-y: auto; }
 .sheet-head { display: flex; align-items: center; gap: 8px; }
 .sheet-head h2 { margin: 0; font-size: 15px; font-weight: 800; }
 .sheet-table { width: 100%; border-collapse: collapse; }
@@ -221,6 +223,10 @@ button:disabled { cursor: default; opacity: 0.5; }
 .card-actions .danger { margin-left: auto; }
 .icon-btn.outline.danger { color: #8a1c1c; border-color: rgba(138, 28, 28, 0.3); }
 .icon-btn.outline.danger:hover { background: rgba(138, 28, 28, 0.06); }
+/* After a first click it asks: "Remove?" in red, for a second click. */
+.card-actions .btn-outline, .card-actions .icon-btn { white-space: nowrap; }
+.icon-btn.outline.danger.is-asking svg { display: none; }
+.icon-btn.outline.danger.is-asking { width: auto; padding: 0 12px; gap: 5px; background: #8a1c1c; border-color: #8a1c1c; color: #fff; font-size: 12.5px; font-weight: 700; }
 .tl-values { min-width: 0; font-size: 12.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tl-lanes { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; cursor: crosshair; touch-action: none; }
 .lane { display: flex; align-items: stretch; gap: 10px; }
@@ -325,7 +331,7 @@ button:disabled { cursor: default; opacity: 0.5; }
 .toast > svg { flex: none; margin-top: 2px; }
 .toast.is-error { background: #fde8e8; color: #6a1010; box-shadow: 0 0 0 1px rgba(138, 28, 28, 0.25), 0 10px 30px rgba(16, 24, 32, 0.18); }
 
-.brand-pill { position: absolute; left: 16px; top: 16px; z-index: 10; display: flex; align-items: center; gap: 14px; height: 52px; padding: 0 8px 0 18px; border-radius: 12px; background: var(--ink); color: #fff; box-shadow: var(--shadow); }
+.brand-pill { position: absolute; left: 16px; top: 16px; z-index: 10; display: flex; align-items: center; gap: 14px; height: 52px; padding: 0 18px; border-radius: 12px; background: var(--ink); color: #fff; box-shadow: var(--shadow); }
 .brand-pill .app-title { flex: none; }
 .empty-wrap { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 24px; pointer-events: none; }
 .empty-card { pointer-events: auto; width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 20px; padding: 32px 32px 26px; border-radius: 18px; background: var(--card); box-shadow: var(--shadow-pop); }
@@ -377,7 +383,7 @@ button:disabled { cursor: default; opacity: 0.5; }
   .attribution { font-size: 10px; text-align: left; }
   .tooltip { display: none; }
   .toasts { left: 8px; right: 8px; top: 64px; }
-  .brand-pill { left: 8px; top: 8px; height: 44px; gap: 10px; padding-left: 14px; }
+  .brand-pill { left: 8px; top: 8px; height: 44px; gap: 10px; padding: 0 14px; }
   .brand-pill .app-title { font-size: 15px; }
   .empty-card { padding: 22px; gap: 16px; }
   .empty-card h1 { font-size: 22px; line-height: 28px; }

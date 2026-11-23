@@ -17,6 +17,26 @@ describe('store', () => {
     expect(S.items.value.map((x) => x.id)).toEqual(['A']);
   });
 
+  it('selects each newly added track, the first of several added together, even from a properties page', () => {
+    S.addLoaded([load('central-park-loop.nmea')]);
+    expect(S.selected.value!.id).toBe('A');
+    S.openDetails('A');
+    S.picker.value = { id: 'A' };
+    S.addLoaded([load('roosevelt-island-run.gpx')]);
+    expect(S.selected.value!.id).toBe('B');
+    // Back in the track list, with B's row to scroll into view and A's settings sheet closed.
+    expect(S.page.value).toEqual({ kind: 'tracks' });
+    expect(S.reveal.value).toBe('B');
+    expect(S.picker.value).toBeNull();
+    S.addLoaded([load('central-park-loop-vendor.gpx'), load('central-park-loop-motion.csv')]);
+    expect(S.selected.value!.id).toBe('C');
+    S.addLoaded(Array.from({ length: 6 }, () => load('roosevelt-island-run.gpx')));
+    expect([S.items.value.length, S.selected.value!.id]).toEqual([10, 'E']);
+    // A file turned away at the load limit adds nothing, so the selection stays.
+    S.addLoaded([load('central-park-loop.nmea')]);
+    expect([S.skippedCount.value, S.selected.value!.id]).toEqual([1, 'E']);
+  });
+
   it('moves the motion readings with the track when its file time zone changes', () => {
     S.addLoaded([load('central-park-loop-motion.csv')]);
     const before = S.items.value[0].track;

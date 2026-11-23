@@ -9,13 +9,14 @@ import { quantile } from './geo';
 export function hdopIsRelative(hdop: ArrayLike<number>, sats: ArrayLike<number>): boolean {
   let withSats = 0;
   for (let i = 0; i < sats.length; i++) if (sats[i] >= 0) withSats++;
-  const vals: number[] = [];
+  const vals = new Float64Array(hdop.length);
+  let n = 0;
   for (let i = 0; i < hdop.length; i++) {
     const h = hdop[i];
     if (!Number.isFinite(h)) continue;
     if (withSats > hdop.length / 2 && !(sats[i] >= 6)) continue;
-    vals.push(h);
+    vals[n++] = h;
   }
-  if (vals.length < 30) return false;
-  return quantile(vals, 0.1) > 2.5;
+  if (n < 30) return false;
+  return quantile(vals.subarray(0, n), 0.1) > 2.5;
 }

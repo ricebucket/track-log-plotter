@@ -141,6 +141,11 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   const sent: Record<string, string> = {};
   // Whether the drawn-lines count (for the browser tests) needs refreshing.
   let countStale = true;
+  // The browser tests set window.tlpTestHooks to read what the map drew.
+  const counting = !!(window as unknown as { tlpTestHooks?: boolean }).tlpTestHooks;
+  // For those tests, data-fitting is on from a fit's request until its
+  // animation ends, so they measure positions only on a still map.
+  const fitting = (on: boolean) => { if (counting) { if (on) container.dataset.fitting = '1'; else delete container.dataset.fitting; } };
   const disposers: (() => void)[] = [];
 
   // Keep fitted tracks clear of whatever covers the map: the side panel (or
@@ -166,8 +171,11 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   };
   const fit = (range?: [number, number]) => {
     const b = range ? boundsIn(S.visible.peek(), S.offsets.peek(), range) : boundsOf(S.visible.peek());
-    if (!b) return;
+    if (!b) { fitting(false); return; }
+    fitting(true);
     map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: padding(), maxZoom: 16, duration: 500 });
+    // The map is idle only once no camera animation is left, even if fits overlap.
+    map.once('idle', () => fitting(false));
   };
   mapApi.zoomIn = () => map.zoomIn();
   mapApi.zoomOut = () => map.zoomOut();
@@ -219,10 +227,9 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     S.mapView.value = { lat: c.lat, lon: c.lng, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
   });
   map.on('error', () => { /* a tile failed to load; the map keeps going */ });
-  // How many track lines are drawn, for the browser tests only (they set
-  // window.tlpTestHooks). Counting queries every drawn feature, so it runs only
-  // after the data, view or selection changed.
-  const counting = !!(window as unknown as { tlpTestHooks?: boolean }).tlpTestHooks;
+  // How many track lines are drawn, for the browser tests only. Counting
+  // queries every drawn feature, so it runs only after the data, view or
+  // selection changed.
   map.on('idle', () => {
     if (!counting || !ready.peek() || !countStale) return;
     countStale = false;
@@ -391,6 +398,7 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     const f = S.fitRequest.value;
     if (f === lastFit) return;
     lastFit = f;
+    fitting(true);
     // Fit after the panel and timeline have rendered, so the padding sees them.
     if (ready.peek()) requestAnimationFrame(() => requestAnimationFrame(() => fit())); else map.once('idle', () => fit());
   }));

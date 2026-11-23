@@ -15,7 +15,7 @@ export function unitOf(key: MeasureKey): string {
 
 /** A file format's name, as people know it. */
 export function formatName(f: Format): string {
-  return f === 'gpx' ? 'GPX' : f === 'nmea' ? 'NMEA' : 'Columbus Fusion';
+  return f === 'gpx' ? 'GPX' : f === 'nmea' ? 'NMEA' : f === 'fusion' ? 'Columbus Fusion' : t('format.combined');
 }
 
 export function measureName(key: ColorKey | HaloKey): string {

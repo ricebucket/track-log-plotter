@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/preact';
 import { App } from '../../src/ui/App';
 import * as S from '../../src/state/store';
@@ -173,6 +173,25 @@ describe('tracks panel', () => {
     expect(screen.queryByRole('dialog', { name: 'Color, halo and timeline' })).toBeNull();
   });
 
+  it('puts what None does to the color and to the halo on separate lines', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Color/ }));
+    const none = document.querySelector('.settings-sheet .none-row th')!;
+    expect([...none.querySelectorAll('.opt-desc')].map((d) => d.textContent)).toEqual(['Color: the whole track in one color from its range.', 'Halo: no halo.']);
+  });
+
+  it('doesn\'t say what a measure needs from the file, since the sheet lists only measures the file has', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Color/ }));
+    const descs = () => [...document.querySelectorAll('.settings-sheet .opt-desc')].map((d) => d.textContent!);
+    expect(descs().find((d) => d.startsWith('How steep'))).toBe('How steep the track is, uphill or downhill: the change in elevation over about 120 m of track, as a percentage.');
+    expect(descs().filter((d) => /\bneeds?\b[^.]*\bfile\b/i.test(d))).toEqual([]);
+    act(() => { S.lang.value = 'zh'; });
+    expect(descs().filter((d) => d.includes('需要文件中'))).toEqual([]);
+  });
+
   it('copies the color and halo measures to the other tracks, naming them on hover', () => {
     loadFixtures('central-park-loop.nmea', 'roosevelt-island-run.gpx');
     S.setMeasure('A', 'color', 'ele');
@@ -312,8 +331,32 @@ describe('tracks panel', () => {
     act(() => { S.openDetails('A'); });
     expect(screen.queryByRole('button', { name: 'Remove this track' })).toBeNull();
     act(() => { S.page.value = { kind: 'tracks' }; });
+    // The first click only asks; pressing elsewhere cancels.
     fireEvent.click(screen.getByRole('button', { name: 'Remove this track' }));
+    expect(S.items.value).toHaveLength(2);
+    fireEvent.blur(screen.getByRole('button', { name: 'Remove?' }));
+    expect(screen.queryByRole('button', { name: 'Remove?' })).toBeNull();
+    // Asked again, a second click removes it.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove this track' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove?' }));
     expect(S.items.value.map((x) => x.id)).toEqual(['B']);
+  });
+
+  it('stops asking "Remove?" after 4 seconds, keeping the track', () => {
+    vi.useFakeTimers();
+    try {
+      loadFixtures('central-park-loop.nmea');
+      render(<App Map={NoMap} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Remove this track' }));
+      act(() => { vi.advanceTimersByTime(3900); });
+      expect(screen.getByRole('button', { name: 'Remove?' })).toBeTruthy();
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(screen.queryByRole('button', { name: 'Remove?' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Remove this track' })).toBeTruthy();
+      expect(S.items.value).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens the properties page with the problem explained', () => {

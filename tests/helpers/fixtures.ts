@@ -24,3 +24,11 @@ export function load(name: string): LoadedTrack {
 
 /** New York City, as used by the privacy guard. */
 export const NYC = { south: 40.49, north: 40.92, west: -74.27, east: -73.68 };
+
+/**
+ * Stanford and the Palo Alto station: allowed only for the synthetic drive the
+ * user asked for, recorded by three loggers (stanford-drive-*), and its tests.
+ */
+export const STANFORD = { south: 37.40, north: 37.46, west: -122.20, east: -122.14 };
+export const STANFORD_FIXTURE = /^stanford-drive-/;
+export const STANFORD_TEST = 'tests/unit/stanford-drive.test.ts';

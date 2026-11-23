@@ -1,7 +1,8 @@
 // Shared data model. Fixes are stored column-wise in typed arrays so a
 // 100,000-fix log moves from the parsing worker to the page without copying.
 
-export type Format = 'gpx' | 'nmea' | 'fusion';
+/** 'combined': made in the app from 2 or 3 logs of the same trip (see src/combine). */
+export type Format = 'gpx' | 'nmea' | 'fusion' | 'combined';
 
 /** Measures a track can be colored or haloed by. */
 export type MeasureKey = 'speed' | 'ele' | 'grade' | 'hdop' | 'sats' | 'fix' | 'accel';
@@ -107,6 +108,12 @@ export interface ParsedTrack {
    * fixes) and its strength in g, gravity included. Only files with motion data.
    */
   motion?: { t: Float64Array; g: Float32Array };
+  /**
+   * Combined tracks only: 1 where the set of logs giving the height changes
+   * (one has a gap, is left out or holds), so the height may jump there.
+   * Grade and climb are worked out as if the track broke at those points.
+   */
+  eleBreak?: Uint8Array;
   /**
    * For files whose times have no time zone: the zone they're read in
    * ('local', 'utc' or an IANA id). The user can change it on the properties page.

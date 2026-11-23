@@ -71,7 +71,7 @@ export function SettingsSheet() {
             </tr>
           ))}
           <tr class="none-row">
-            <th scope="row"><span class="opt-name">{t('settings.none')}</span><span class="opt-desc">{t('settings.noneLong')}</span></th>
+            <th scope="row"><span class="opt-name">{t('settings.none')}</span><span class="opt-desc">{t('settings.noneColor')}</span><span class="opt-desc">{t('settings.noneHalo')}</span></th>
             <td><input type="radio" name={`color-${item.id}`} checked={item.color === 'none'} aria-label={t('settings.noColor')} onChange={() => S.setMeasure(item.id, 'color', 'none')} /></td>
             <td><input type="radio" name={`halo-${item.id}`} checked={item.halo === 'off'} aria-label={t('settings.noHalo')} onChange={() => S.setMeasure(item.id, 'halo', 'off')} /></td>
           </tr>

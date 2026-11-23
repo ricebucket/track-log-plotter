@@ -1,5 +1,5 @@
 import type { Columns, Derived, ParsedTrack, TrackStats } from '../model/types';
-import { haversine, median, quantileSorted, sortedFinite } from './geo';
+import { haversine, median, quantiles } from './geo';
 import { hdopIsRelative } from './hdop';
 
 /** Half of the distance window used for grade, in meters (120 m in total). */
@@ -56,14 +56,16 @@ export function derive(p: ParsedTrack): Derived {
   // A lone fix between gaps has no speed of its own: call it standing still.
   for (let i = 0; i < n; i++) if (!Number.isFinite(kmh[i])) kmh[i] = 0;
 
-  const eleS = smoothEle(c, gap);
-  const grade = gradeOf(c, eleS, dist, gap);
+  // Height doesn't reach across gaps, nor, in a combined track, across a change in the logs giving it.
+  let eleGap = gap;
+  if (p.eleBreak) { eleGap = new Uint8Array(n); for (let i = 0; i < n; i++) eleGap[i] = gap[i] | p.eleBreak[i]; }
+  const eleS = smoothEle(c, eleGap);
+  const grade = gradeOf(c, eleS, dist, eleGap);
   const hdopRelative = hdopIsRelative(c.hdop, c.sats);
-  const hs = sortedFinite(c.hdop);
-  const q1 = quantileSorted(hs, 0.25), q2 = quantileSorted(hs, 0.5), q3 = quantileSorted(hs, 0.75);
+  const [q1, q2, q3] = quantiles(c.hdop, [0.25, 0.5, 0.75]);
   const hdopQ: [number, number, number] | null = Number.isFinite(q2) ? [q1, q2, q3] : null;
 
-  return { dist, kmh, speedFromFile, grade, gap, hdopRelative, hdopQ, stats: statsOf(c, eleS, dist, gap, kmh, intervalS, q2) };
+  return { dist, kmh, speedFromFile, grade, gap, hdopRelative, hdopQ, stats: statsOf(c, eleS, dist, gap, kmh, intervalS, q2, p.eleBreak) };
 }
 
 /**
@@ -114,7 +116,7 @@ function gradeOf(c: Columns, ele: Float32Array, dist: Float64Array, gap: Uint8Ar
   return out;
 }
 
-function statsOf(c: Columns, eleS: Float32Array, dist: Float64Array, gap: Uint8Array, kmh: Float32Array, intervalS: number, mh: number): TrackStats {
+function statsOf(c: Columns, eleS: Float32Array, dist: Float64Array, gap: Uint8Array, kmh: Float32Array, intervalS: number, mh: number, eleBreak?: Uint8Array): TrackStats {
   const n = c.n;
   let distanceM = 0, movingS = 0, maxKmh = 0;
   let w = 180, s = 90, e = -180, nn = -90;
@@ -140,6 +142,11 @@ function statsOf(c: Columns, eleS: Float32Array, dist: Float64Array, gap: Uint8A
     if (raw < minEle) minEle = raw;
     if (raw > maxEle) maxEle = raw;
     const v = eleS[i];
+    // Where a combined track's height changes source, close the climb so far and start afresh.
+    if (eleBreak && eleBreak[i]) {
+      if (high - low >= CLIMB_HYSTERESIS) climb += high - low;
+      low = high = NaN;
+    }
     if (Number.isNaN(v)) continue;
     if (Number.isNaN(low)) { low = high = v; continue; }
     if (v > high) high = v;

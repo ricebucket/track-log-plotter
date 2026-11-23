@@ -2,6 +2,7 @@ import type { FieldKey, Flag, FixQuality, Note, ParsedTrack, Problem } from '../
 import { ColumnBuilder, present } from './columns';
 import { scanXml } from './xml';
 import { inferSpeedUnit, UNIT_FACTOR } from './units';
+import { numAt } from './scan';
 
 /** Readable names for extension fields the app doesn't use. */
 const IGNORED_NAMES: Record<string, string> = {
@@ -14,7 +15,9 @@ const IGNORED_NAMES: Record<string, string> = {
 const POINT_FIELDS = new Set(['ele', 'time', 'hdop', 'vdop', 'pdop', 'sat', 'fix', 'geoidheight', 'speed', 'spd', 'sog', 'course', 'crs', 'cog', 'heading', 'name', 'sym', 'type', 'desc', 'cmt', 'src', 'link', 'magvar', 'ageofdgpsdata', 'dgpsid', 'extensions', 'text']);
 
 /** A dilution of precision of 0 is a placeholder: real values are never below about 0.5. */
-const dop = (v: string) => { const x = Number(v); return x > 0 ? x : NaN; };
+const dop = (v: string) => { const x = num(v); return x > 0 ? x : NaN; };
+/** Number(v), read in place. */
+const num = (v: string) => numAt(v, 0, v.length);
 const EXT_CONTAINERS = new Set(['TrackPointExtension', 'TrackPointExtensionv1', 'TrackPointExtensionv2', 'extensions']);
 
 interface Point {
@@ -43,6 +46,34 @@ function newPoint(attrs: Map<string, string>, line: number): Point {
 }
 
 const HAS_ZONE = /(Z|[+-]\d\d:?\d\d)$/i;
+
+const digit = (s: string, i: number) => { const c = s.charCodeAt(i) - 48; return c >= 0 && c <= 9 ? c : -100_000; };
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/**
+ * The usual GPX time, "YYYY-MM-DDTHH:MM:SSZ" (or with exactly three digits of
+ * a second), read directly; NaN for anything else, which goes to Date.parse.
+ * Only valid times are taken: for those every browser's Date.parse must give
+ * the same as Date.UTC, while invalid ones (February 30th, 24:00) differ.
+ */
+function usualTime(v: string): number {
+  const len = v.length;
+  if ((len !== 20 && len !== 24) || v.charCodeAt(len - 1) !== 90 /* Z */) return NaN;
+  if (v.charCodeAt(4) !== 45 || v.charCodeAt(7) !== 45 || v.charCodeAt(10) !== 84 || v.charCodeAt(13) !== 58 || v.charCodeAt(16) !== 58) return NaN;
+  const y = digit(v, 0) * 1000 + digit(v, 1) * 100 + digit(v, 2) * 10 + digit(v, 3);
+  const mo = digit(v, 5) * 10 + digit(v, 6), d = digit(v, 8) * 10 + digit(v, 9);
+  const h = digit(v, 11) * 10 + digit(v, 12), mi = digit(v, 14) * 10 + digit(v, 15), s = digit(v, 17) * 10 + digit(v, 18);
+  let ms = 0;
+  if (len === 24) {
+    if (v.charCodeAt(19) !== 46) return NaN;
+    ms = digit(v, 20) * 100 + digit(v, 21) * 10 + digit(v, 22);
+    if (ms < 0) return NaN;
+  }
+  if (y < 100 || mo < 1 || mo > 12 || d < 1 || h < 0 || h > 23 || mi < 0 || mi > 59 || s < 0 || s > 59) return NaN;
+  const leap = mo === 2 && (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0));
+  if (d > DAYS_IN_MONTH[mo - 1] + (leap ? 1 : 0)) return NaN;
+  return Date.UTC(y, mo - 1, d, h, mi, s, ms);
+}
 
 /** ISO 8601 time → epoch ms. Times without a zone are read as UTC. */
 export function parseIsoTime(s: string): { t: number; zoned: boolean } {
@@ -91,13 +122,23 @@ export function parseGpx(text: string): ParsedTrack {
   let extDepth = 0;
   let garminDepth = 0;
   const isGarmin = (name: string) => name.startsWith('TrackPointExtension');
+  // What a tag name means here, worked out once per distinct name: 1 for an
+  // extension container, 2 for Garmin's TrackPointExtension. The scanner hands
+  // out the same string for the same name, so the lookup is quick.
+  const kinds = new Map<string, number>();
+  const kindOf = (name: string): number => {
+    let k = kinds.get(name);
+    if (k === undefined) { k = (EXT_CONTAINERS.has(name) ? 1 : 0) | (isGarmin(name) ? 2 : 0); kinds.set(name, k); }
+    return k;
+  };
 
   const result = scanXml(text, {
     open(name, attrs, line) {
       stack.push(name);
       buf = '';
-      if (EXT_CONTAINERS.has(name)) extDepth++;
-      if (isGarmin(name)) garminDepth++;
+      const kind = kindOf(name);
+      if (kind & 1) extDepth++;
+      if (kind & 2) garminDepth++;
       if (name === 'gpx' && stack.length === 1) creator = attrs.get('creator')?.trim() || null;
       else if (name === 'trk') b.breakSegment();
       else if (name === 'trkseg') b.breakSegment();
@@ -116,8 +157,9 @@ export function parseGpx(text: string): ParsedTrack {
         extDepth = stack.filter((s) => EXT_CONTAINERS.has(s)).length;
         garminDepth = stack.filter(isGarmin).length;
       } else {
-        if (EXT_CONTAINERS.has(name)) extDepth--;
-        if (isGarmin(name)) garminDepth--;
+        const kind = kindOf(name);
+        if (kind & 1) extDepth--;
+        if (kind & 2) garminDepth--;
       }
       const parent = stack[stack.length - 1];
       const v = buf.trim();
@@ -151,23 +193,29 @@ export function parseGpx(text: string): ParsedTrack {
       const garmin = garminDepth > 0;
       const direct = parent === 'trkpt' || parent === 'rtept' || parent === 'wpt';
       switch (name) {
-        case 'time': if (direct) { const r = parseIsoTime(v); p.t = r.t; if (!r.zoned) noZone = true; } break;
-        case 'ele': if (direct) p.ele = Number(v); break;
+        case 'time':
+          if (direct) {
+            const t = usualTime(v);
+            if (t === t) p.t = t; // ends in Z: zoned
+            else { const r = parseIsoTime(v); p.t = r.t; if (!r.zoned) noZone = true; }
+          }
+          break;
+        case 'ele': if (direct) p.ele = num(v); break;
         case 'hdop': p.hdop = dop(v); break;
         case 'vdop': p.vdop = dop(v); break;
         case 'pdop': p.pdop = dop(v); break;
-        case 'sat': if (direct) p.sats = Number(v); break;
+        case 'sat': if (direct) p.sats = num(v); break;
         case 'fix': if (direct) p.fixq = fixQuality(v); break;
-        case 'geoidheight': if (direct) p.geoid = Number(v); break;
+        case 'geoidheight': if (direct) p.geoid = num(v); break;
         case 'name': if (direct) p.name = v || null; break;
         // Some loggers abbreviate course and speed in their extensions.
-        case 'course': case 'heading': case 'crs': case 'cog': p.course = Number(v); break;
+        case 'course': case 'heading': case 'crs': case 'cog': p.course = num(v); break;
         case 'speed': case 'spd': case 'sog':
-          if (direct || garmin) { p.speedKnown = Number(v); anyKnownSpeed = true; }
-          else if (inExt) { p.speedVendor = Number(v); anyVendorSpeed = true; }
+          if (direct || garmin) { p.speedKnown = num(v); anyKnownSpeed = true; }
+          else if (inExt) { p.speedVendor = num(v); anyVendorSpeed = true; }
           break;
         default:
-          if (inExt && !POINT_FIELDS.has(name) && !EXT_CONTAINERS.has(name) && !isGarmin(name) && v) {
+          if (inExt && !POINT_FIELDS.has(name) && !kindOf(name) && v) {
             ignored.add(IGNORED_NAMES[name.toLowerCase()] ?? name);
           }
       }

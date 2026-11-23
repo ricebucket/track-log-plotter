@@ -4,7 +4,7 @@
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { writeFileSync } from 'node:fs';
-import { open, stubNetwork } from './helpers';
+import { mapSettled, open, pillSides, stubNetwork, textLines } from './helpers';
 import { bigFusionLog } from '../helpers/big-logs';
 
 test.beforeEach(async ({ page }) => {
@@ -22,6 +22,29 @@ test('opens files and flags the damaged one', async ({ page }) => {
   await expect(page.getByText('Last line cut off')).toBeVisible();
 });
 
+test('centers the title in its pill on the start screen', async ({ page }) => {
+  const [left, right] = await pillSides(page);
+  expect(left).toBeGreaterThanOrEqual(14);
+  expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
+});
+
+test('selects a newly added track and scrolls the list to its card', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea', 'central-park-loop-vendor.gpx', 'roosevelt-island-run.gpx', 'hudson-greenway-evening.log', 'hudson-overnight.gpx');
+  await expect(page.getByText('3 of 3 shown · 5 loaded')).toBeVisible();
+  // Of several added together, the first is selected.
+  await expect(page.locator('.track-row.is-selected')).toHaveAttribute('data-track', 'A');
+  await open(page, 'lower-manhattan-walk.gpx');
+  const row = page.locator('.track-row[data-track="F"]');
+  await expect(row).toHaveClass(/is-selected/);
+  await expect(page.locator('.track-row.is-selected')).toHaveCount(1);
+  // Its open card is in view, not below the fold of the track list.
+  const list = (await page.locator('.panel-body').boundingBox())!;
+  const card = (await row.boundingBox())!;
+  expect(card.height).toBeLessThan(list.height);
+  expect(card.y).toBeGreaterThanOrEqual(list.y - 1);
+  expect(card.y + card.height).toBeLessThanOrEqual(list.y + list.height + 1);
+});
+
 test('loads the sample ride and draws the tracks', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -33,7 +56,7 @@ test('loads the sample ride and draws the tracks', async ({ page }) => {
   const size = page.viewportSize()!;
   expect(await page.locator('.maplibregl-canvas').evaluate((c) => [c.clientWidth, c.clientHeight])).toEqual([size.width, size.height]);
   // The map reports how many track lines it drew once it settles.
-  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  await mapSettled(page);
   // The selected track is drawn again on top, picked by MapLibre global state.
   await expect(page.locator('.map')).toHaveAttribute('data-sel-lines', /^[1-9]\d*$/);
   await page.locator('.track-row[data-track="B"] .track-main').click();
@@ -86,6 +109,54 @@ test('explains each measure and recolors the track', async ({ page }) => {
   await expect(pane).toHaveCount(0);
 });
 
+test('sizes the settings sheet to its contents, and never past the window', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  // Four measures: a short sheet in a tall window.
+  await open(page, 'central-park-loop-vendor.gpx');
+  await page.getByRole('button', { name: /^Color/ }).click();
+  const sheet = page.getByRole('dialog', { name: 'Color, halo and timeline' });
+  const table = (await sheet.locator('table').boundingBox())!;
+  const foot = (await sheet.locator('.sheet-foot').boundingBox())!;
+  // No empty space between the last row and the footer.
+  expect(foot.y - (table.y + table.height)).toBeLessThanOrEqual(12);
+  // What None does to the color and to the halo, on separate lines.
+  const color = (await sheet.getByText('Color: the whole track in one color from its range.').boundingBox())!;
+  const halo = (await sheet.getByText('Halo: no halo.').boundingBox())!;
+  expect(halo.y).toBeGreaterThanOrEqual(color.y + color.height - 1);
+  // In a short window it stops 16 px from the bottom and scrolls, with Done still in view.
+  await page.setViewportSize({ width: 1280, height: 560 });
+  const box = (await sheet.boundingBox())!;
+  expect(box.y + box.height).toBeLessThanOrEqual(560 - 16 + 1);
+  expect(await sheet.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  await expect(sheet.getByRole('button', { name: 'Done' })).toBeInViewport();
+});
+
+test('keeps the big badge on the properties page as round as the small ones', async ({ page }) => {
+  await open(page, 'central-park-loop-motion.csv');
+  const small = (await page.locator('.track-row[data-track="A"] .badge').boundingBox())!;
+  expect(Math.round(small.width)).toBe(Math.round(small.height));
+  await page.locator('.track-row.is-selected').getByRole('button', { name: /^Properties/ }).click();
+  const big = (await page.locator('.details-title .badge').boundingBox())!;
+  expect([Math.round(big.width), Math.round(big.height)]).toEqual([26, 26]);
+});
+
+test('keeps Properties and Remove? on one line while asking to remove', async ({ page }) => {
+  // A Columbus Fusion log has the longest label: "Properties & time zone".
+  await open(page, 'central-park-loop-motion.csv');
+  const card = page.locator('.track-row.is-selected');
+  const props = card.getByRole('button', { name: /^Properties/ });
+  await card.getByRole('button', { name: 'Remove this track' }).click();
+  const ask = card.getByRole('button', { name: 'Remove?' });
+  await expect(ask).toBeVisible();
+  expect(await textLines(props)).toBe(1);
+  expect(await textLines(ask)).toBe(1);
+  const p = (await props.boundingBox())!;
+  const a = (await ask.boundingBox())!;
+  const c = (await card.boundingBox())!;
+  expect(Math.abs(p.y - a.y)).toBeLessThanOrEqual(1);
+  expect(a.x + a.width).toBeLessThanOrEqual(c.x + c.width);
+});
+
 test('closes the Options menu and the color pane on a second press', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
   const options = page.getByRole('button', { name: /Options/ });
@@ -102,7 +173,7 @@ test('closes the Options menu and the color pane on a second press', async ({ pa
 
 test('closes the fix card with its button and with a click on an empty spot', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
-  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  await mapSettled(page);
   const lanes = (await page.locator('.tl-lanes').boundingBox())!;
   const hover = () => page.mouse.move(lanes.x + 150 + (lanes.width - 150) * 0.5, lanes.y + 20);
   await hover();
@@ -120,7 +191,7 @@ test('closes the fix card with its button and with a click on an empty spot', as
 
 test('shows the compass only while the map is turned', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
-  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  await mapSettled(page);
   const compass = page.getByRole('button', { name: 'Turn the map north up' });
   await expect(compass).toHaveCount(0);
   // Right-drag turns the map.
@@ -143,7 +214,8 @@ async function cardFix(page: import('@playwright/test').Page) {
 
 test('dragging along a track moves the cursor and the fix card with it', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
-  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  // Positions are measured on screen, so the fit's animation must be over.
+  await mapSettled(page);
   const lanes = (await page.locator('.tl-lanes').boundingBox())!;
   const at = (f: number) => page.mouse.move(lanes.x + 150 + (lanes.width - 150) * f, lanes.y + 20);
   await at(0.3);
@@ -214,7 +286,7 @@ test('shows dates on the timeline for a log over two days', async ({ page }) => 
 test('opens a Columbus Fusion log with motion data and shows its acceleration', async ({ page }) => {
   await open(page, 'central-park-loop-motion.csv');
   await expect(page.getByText(/· Columbus Fusion$/)).toBeVisible();
-  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  await mapSettled(page);
   await page.getByRole('button', { name: /^Color/ }).click();
   await page.getByRole('dialog', { name: 'Color, halo and timeline' }).getByRole('radio', { name: 'Acceleration as the line color' }).check();
   await expect(page.getByRole('button', { name: /^Color Acceleration \(g\)/ })).toBeVisible();
@@ -307,7 +379,7 @@ test('hovering a lane snaps to that track, and clicking a collapsed lane selects
 
 test('fits the zoomed part of the timeline on the map', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
-  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 20_000 });
+  await mapSettled(page);
   // The map's zoom, read from the Google Maps link (in the menu of its button).
   const zoomOf = async () => {
     const menu = page.getByRole('button', { name: 'Open in Google Maps' });

@@ -13,6 +13,27 @@ function events(src: string) {
 }
 
 describe('scanXml', () => {
+  it('hands out the right name for every tag, however many names share a slot of its name cache', () => {
+    // 700 different names, short and long, prefixed, with and without
+    // attributes, ASCII and not: far more than the cache has slots.
+    const names = Array.from({ length: 700 }, (_, i) => {
+      const base = `n${i.toString(36)}`;
+      if (i % 7 === 0) return `ns${i % 3}:${base}`;
+      if (i % 5 === 0) return base + 'x'.repeat(i % 20);
+      return i % 11 === 0 ? `${base}\u00e9` : base;
+    });
+    const parts = ['<root>'], want = ['<root@1'];
+    for (let k = 0; k < 6000; k++) {
+      const nm = names[(k * 7919) % names.length], local = localName(nm);
+      if (k % 13 === 0) { parts.push(`<${nm} a="${k}">${k}</${nm} >`); want.push(`<${local} a=${k}@1`, `"${k}"`, `</${local}`); }
+      else if (k % 17 === 0) { parts.push(`<${nm}/>`); want.push(`<${local}@1`, `</${local}`); }
+      else { parts.push(`<${nm}>${k}</${nm}>`); want.push(`<${local}@1`, `"${k}"`, `</${local}`); }
+    }
+    parts.push('</root>');
+    want.push('</root');
+    expect(events(parts.join('')).out).toEqual(want);
+  });
+
   it('reports tags, attributes, text and line numbers', () => {
     const { out, r } = events('<?xml version="1.0"?>\n<a x="1" y=\'two\'>\n  <b>hi &amp; bye</b>\n  <c/>\n</a>');
     expect(out).toEqual(['<a x=1 y=two@2', '<b@3', '"hi & bye"', '</b', '<c@4', '</c', '</a']);

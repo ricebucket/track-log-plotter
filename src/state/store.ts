@@ -139,6 +139,8 @@ export type Page = { kind: 'tracks' } | { kind: 'details'; id: string };
 export const page = signal<Page>({ kind: 'tracks' });
 /** The track whose color, halo and timeline settings sheet is open. */
 export const picker = signal<{ id: string } | null>(null);
+/** A newly added track whose row the track list scrolls into view once it shows. */
+export const reveal = signal<string | null>(null);
 export const basemapOpen = signal(false);
 export const zoneOpen = signal(false);
 /** The track whose timeline lane the pointer last moved the cursor on; its values show at the cursor. */
@@ -168,7 +170,11 @@ export function addLoaded(loaded: LoadedTrack[]) {
   batch(() => {
     items.value = r.items;
     if (r.added.length) {
-      if (!selectedId.value || !items.value.some((x) => x.id === selectedId.value)) selectedId.value = r.added[0];
+      // A newly added track becomes the selected one (the first, when several
+      // come at once), shown open in the track list, even from a properties page.
+      select(r.added[0]);
+      reveal.value = r.added[0];
+      if (page.value.kind === 'details') page.value = { kind: 'tracks' };
       const withProblems = r.added.map((id) => r.items.find((x) => x.id === id)!).find((x) => x.track.problems.length > 0);
       loadNotice.value = withProblems ? { id: withProblems.id, file: withProblems.track.file, problems: withProblems.track.problems.length } : null;
       fitRequest.value++;
@@ -338,6 +344,7 @@ export function resetForTests() {
     selectedId.value = null;
     page.value = { kind: 'tracks' };
     picker.value = null;
+    reveal.value = null;
     basemapOpen.value = false;
     zoneOpen.value = false;
     clockPicker.value = null;

@@ -32,7 +32,52 @@ export function sortedFinite(values: ArrayLike<number>): Float64Array {
 
 /** Linear-interpolated quantile of the finite values (q in 0..1). */
 export function quantile(values: ArrayLike<number>, q: number): number {
-  return quantileSorted(sortedFinite(values), q);
+  return quantiles(values, [q])[0];
+}
+
+/**
+ * Linear-interpolated quantiles of the finite values (qs ascending, each in
+ * 0..1), the same as from the sorted values, but found by selection: linear
+ * time instead of a sort. Values holding -0 are sorted instead, since the sort
+ * puts -0 before 0 and selection can't tell them apart.
+ */
+export function quantiles(values: ArrayLike<number>, qs: number[]): number[] {
+  let m = 0, negZero = false;
+  for (let i = 0; i < values.length; i++) { const v = values[i]; if (v - v === 0) { m++; if (v === 0 && 1 / v < 0) negZero = true; } }
+  if (negZero) { const s = sortedFinite(values); return qs.map((q) => quantileSorted(s, q)); }
+  if (m === 0) return qs.map(() => NaN);
+  const a = new Float64Array(m);
+  for (let i = 0, j = 0; i < values.length; i++) { const v = values[i]; if (v - v === 0) a[j++] = v; }
+  // The positions needed, in order: each one selected leaves everything after
+  // it larger or equal, so the next is looked for only after it.
+  const need = [...new Set(qs.flatMap((q) => [Math.floor((m - 1) * q), Math.ceil((m - 1) * q)]))].sort((x, y) => x - y);
+  const at = new Map<number, number>();
+  let from = 0;
+  for (const p of need) { select(a, from, m, p); at.set(p, a[p]); from = p + 1; }
+  return qs.map((q) => {
+    const pos = (m - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
+    const vlo = at.get(lo)!;
+    return lo === hi ? vlo : vlo + (at.get(hi)! - vlo) * (pos - lo);
+  });
+}
+
+/**
+ * Rearranges a[from, to) so that a[k] is its (k - from)-th smallest value,
+ * with nothing larger before it and nothing smaller after it (Hoare's
+ * selection, middle pivot).
+ */
+function select(a: Float64Array, from: number, to: number, k: number) {
+  let lo = from, hi = to - 1;
+  while (lo < hi) {
+    const pivot = a[(lo + hi) >> 1];
+    let i = lo, j = hi;
+    while (i <= j) {
+      while (a[i] < pivot) i++;
+      while (a[j] > pivot) j--;
+      if (i <= j) { const t = a[i]; a[i] = a[j]; a[j] = t; i++; j--; }
+    }
+    if (k <= j) hi = j; else if (k >= i) lo = i; else return;
+  }
 }
 
 export function quantileSorted(a: ArrayLike<number>, q: number): number {

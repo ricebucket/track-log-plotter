@@ -19,6 +19,19 @@ describe('parseIsoTime', () => {
 });
 
 describe('parseGpx', () => {
+  it('reads the usual times directly and every other time just as the built-in parser does', () => {
+    const times = ['2026-06-14T08:00:00Z', '2026-06-14T08:00:01.250Z', '2026-12-31T23:59:59Z', '2024-02-29T12:00:00Z',
+      '2026-02-29T12:00:00Z', '2026-06-31T00:00:00Z', '2026-06-14T24:00:00Z', '2026-06-14T08:00:60Z', '0026-06-14T08:00:00Z',
+      '1999-01-01T00:00:00Z', '2026-06-14T08:00:00.5Z', '2026-06-14T08:00:00.12345Z', '2026-06-14T08:00:00+02:00',
+      '2026-06-14T08:00:00', '2026-06-14t08:00:00z', '2026-13-01T00:00:00Z', '2026-06-14 08:00:00Z'];
+    // A time the built-in parser can't read leaves the point out (NaN here).
+    const got = times.map((v) => {
+      const r = parseGpx(gpx(`<trk><trkseg><trkpt lat="40.7712" lon="-73.9742"><time>${v}</time></trkpt></trkseg></trk>`));
+      return [v, r.cols.n ? r.cols.t[0] : NaN];
+    });
+    expect(got).toEqual(times.map((v) => [v, parseIsoTime(v).t]));
+  });
+
   it('reads track points with the standard fields', () => {
     const p = parseGpx(gpx(`<trk><name>Loop</name><trkseg>${pt(0, '<sat>9</sat><hdop>0.8</hdop><vdop>1.1</vdop><pdop>1.4</pdop><fix>dgps</fix><geoidheight>-32.6</geoidheight>')}${pt(1, '<fix>3d</fix>')}</trkseg></trk>`));
     expect(p.cols.n).toBe(2);

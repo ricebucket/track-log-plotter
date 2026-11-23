@@ -1,10 +1,16 @@
 // The phone layout, in a Pixel 7-sized Chromium (see playwright.config.ts).
 import { expect, test } from '@playwright/test';
-import { open, stubNetwork } from './helpers';
+import { open, pillSides, stubNetwork } from './helpers';
 
 test.beforeEach(async ({ page }) => {
   await stubNetwork(page);
   await page.goto('./');
+});
+
+test('centers the title in its pill on the start screen', async ({ page }) => {
+  const [left, right] = await pillSides(page);
+  expect(left).toBeGreaterThanOrEqual(12);
+  expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
 });
 
 test('points the panel arrows down to hide the bottom sheet and up to bring it back', async ({ page }) => {
