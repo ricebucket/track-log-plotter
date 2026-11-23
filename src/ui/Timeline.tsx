@@ -12,7 +12,7 @@ import { axisRange } from '../state/logic';
 import { fixAt } from '../state/inspect';
 import { palette, UNKNOWN } from '../color/palettes';
 import { differentDays, fmtClock, fmtDateClock, fmtShortDate, isMidnight, offsetLabel, offsetMinutes, zoneCity } from '../time/zones';
-import { columns, MIN_ZOOM_MS, playStep, skipGap, snapTime, tickStep, ticks } from './timelineMath';
+import { columns, MIN_ZOOM_MS, panView, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from './timelineMath';
 import { measureName, valueText } from './labels';
 import { badgeOf } from './TrackRow';
 import { IconChevronDown, IconPause, IconPlay, IconTimeline, IconZoomOut } from './icons';
@@ -25,7 +25,12 @@ import { MOVING_KMH } from '../derive/derive';
 /** Width of the lane label column plus its gap, on wide and phone-sized screens. */
 const LABEL_W = { wide: 150, narrow: 76 };
 
-function Lane({ item, t0, t1, tall, narrow, labelW }: { item: TrackItem; t0: number; t1: number; tall: boolean; narrow: boolean; labelW: number }) {
+/**
+ * One track's lane. `fromStart` is set when the lane is lined up at its start
+ * rather than by clock: tracks from different days all start at the same point,
+ * the selected one included.
+ */
+function Lane({ item, t0, t1, tall, fromStart, narrow, labelW }: { item: TrackItem; t0: number; t1: number; tall: boolean; fromStart: boolean; narrow: boolean; labelW: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [w, setW] = useState(0);
   useEffect(() => {
@@ -42,7 +47,8 @@ function Lane({ item, t0, t1, tall, narrow, labelW }: { item: TrackItem; t0: num
   const scale = S.scaleFor(item.track, key);
   const colors = palette(item.fam, item.color, S.dark.value, S.single.value);
   const offset = S.offsets.value[item.id] ?? 0;
-  const h = tall ? (narrow ? 40 : 66) : (narrow ? 12 : 18);
+  // A short lane with a note gets room for its second line.
+  const h = tall ? (narrow ? 40 : 66) : narrow ? 12 : fromStart ? 30 : 18;
   const logY = scale.log && item.color !== 'none';
 
   useEffect(() => {
@@ -63,7 +69,10 @@ function Lane({ item, t0, t1, tall, narrow, labelW }: { item: TrackItem; t0: num
       // The selected track: one graph. Its height is the value and its fill is
       // the color the map gives that value, so there is no second strip to explain.
       const top = 4, bottom = h - 1;
-      const base = Math.min(0, lo);
+      // Most graphs stand on zero. Acceleration hovers around 1 g (gravity), so
+      // its graph spans just the readings in view (at least 0.1 g), and the
+      // waveform fills the lane.
+      const base = key === 'accel' ? Math.min(lo, hi - 0.1) : Math.min(0, lo);
       // When the color steps are on a log scale, so is the graph: values below
       // walking pace sit on the axis.
       const yOf = logY && hi > MOVING_KMH
@@ -96,7 +105,8 @@ function Lane({ item, t0, t1, tall, narrow, labelW }: { item: TrackItem; t0: num
         if (!c) continue;
         if (c.gap) { g.fillStyle = 'rgba(16,24,32,0.10)'; g.fillRect(x, 0, 1, h); continue; }
         g.fillStyle = Number.isFinite(c.max) ? colorOf(c.step) : unknown;
-        g.fillRect(x, 3, 1.4, h - 6);
+        const sh = Math.min(12, h - 6);
+        g.fillRect(x, (h - sh) / 2, 1.4, sh);
       }
     }
     g.fillStyle = '#101820';
@@ -106,18 +116,16 @@ function Lane({ item, t0, t1, tall, narrow, labelW }: { item: TrackItem; t0: num
     }
   }, [w, h, item, t0, t1, offset, scale, logY, colors.join(), S.dark.value, S.single.value]);
 
-  const shifted = offset !== 0;
+  const shifted = fromStart;
   return (
     <div class="lane" style={{ height: `${h}px` }}>
       <div class="lane-label" style={{ width: `${labelW - 10}px` }}>
         <span class="badge small" style={{ background: badgeOf(item) }}>{item.id}</span>
         <span class="lane-text">
           <span class="lane-measure">{measureName(key)}{(key === 'grade' || key === 'accel' || (key === 'speed' && !item.track.derived.speedFromFile) || (key === 'hdop' && scale.relative)) && <Computed text={measureHint(item, key, scale)!} />}</span>
-          {!narrow && (tall || shifted) ? (
-            <span class="lane-note">
-              {[shifted ? t('timeline.fromStart', { date: fmtShortDate(item.track.derived.stats.start, S.zone.value, S.locale.value) }) : '', tall && logY ? t('timeline.logScale') : ''].filter(Boolean).join(' · ')}
-            </span>
-          ) : null}
+          {/* Each note on its own line, so a narrow label column never cuts one off. */}
+          {!narrow && shifted && <span class="lane-note">{t('timeline.fromStart', { date: fmtShortDate(item.track.derived.stats.start, S.zone.value, S.locale.value) })}</span>}
+          {!narrow && tall && logY && <span class="lane-note">{t('timeline.logScale')}</span>}
         </span>
       </div>
       <canvas ref={canvas} class="lane-canvas" style={{ height: `${h}px` }} aria-hidden="true" />
@@ -128,12 +136,15 @@ function Lane({ item, t0, t1, tall, narrow, labelW }: { item: TrackItem; t0: num
 function ZoneButtons({ at }: { at: number }) {
   const z = S.zone.value;
   const custom = z !== 'local' && z !== 'utc';
+  // The third button keeps the last zone picked from the list, even while
+  // Local or UTC is on; pressing it opens the list again.
+  const named = custom ? z : S.lastZone.value;
   return (
     <div class="seg small" role="group" aria-label={t('zone.label')}>
       <button type="button" aria-pressed={z === 'local' ? 'true' : 'false'} title={t('zone.localHint', { offset: offsetLabel(at, 'local') })} onClick={() => { S.zone.value = 'local'; }}>{t('zone.local')}</button>
       <button type="button" aria-pressed={z === 'utc' ? 'true' : 'false'} onClick={() => { S.zone.value = 'utc'; }}>UTC</button>
       <button type="button" data-zone-trigger aria-pressed={custom ? 'true' : 'false'} aria-haspopup="dialog" aria-expanded={S.zoneOpen.value ? 'true' : 'false'} onClick={() => { S.zoneOpen.value = !S.zoneOpen.value; }}>
-        {custom ? zoneCity(z) : t('zone.other')}<IconChevronDown size={11} />
+        {named ? zoneCity(named) : t('zone.other')}<IconChevronDown size={11} />
       </button>
     </div>
   );
@@ -150,6 +161,10 @@ export function Timeline() {
   const [t0, t1] = zoomed ? view : [full0, full1];
   // Other tracks or a new alignment: show the whole timeline again.
   useEffect(() => { S.timelineView.value = null; }, [full0, full1]);
+  // The track the others line up to (the selected one when it's shown), and
+  // whether any track is lined up at its start rather than by clock.
+  const refId = vis.find((x) => x.id === sel?.id)?.id ?? vis[0]?.id;
+  const anyShifted = vis.some((x) => (offsets[x.id] ?? 0) !== 0);
   const lanesRef = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false);
   const cursor = S.cursorT.value ?? t0;
@@ -176,13 +191,11 @@ export function Timeline() {
     const step = (now: number) => {
       const dt = now - last;
       last = now;
-      // Holds still while the cursor is dragged along a track; skips the
-      // selected track's gaps and loops at the end of the shown range.
+      // Holds still while the cursor is dragged along a track; skips times
+      // when no shown track has data, and loops at the end of the shown range.
       if (!S.scrubbing.peek()) {
-        let next = playStep(S.cursorT.value ?? t0, dt, t0, t1);
-        const s = S.selected.peek();
-        if (s?.vis) next = skipGap(next, s.track, S.offsets.peek()[s.id] ?? 0, t0, t1);
-        S.cursorT.value = next;
+        const next = playStep(S.cursorT.value ?? t0, dt, t0, t1);
+        S.cursorT.value = skipGap(next, S.visible.peek(), S.offsets.peek(), t0, t1);
       }
       raf = requestAnimationFrame(step);
     };
@@ -191,14 +204,14 @@ export function Timeline() {
   }, [playing, t0, t1]);
 
   // Pointer events can come faster than frames: apply at most one per frame.
-  // The cursor snaps to the nearest fix of the selected track (of any shown
-  // track when the selected one is hidden), so it never rests in a gap.
+  // The cursor snaps to the nearest fix of any shown track, so it never rests
+  // where nothing was recorded, but it can sit in one logger's gap when
+  // another logger kept going.
   const pendingT = useRef<number | null>(null);
   const frame = useRef(0);
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
   const moveCursor = (time: number) => {
-    const s = S.selected.peek();
-    pendingT.current = snapTime(time, s?.vis ? [s] : S.visible.peek(), S.offsets.peek());
+    pendingT.current = snapTime(time, S.visible.peek(), S.offsets.peek());
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
@@ -246,6 +259,27 @@ export function Timeline() {
     const time = timeAt(e.clientX);
     if (time !== null) moveCursor(time);
   };
+  // The scroll wheel zooms around the time under the pointer; a sideways
+  // scroll (or Shift with the wheel) moves a zoomed view along. Over the lane
+  // labels the page scrolls as usual.
+  const onWheel = (e: WheelEvent) => {
+    const el = lanesRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const at = (e.clientX - r.left - LW) / Math.max(1, r.width - LW);
+    if (at < 0 || at > 1) return;
+    e.preventDefault();
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? r.height : 1;
+    const dx = e.deltaX * k, dy = e.deltaY * k;
+    const full: [number, number] = [full0, full1];
+    const cur = S.timelineView.peek();
+    const shown = cur && cur[0] >= full0 && cur[1] <= full1 ? cur : full;
+    if (Math.abs(dx) > Math.abs(dy) || e.shiftKey) {
+      if (shown !== full) S.timelineView.value = panView(shown, full, (Math.abs(dx) > Math.abs(dy) ? dx : dy) / Math.max(1, r.width - LW));
+    } else {
+      S.timelineView.value = wheelZoom(shown, full, at, dy);
+    }
+  };
   const onUp = (e: PointerEvent) => {
     const d = drag.current;
     drag.current = null;
@@ -260,7 +294,9 @@ export function Timeline() {
     if (b - a >= MIN_ZOOM_MS) S.timelineView.value = [a, b];
   };
 
-  const selFix = sel && sel.vis ? fixAt(sel.track, S.trackTime(sel.id, cursor)) : null;
+  // The readout shows the track that has a fix at the cursor: the selected one, or another inside its gap.
+  const cur = S.cursorItem.value;
+  const selFix = cur && cur.vis ? fixAt(cur.track, S.trackTime(cur.id, cursor)) : null;
   const readout = selFix
     ? [valueText('speed', selFix.kmh), Number.isFinite(selFix.ele) ? valueText('ele', selFix.ele) : null, Number.isFinite(selFix.hdop) ? `HDOP ${valueText('hdop', selFix.hdop)}` : null, Number.isFinite(selFix.sats) ? valueText('sats', selFix.sats) : null].filter(Boolean).join(' · ')
     : '';
@@ -278,16 +314,16 @@ export function Timeline() {
         <button type="button" class="round-btn" aria-label={playing ? t('timeline.pause') : t('timeline.play')} title={playing ? t('timeline.pause') : t('timeline.play')} onClick={() => setPlaying(!playing)}>
           {playing ? <IconPause /> : <IconPlay />}
         </button>
-        {sel && <span class="badge small" style={{ background: badgeOf(sel) }}>{sel.id}</span>}
+        {cur && <span class="badge small" style={{ background: badgeOf(cur) }}>{cur.id}</span>}
         <span class="tl-time mono" aria-live="polite">{(multiDay ? fmtDateClock : fmtClock)(selFix ? selFix.t : cursor, z, loc)}</span>
         <span class="muted small tl-offset">{offsetLabel(cursor, z)}</span>
         <span class="tl-divider" />
         <span class="tl-values mono">{readout}</span>
-        {selFix && sel && !sel.track.derived.speedFromFile && <Computed text={explain.speedDerived()} />}
+        {selFix && cur && !cur.track.derived.speedFromFile && <Computed text={explain.speedDerived()} />}
         <span class="grow" />
         {zoomed && (
-          <button type="button" class="btn-outline small" title={t('timeline.showAllHint')} onClick={() => { S.timelineView.value = null; }}>
-            <IconZoomOut size={14} />{t('timeline.showAll')}
+          <button type="button" class="btn-outline small" title={t('timeline.resetZoomHint')} onClick={() => { S.timelineView.value = null; }}>
+            <IconZoomOut size={14} />{t('timeline.resetZoom')}
           </button>
         )}
         <ZoneButtons at={cursor} />
@@ -296,10 +332,15 @@ export function Timeline() {
         </button>
       </div>
       <div
-        class="tl-lanes" ref={lanesRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
+        class="tl-lanes" ref={lanesRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onWheel={onWheel}
         onPointerCancel={() => { drag.current = null; setBand(null); }} onDblClick={() => { S.timelineView.value = null; }}
       >
-        {vis.map((it) => <Lane key={it.id} item={it} t0={t0} t1={t1} tall={it.id === sel?.id || vis.length === 1} narrow={narrow} labelW={LW} />)}
+        {vis.map((it) => (
+          <Lane
+            key={it.id} item={it} t0={t0} t1={t1} tall={it.id === sel?.id || vis.length === 1} narrow={narrow} labelW={LW}
+            fromStart={(offsets[it.id] ?? 0) !== 0 || (it.id === refId && anyShifted)}
+          />
+        ))}
         {raw >= 0 && raw <= 1 && <div class="tl-cursor" style={{ left: `calc(${LW}px + (100% - ${LW}px) * ${frac})` }} />}
         {band && <div class="tl-band" style={{ left: `${band[0]}px`, width: `${band[1] - band[0]}px` }} aria-hidden="true" />}
         <input

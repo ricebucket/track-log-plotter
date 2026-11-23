@@ -34,8 +34,8 @@ export interface Columns {
   /** Geoid separation in meters (height of sea level above the ellipsoid). */
   geoid: Float32Array;
   /**
-   * From a motion sensor: the strongest acceleration in g during the fix's
-   * second, with gravity taken out. NaN without motion data.
+   * From a motion sensor: the strongest reading in g during the fix's second,
+   * gravity included (about 1 g at rest). NaN without motion data.
    */
   accel: Float32Array;
   /** First and last line of the file that this fix came from. */
@@ -102,6 +102,11 @@ export interface ParsedTrack {
   fields: FieldKey[];
   /** Number of lines in the file (NMEA) or track points read (GPX). */
   lines: number;
+  /**
+   * Every motion-sensor reading, for the timeline: its time (ms, like the
+   * fixes) and its strength in g, gravity included. Only files with motion data.
+   */
+  motion?: { t: Float64Array; g: Float32Array };
   /**
    * For files whose times have no time zone: the zone they're read in
    * ('local', 'utc' or an IANA id). The user can change it on the properties page.

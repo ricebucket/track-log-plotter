@@ -5,6 +5,7 @@ import { App } from '../../src/ui/App';
 import * as S from '../../src/state/store';
 import { tipXY } from '../../src/map/bridge';
 import { clockShift } from '../../src/time/zones';
+import { hint } from '../../src/ui/Computed';
 import { load } from '../helpers/fixtures';
 
 const NoMap = () => <div data-testid="map" />;
@@ -16,6 +17,7 @@ function loadFixtures(...names: string[]) {
 beforeEach(() => {
   S.resetForTests();
   tipXY.value = null;
+  hint.value = null;
 });
 
 describe('empty state', () => {
@@ -182,6 +184,14 @@ describe('tracks panel', () => {
     tipXY.value = { x: 600, y: 300 };
     render(<App Map={NoMap} />);
     expect(document.querySelector('.tooltip')).toBeTruthy();
+    // No footnote: each computed row explains itself on its calculator button.
+    const card = document.querySelector('.tooltip') as HTMLElement;
+    expect(card.textContent).not.toContain('Computed by the app, not read from the file');
+    fireEvent.mouseEnter(within(card).getByRole('button', { name: /^Computed by the app: Worked out from elevation/ }));
+    expect(screen.getByRole('tooltip').textContent).toContain('Worked out from elevation');
+    // The fix's position, in decimal degrees.
+    const c = S.items.value[0].track.cols;
+    expect(within(document.querySelector('.tooltip') as HTMLElement).getByText(`${c.lat[100].toFixed(5)}, ${c.lon[100].toFixed(5)}`)).toBeTruthy();
     fireEvent.click(within(document.querySelector('.tooltip') as HTMLElement).getByRole('button', { name: 'Close' }));
     expect(S.cursorT.value).toBeNull();
     expect(document.querySelector('.tooltip')).toBeNull();
@@ -250,6 +260,16 @@ describe('tracks panel', () => {
     expect(document.querySelector('.lane-note')!.textContent).toContain('log scale');
   });
 
+  it('keeps "from its start" on the selected lane too, beside "log scale"', () => {
+    // The ride and the run were recorded on different days, so both lanes line up at their starts.
+    loadFixtures('central-park-loop.nmea', 'roosevelt-island-run.gpx');
+    S.select('B');
+    render(<App Map={NoMap} />);
+    const notes = (id: string) => [...document.querySelectorAll('.lane')].find((l) => l.querySelector('.badge')!.textContent === id)!.querySelectorAll('.lane-note');
+    expect([...notes('B')].map((n) => n.textContent)).toEqual(['from its start, Jun 21', 'log scale']);
+    expect([...notes('A')].map((n) => n.textContent)).toEqual(['from its start, Jun 14']);
+  });
+
   it('shows acceleration from a Columbus Fusion log with motion data, and only there', () => {
     loadFixtures('central-park-loop-motion.csv', 'roosevelt-island-run.gpx');
     S.cursorT.value = S.items.value[0].track.cols.t[60];
@@ -259,9 +279,16 @@ describe('tracks panel', () => {
     // No fix quality in the file, so the halo starts on acceleration.
     fireEvent.click(screen.getByRole('button', { name: 'Halo Acceleration (g)' }));
     const pane = screen.getByRole('dialog', { name: 'Halo around track A' });
-    expect(within(pane).getByText(/strongest acceleration in that second/)).toBeTruthy();
+    expect(within(pane).getByText(/strongest reading in that second/)).toBeTruthy();
     fireEvent.click(within(pane).getByRole('button', { name: 'Close' }));
-    expect(within(document.querySelector('.tooltip') as HTMLElement).getByText('Acceleration')).toBeTruthy();
+    const card = document.querySelector('.tooltip') as HTMLElement;
+    expect(within(card).getByText('Acceleration')).toBeTruthy();
+    // All ten readings of that second, lowest first, with the two middle ones (the median) highlighted.
+    const readings = [...card.querySelectorAll('.tip-readings span')].map((e) => Number(e.textContent));
+    expect(readings).toHaveLength(10);
+    expect([...readings].sort((x, y) => x - y)).toEqual(readings);
+    expect(card.querySelectorAll('.tip-readings .is-median')).toHaveLength(2);
+    expect(within(card).getByText(/^median \d\.\d\d g$/)).toBeTruthy();
     // A GPX track without motion data doesn't list it.
     fireEvent.click(screen.getByRole('button', { name: /^B roosevelt-island-run.gpx/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Color/ }));
@@ -297,6 +324,19 @@ describe('tracks panel', () => {
     expect(link.getAttribute('target')).toBe('_blank');
   });
 
+  it('shows the other logger\'s values inside the selected logger\'s gap', () => {
+    loadFixtures('central-park-loop.nmea', 'central-park-loop-vendor.gpx');
+    const c = S.items.value[0].track.cols;
+    const gap = c.t.findIndex((t, i) => i > 0 && t - c.t[i - 1] > 30_000);
+    S.cursorT.value = (c.t[gap - 1] + c.t[gap]) / 2;
+    render(<App Map={NoMap} />);
+    expect(S.selected.value!.id).toBe('A');
+    expect(S.cursorItem.value!.id).toBe('B');
+    const head = document.querySelector('.tl-head')!;
+    expect(head.querySelector('.badge')!.textContent).toBe('B');
+    expect(head.querySelector('.tl-values')!.textContent).toContain('km/h');
+  });
+
   it('shows time in a picked zone', () => {
     loadFixtures('central-park-loop.nmea');
     S.cursorT.value = S.items.value[0].track.cols.t[0];
@@ -311,12 +351,30 @@ describe('tracks panel', () => {
     expect(S.zone.value).toBe('Asia/Tokyo');
   });
 
+  it('keeps the last picked time zone on its button after going back to Local', () => {
+    loadFixtures('central-park-loop.nmea');
+    render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: /Other/ }));
+    const dlg = screen.getByRole('dialog', { name: 'Pick a time zone' });
+    fireEvent.input(within(dlg).getByRole('searchbox'), { target: { value: 'tokyo' } });
+    fireEvent.click(within(dlg).getByRole('radio', { name: /Tokyo/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Local' }));
+    expect(S.zone.value).toBe('local');
+    const named = screen.getByRole('button', { name: /Tokyo/ });
+    expect(named.getAttribute('aria-pressed')).toBe('false');
+    // Pressing it again opens the list, like Other does.
+    fireEvent.click(named);
+    expect(screen.getByRole('dialog', { name: 'Pick a time zone' })).toBeTruthy();
+  });
+
   it('switches units from the Options menu, which keeps showing the basemap', () => {
     loadFixtures('central-park-loop.nmea');
     render(<App Map={NoMap} />);
     expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull();
     const options = screen.getByRole('button', { name: /Options/ });
-    expect(options.textContent).toContain('OpenStreetMap');
+    // OpenFreeMap Light is the basemap to start with.
+    expect(options.textContent).toContain('Light');
+    expect(S.basemap.value).toBe('light');
     fireEvent.click(options);
     const menu = screen.getByRole('dialog', { name: 'Options' });
     expect(within(menu).getByRole('heading', { name: 'Basemap' })).toBeTruthy();

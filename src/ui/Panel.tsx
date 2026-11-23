@@ -8,7 +8,8 @@ import { CASING, GAP } from '../color/palettes';
 import { hintHandlers, useHintId } from './Computed';
 import { TrackRow } from './TrackRow';
 import { Details } from './Details';
-import { IconExternal, IconPanelHide, IconPanelShow, IconPlus, IconTrash } from './icons';
+import { IconExternal, IconPanelHide, IconPanelShow, IconPlus, IconSheetHide, IconSheetShow, IconTrash } from './icons';
+import { NARROW, useMedia } from './hooks';
 
 export function openFilePicker() {
   document.getElementById('tlp-file-input')?.click();
@@ -61,13 +62,7 @@ function Glyph({ kind }: { kind: string }) {
           <text x="23" y="17.4" text-anchor="middle" font-size="12.5" font-weight="800" fill="#101820" font-family="Overpass Mono, ui-monospace, monospace">9</text>
         </>
       )}
-      {kind === 'gaps' && (
-        <>
-          <path d="M3 13H11M35 13H43" stroke={CASING_INK} stroke-width="8" stroke-linecap="round" />
-          <path d="M3 13H11M35 13H43" stroke={LINE_INK} stroke-width="5" stroke-linecap="round" />
-          <path d="M17 13H29" stroke={GAP.light} stroke-width="4" stroke-dasharray="0.1 6" stroke-linecap="round" />
-        </>
-      )}
+      {kind === 'gaps' && <path d="M6 13H41" stroke={GAP.light} stroke-width="4.6" stroke-dasharray="0.1 7" stroke-linecap="round" />}
     </svg>
   );
 }
@@ -142,6 +137,8 @@ function TracksPage() {
 }
 
 export function Panel() {
+  // On phones the panel is a bottom sheet, so its collapse arrow points down.
+  const sheet = useMedia(NARROW);
   const page = S.page.value;
   const body = useRef<HTMLDivElement>(null);
   // A new page starts at the top, not wherever the last one was scrolled to.
@@ -152,7 +149,7 @@ export function Panel() {
       <header class="panel-head">
         <h1 class="app-title">{t('app.name')}</h1>
         <button type="button" class="icon-btn on-dark" aria-expanded="true" aria-label={t('panel.hide')} title={t('panel.hide')} onClick={() => { S.panelMin.value = true; S.picker.value = null; }}>
-          <IconPanelHide />
+          {sheet ? <IconSheetHide /> : <IconPanelHide />}
         </button>
       </header>
       <div class="panel-body" ref={body}>
@@ -164,9 +161,10 @@ export function Panel() {
 
 /** The minimized panel: just a button that brings it back. */
 export function PanelButton() {
+  const sheet = useMedia(NARROW);
   return (
     <button type="button" class="pane-pill panel-pill" aria-expanded="false" aria-label={t('panel.show')} title={t('panel.show')} onClick={() => { S.panelMin.value = false; }}>
-      <IconPanelShow />
+      {sheet ? <IconSheetShow /> : <IconPanelShow />}
     </button>
   );
 }

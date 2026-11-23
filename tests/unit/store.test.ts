@@ -17,6 +17,17 @@ describe('store', () => {
     expect(S.items.value.map((x) => x.id)).toEqual(['A']);
   });
 
+  it('moves the motion readings with the track when its file time zone changes', () => {
+    S.addLoaded([load('central-park-loop-motion.csv')]);
+    const before = S.items.value[0].track;
+    S.setClock('A', 'Asia/Tokyo');
+    const after = S.items.value[0].track;
+    const delta = after.cols.t[0] - before.cols.t[0];
+    expect(delta).toBe(-9 * 3600_000);
+    expect(after.motion!.t[0] - before.motion!.t[0]).toBe(delta);
+    expect(after.motion!.t[3599] - before.motion!.t[3599]).toBe(delta);
+  });
+
   it('closes the fix card by removing the cursor', () => {
     S.addLoaded([load('central-park-loop.nmea')]);
     S.cursorT.value = S.items.value[0].track.cols.t[10];

@@ -8,11 +8,12 @@ import { clockShift, isValidZone, type ZoneSel } from '../time/zones';
 import type { BasemapId } from '../map/basemaps';
 import { BASEMAP_IDS, isDarkBasemap } from '../map/basemaps';
 import { parseFile } from '../parse/client';
+import { hasFixNear } from './inspect';
 
 // ---------- preferences (remembered in this browser) ----------
 
 const KEY = 'tlp.prefs.v1';
-interface Prefs { lang?: Lang; basemap?: BasemapId; dim?: number; zone?: ZoneSel; units?: Units; panelMin?: boolean; timelineMin?: boolean; arrows?: boolean; fixes?: boolean; gaps?: boolean }
+interface Prefs { lang?: Lang; basemap?: BasemapId; dim?: number; zone?: ZoneSel; lastZone?: ZoneSel; units?: Units; panelMin?: boolean; timelineMin?: boolean; arrows?: boolean; fixes?: boolean; gaps?: boolean }
 
 function readPrefs(): Prefs {
   try { return JSON.parse(localStorage.getItem(KEY) || '{}') as Prefs; } catch { return {}; }
@@ -29,9 +30,13 @@ export const locale = computed(() => LOCALE[lang.value]);
 /** Translate; reading it inside a component re-renders that component when the language changes. */
 export const t = (key: string, params?: Params) => translate(lang.value, key, params);
 
-export const basemap = signal<BasemapId>(saved.basemap && BASEMAP_IDS.includes(saved.basemap) ? saved.basemap : 'osm');
+export const basemap = signal<BasemapId>(saved.basemap && BASEMAP_IDS.includes(saved.basemap) ? saved.basemap : 'light');
 export const dim = signal(typeof saved.dim === 'number' ? Math.min(0.7, Math.max(0, saved.dim)) : 0);
 export const zone = signal<ZoneSel>(saved.zone && isValidZone(saved.zone) ? saved.zone : 'local');
+const isNamedZone = (z: ZoneSel | undefined): z is ZoneSel => !!z && z !== 'local' && z !== 'utc' && isValidZone(z);
+/** The last zone picked from the list (not Local or UTC): its button keeps showing it. */
+export const lastZone = signal<ZoneSel | null>(isNamedZone(saved.zone) ? saved.zone : isNamedZone(saved.lastZone) ? saved.lastZone : null);
+effect(() => { const z = zone.value; if (isNamedZone(z)) lastZone.value = z; });
 export const units = signal<Units>(saved.units === 'imperial' ? 'imperial' : 'metric');
 export const panelMin = signal(saved.panelMin ?? false);
 export const timelineMin = signal(saved.timelineMin ?? narrow);
@@ -41,7 +46,7 @@ export const showGaps = signal(saved.gaps ?? true);
 
 effect(() => {
   const p: Prefs = {
-    lang: lang.value, basemap: basemap.value, dim: dim.value, zone: zone.value, units: units.value,
+    lang: lang.value, basemap: basemap.value, dim: dim.value, zone: zone.value, lastZone: lastZone.value ?? undefined, units: units.value,
     panelMin: panelMin.value, timelineMin: timelineMin.value, arrows: showArrows.value, fixes: showFixes.value, gaps: showGaps.value,
   };
   try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* private mode: nothing to remember */ }
@@ -110,6 +115,19 @@ export const scrubbing = signal(false);
 export function trackTime(id: string, axisT: number): number {
   return axisT - (offsets.value[id] ?? 0);
 }
+
+/**
+ * The track whose values the cursor shows (fix card, timeline readout): the
+ * selected one where it has a fix near the cursor, otherwise the shown track
+ * with the nearest fix. So inside one logger's gap, another's values show.
+ */
+export const cursorItem = computed<TrackItem | null>(() => {
+  const sel = selected.value;
+  const ct = cursorT.value;
+  if (ct === null) return sel;
+  if (sel?.vis && hasFixNear(sel.track, trackTime(sel.id, ct))) return sel;
+  return visible.value.find((it) => hasFixNear(it.track, trackTime(it.id, ct))) ?? sel;
+});
 
 // ---------- panels, menus and notices ----------
 
@@ -237,6 +255,7 @@ export function setClock(id: string, z: ZoneSel) {
     clock: z,
     cols: { ...tr.cols, t: tr.cols.t.map((v) => v + delta) },
     flags: tr.flags.map((f) => ({ ...f, t: f.t + delta })),
+    ...(tr.motion ? { motion: { ...tr.motion, t: tr.motion.t.map((v) => v + delta) } } : {}),
     derived: { ...tr.derived, stats: { ...tr.derived.stats, start: tr.derived.stats.start + delta, end: tr.derived.stats.end + delta } },
   };
   batch(() => {
@@ -293,7 +312,8 @@ export function resetForTests() {
     timelineMin.value = false;
     lang.value = 'en';
     zone.value = 'local';
+    lastZone.value = null;
     units.value = 'metric';
-    basemap.value = 'osm';
+    basemap.value = 'light';
   });
 }

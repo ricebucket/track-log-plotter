@@ -3,7 +3,9 @@
 // a real server.
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { writeFileSync } from 'node:fs';
 import { open, stubNetwork } from './helpers';
+import { bigFusionLog } from '../helpers/big-logs';
 
 test.beforeEach(async ({ page }) => {
   await stubNetwork(page);
@@ -42,6 +44,8 @@ test('loads the sample ride and draws the tracks', async ({ page }) => {
 
 test('minimizes and restores both panes', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
+  // On a desktop the panel is at the side: its arrow points left to hide it.
+  await expect(page.getByRole('button', { name: 'Minimize the panel' }).locator('path')).toHaveAttribute('d', 'M7 3.5v11M12.4 7.2L10.6 9l1.8 1.8');
   await page.getByRole('button', { name: 'Minimize the panel' }).click();
   await expect(page.getByText('Track Log Plotter')).toHaveCount(0);
   await page.getByRole('button', { name: 'Minimize the timeline' }).click();
@@ -213,7 +217,7 @@ test('snaps the cursor to a fix when hovering a gap', async ({ page }) => {
   await expect(page.locator('.tl-values')).toContainText('km/h');
 });
 
-test('zooms into a dragged range and back out with Show all', async ({ page }) => {
+test('zooms into a dragged range and back out with Reset zoom', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
   const lanes = (await page.locator('.tl-lanes').boundingBox())!;
   const x = (f: number) => lanes.x + 150 + (lanes.width - 150) * f;
@@ -223,12 +227,52 @@ test('zooms into a dragged range and back out with Show all', async ({ page }) =
   await page.mouse.move(x(0.5), lanes.y + 20, { steps: 4 });
   await page.mouse.move(x(0.6), lanes.y + 20, { steps: 4 });
   await page.mouse.up();
-  const showAll = page.getByRole('button', { name: 'Show all' });
-  await expect(showAll).toBeVisible();
+  const reset = page.getByRole('button', { name: 'Reset zoom' });
+  await expect(reset).toBeVisible();
   await expect(page.locator('.tl-ticks span').first()).not.toHaveText(first!);
-  await showAll.click();
-  await expect(showAll).toHaveCount(0);
+  await reset.click();
+  await expect(reset).toHaveCount(0);
   await expect(page.locator('.tl-ticks span').first()).toHaveText(first!);
+});
+
+test('zooms the timeline with the scroll wheel', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  const first = await page.locator('.tl-ticks span').first().textContent();
+  await page.mouse.move(lanes.x + 150 + (lanes.width - 150) * 0.5, lanes.y + 20);
+  await page.mouse.wheel(0, -600);
+  const reset = page.getByRole('button', { name: 'Reset zoom' });
+  await expect(reset).toBeVisible();
+  await expect(page.locator('.tl-ticks span').first()).not.toHaveText(first!);
+  await page.mouse.wheel(0, 3000);
+  await expect(reset).toHaveCount(0);
+  await expect(page.locator('.tl-ticks span').first()).toHaveText(first!);
+});
+
+test('opens a 10-hour log with motion data and draws its acceleration without stalling', async ({ page }, info) => {
+  test.setTimeout(120_000);
+  // 36,000 fixes and 360,000 readings: the browser side of the performance test.
+  const file = info.outputPath('ten-hours.CSV');
+  writeFileSync(file, bigFusionLog(10));
+  const t0 = Date.now();
+  await page.locator('#tlp-file-input').setInputFiles(file);
+  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/, { timeout: 60_000 });
+  const loadMs = Date.now() - t0;
+  await page.getByRole('button', { name: /^Color/ }).click();
+  await page.getByRole('dialog', { name: 'Color track A by' }).getByRole('radio', { name: /Acceleration/ }).click();
+  await expect(page.getByRole('button', { name: 'Color Acceleration (g)' })).toBeVisible();
+  // Zoom in on the timeline and back out: each step redraws from every reading.
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  await page.mouse.move(lanes.x + 150 + (lanes.width - 150) * 0.5, lanes.y + 20);
+  const t1 = Date.now();
+  for (let k = 0; k < 8; k++) await page.mouse.wheel(0, -400);
+  await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
+  await page.getByRole('button', { name: 'Reset zoom' }).click();
+  const zoomMs = Date.now() - t1;
+  console.log(`ten-hour motion log: drawn ${loadMs} ms after opening; zooming ${zoomMs} ms`);
+  // About 2 s and 0.4 s on a laptop with software WebGL; the time limits leave room for slow CI machines.
+  expect(loadMs).toBeLessThan(15_000);
+  expect(zoomMs).toBeLessThan(5_000);
 });
 
 test('shows at most three tracks', async ({ page }) => {

@@ -83,6 +83,7 @@
 
 - **单元测试：** `tests/unit/`。
 - **组件测试：** `tests/component/`。在 happy-dom 中运行，地图用替身代替。
+- **性能测试：** `tests/unit/performance.test.ts` 以及 `tests/e2e/app.spec.ts` 中的一个浏览器测试，用一个合成的 10 小时 Columbus Fusion 运动数据记录（36,000 个定位点、360,000 次读数，约 10 MB）计时：读取文件、绘制加速度时间轴、缩放，以及定位点信息卡查找读数。每项时限都是笔记本电脑所需时间的数倍，因此较慢的 CI 机器也能通过，但如果改动让耗时失控就会失败。运行 `npx vitest run tests/unit/performance.test.ts --silent=false` 可以看到计时结果。
 - **测试数据：** `tests/fixtures/`。都是由 `scripts/make-fixtures.mjs` 生成的纽约市合成轨迹，`public/sample/` 中的示例骑行也是。如果仓库中有任何坐标落在纽约市以外，隐私测试就会失败。
 - **浏览器测试：** `tests/e2e/`。针对 http://localhost:4173/track-log-plotter/ 上构建好的网站运行，分为两个 Playwright 项目：`desktop`（Desktop Chrome）和 `phone`（Pixel 7）。
   - 对其他主机的请求（瓦片、样式、字体）都在本地应答，所以测试不会访问真实的服务器。

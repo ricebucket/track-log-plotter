@@ -83,6 +83,7 @@ GitHub runs the same checks on every push to `main`. The Pages deploy, though, r
 
 - **Unit tests:** `tests/unit/`.
 - **Component tests:** `tests/component/`. They run in happy-dom, with a stand-in for the map.
+- **Performance tests:** `tests/unit/performance.test.ts` and a browser test in `tests/e2e/app.spec.ts` time a synthetic 10-hour Columbus Fusion log with motion data (36,000 fixes, 360,000 readings, about 10 MB). They time reading it, drawing its acceleration timeline, zooming, and the fix card's lookup. Each test fails if the work takes longer than its time limit. The limits are several times what a laptop needs, so a slow CI machine passes, but a change that makes the work grow out of hand fails. A slowdown of two or three times still passes, so compare the printed timings before and after changing that code. They print their timings when run with `npx vitest run tests/unit/performance.test.ts --silent=false`.
 - **Fixtures:** `tests/fixtures/`. They are synthetic New York City tracks made by `scripts/make-fixtures.mjs`, as is the sample ride in `public/sample/`. A privacy test fails the run if any coordinate in the repository falls outside New York City.
 - **Browser tests:** `tests/e2e/`. They run against the built site at http://localhost:4173/track-log-plotter/, in two Playwright projects: `desktop` (Desktop Chrome) and `phone` (Pixel 7).
   - Every request to another host (tiles, styles, fonts) is answered locally, so no test touches a real server.

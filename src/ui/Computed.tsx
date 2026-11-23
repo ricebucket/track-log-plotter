@@ -56,10 +56,6 @@ export function Computed({ text }: { text: string }) {
   );
 }
 
-/** The same mark where nothing can be clicked (the map inspector). */
-export function ComputedMark() {
-  return <span class="computed-mark" aria-hidden="true"><IconCalc size={11} /></span>;
-}
 
 /** Shows the explanation of the hovered or focused calculator button. */
 export function HintLayer() {

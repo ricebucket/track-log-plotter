@@ -250,11 +250,17 @@ button:disabled { cursor: default; opacity: 0.5; }
 .tooltip { position: absolute; z-index: 16; padding: 10px 12px; border-radius: 12px; background: var(--card); box-shadow: var(--shadow-pop); pointer-events: none; font-size: 12px; }
 .tip-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .tip-close { width: 26px; height: 26px; margin: -4px -6px -4px auto; pointer-events: auto; }
+/* Every reading of the fix's second, lowest first; the median is highlighted. */
+.tip-rows .tip-readings { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px 3px; margin: 0 0 3px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: right; white-space: nowrap; }
+.tip-readings span { padding: 0 3px; border-radius: 4px; }
+.tip-readings .is-median { background: var(--ink); color: #fff; font-weight: 700; }
+/* The calculator buttons take the mouse too, so their explanations show. */
+.tooltip .computed-btn { pointer-events: auto; }
 .tip-time { font-size: 13px; font-weight: 700; }
 .tip-rows { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; }
 .tip-rows div { display: contents; }
-.tip-rows dt { color: var(--muted); }
-.tip-rows dd { margin: 0; text-align: right; }
+.tip-rows dt { color: var(--muted); white-space: nowrap; }
+.tip-rows dd { margin: 0; text-align: right; white-space: nowrap; }
 .tip-others { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
 .tip-others div { display: flex; align-items: center; gap: 7px; }
 .tip-flag { margin-top: 7px; display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; }
@@ -326,10 +332,8 @@ button:disabled { cursor: default; opacity: 0.5; }
 /* ---------- computed values ---------- */
 .computed-btn { flex: none; width: 18px; height: 18px; margin: -2px 0 -2px 3px; padding: 0; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
 .computed-btn:hover, .computed-btn:focus-visible { background: rgba(16, 24, 32, 0.08); color: var(--ink); }
-.computed-mark { display: inline-flex; margin-left: 3px; vertical-align: -1px; color: var(--muted); }
 .opt-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .computed-tag { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px 0 4px; border-radius: 6px; background: rgba(16, 24, 32, 0.06); color: var(--ink-3); font-size: 10.5px; font-weight: 700; vertical-align: 1px; }
 .hint { position: fixed; z-index: 70; display: flex; flex-direction: column; gap: 3px; padding: 9px 11px; border-radius: 9px; background: var(--ink); color: #fff; font-size: 12px; line-height: 17px; font-weight: 500; text-transform: none; letter-spacing: normal; box-shadow: var(--shadow-pop); pointer-events: none; }
 .hint-title { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; color: rgba(255, 255, 255, 0.7); }
-.tip-foot { margin-top: 4px; display: flex; align-items: center; gap: 2px; }
 .stats dt { overflow: visible; }

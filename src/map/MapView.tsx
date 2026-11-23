@@ -166,7 +166,7 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   };
 
   const placeTip = () => {
-    const sel = S.selected.value;
+    const sel = S.cursorItem.value;
     const t = S.cursorT.value;
     if (!sel || !sel.vis || t === null) { tipXY.value = null; return; }
     const cols = sel.track.cols;

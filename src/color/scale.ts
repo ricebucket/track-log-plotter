@@ -15,7 +15,7 @@ const FIXED: Partial<Record<MeasureKey, number[]>> = {
   grade: [1, 2, 4, 6], // percent, uphill or downhill
   hdop: [2, 5, 10],
   sats: [10, 7, 5], // more satellites is better: step 0 is 10 or more
-  accel: [0.1, 0.25, 0.5, 1], // g: smooth, light, firm, hard, a jolt
+  accel: [1.1, 1.25, 1.5, 2], // g, gravity included (1 g at rest): calm, light, firm, hard, a jolt
 };
 
 export interface Scale {

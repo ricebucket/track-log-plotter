@@ -4,7 +4,7 @@ import { addTracks } from '../../src/state/logic';
 import { buildScale } from '../../src/color/scale';
 import type { LoadedTrack, MeasureKey } from '../../src/model/types';
 import { FAMILIES, SINGLE } from '../../src/color/palettes';
-import { columns, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks } from '../../src/ui/timelineMath';
+import { columns, MIN_ZOOM_MS, panView, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from '../../src/ui/timelineMath';
 import { scaleBar } from '../../src/ui/scaleBar';
 import { load } from '../helpers/fixtures';
 
@@ -91,6 +91,43 @@ describe('dots for tiny tracks', () => {
 });
 
 describe('timeline math', () => {
+  it('draws every motion reading for acceleration, so zooming in shows the waveform', () => {
+    const tr = load('central-park-loop-motion.csv');
+    const s = buildScale('accel', [tr]);
+    // Two seconds over 20 columns: a tenth of a second each, with one reading in the middle of each column.
+    const from = tr.cols.t[100] - 50, to = from + 2000;
+    const fine = columns(tr, 'accel', s, from, to, 20, 0).map((col) => col!.max);
+    const values = Array.from(tr.motion!.g).filter((_, j) => tr.motion!.t[j] >= from && tr.motion!.t[j] < to);
+    expect(fine).toHaveLength(20);
+    for (let k = 0; k < 20; k++) expect(fine[k]).toBeCloseTo(values[k], 5);
+    // Without the readings, the same two seconds would be just two values.
+    const coarse = columns({ ...tr, motion: undefined }, 'accel', s, from, to, 20, 0).flatMap((col) => (col ? [col.max] : []));
+    expect(new Set(coarse.map((v) => v.toFixed(4))).size).toBeLessThanOrEqual(2);
+    expect(new Set(fine.map((v) => v.toFixed(4))).size).toBeGreaterThan(5);
+  });
+
+  it('zooms with the scroll wheel around the time under the pointer', () => {
+    const full: [number, number] = [0, 3_600_000];
+    const inView = wheelZoom(full, full, 0.25, -300)!;
+    expect(inView[1] - inView[0]).toBeLessThan(full[1] * 0.6);
+    // The time under the pointer stays put.
+    expect(inView[0] + 0.25 * (inView[1] - inView[0])).toBeCloseTo(900_000, 3);
+    // Never closer than the shortest zoom, never outside the timeline.
+    const close = wheelZoom(inView, full, 0.5, -100_000)!;
+    expect(close[1] - close[0]).toBe(MIN_ZOOM_MS);
+    const edge = wheelZoom([0, 600_000], full, 0, -100)!;
+    expect(edge[0]).toBe(0);
+    // Scrolling far enough out shows everything again.
+    expect(wheelZoom(inView, full, 0.5, 5000)).toBeNull();
+  });
+
+  it('moves a zoomed view sideways within the timeline', () => {
+    const full: [number, number] = [0, 3_600_000];
+    expect(panView([1_000_000, 1_600_000], full, 0.5)).toEqual([1_300_000, 1_900_000]);
+    expect(panView([1_000_000, 1_600_000], full, -10)).toEqual([0, 600_000]);
+    expect(panView([1_000_000, 1_600_000], full, 10)).toEqual([3_000_000, 3_600_000]);
+  });
+
   it('snaps the cursor to the nearest fix, also inside a gap', () => {
     const tr = load('hudson-overnight.gpx');
     const c = tr.cols;
@@ -108,9 +145,24 @@ describe('timeline math', () => {
     const c = tr.cols;
     const night = c.t.findIndex((t, i) => i > 0 && t - c.t[i - 1] > 3_600_000);
     const t0 = c.t[0], t1 = c.t[c.n - 1];
-    expect(skipGap(c.t[5] + 1000, tr, 0, t0, t1)).toBe(c.t[5] + 1000);
-    expect(skipGap(c.t[night - 1] + 600_000, tr, 0, t0, t1)).toBe(c.t[night]);
-    expect(skipGap(t1 + 600_000, tr, 0, t0, t1 + 3_600_000)).toBe(t0);
+    const one = [{ id: 'A', track: tr }];
+    expect(skipGap(c.t[5] + 1000, one, {}, t0, t1)).toBe(c.t[5] + 1000);
+    expect(skipGap(c.t[night - 1] + 600_000, one, {}, t0, t1)).toBe(c.t[night]);
+    expect(skipGap(t1 + 600_000, one, {}, t0, t1 + 3_600_000)).toBe(t0);
+  });
+
+  it('plays through one logger\'s gap when another shown logger has data there', () => {
+    const trA = load('central-park-loop.nmea'), trB = load('central-park-loop-vendor.gpx');
+    const c = trA.cols;
+    const gap = c.t.findIndex((t, i) => i > 0 && t - c.t[i - 1] > 30_000);
+    const mid = (c.t[gap - 1] + c.t[gap]) / 2;
+    const both = [{ id: 'A', track: trA }, { id: 'B', track: trB }];
+    // Alone, the gap is skipped; with the other logger recording, it isn't.
+    expect(skipGap(mid, [both[0]], {}, c.t[0], c.t[c.n - 1])).toBe(c.t[gap]);
+    expect(skipGap(mid, both, {}, c.t[0], c.t[c.n - 1])).toBe(mid);
+    // And the cursor snaps to the other logger's fix inside the gap.
+    const snapped = snapTime(mid, both, {});
+    expect(Math.abs(snapped - mid)).toBeLessThanOrEqual(2500);
   });
 
   it('plays at sixty times real time and loops at the end', () => {

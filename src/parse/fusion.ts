@@ -22,10 +22,6 @@
 import type { FieldKey, FixQuality, Flag, Note, ParsedTrack, Problem } from '../model/types';
 import { ColumnBuilder, present } from './columns';
 
-/** Seconds of accelerometer readings averaged to find gravity, which is then taken out. */
-export const GRAVITY_WINDOW_S = 4;
-/** Fixes further apart than this (ms) mean the logger paused; motion readings don't run across. */
-const PAUSE_MS = 2000;
 
 function num(s: string | undefined): number {
   if (s === undefined) return NaN;
@@ -76,42 +72,46 @@ class Readings {
 }
 
 /**
- * The strongest acceleration in each fix's second, in g, with gravity taken
- * out: gravity is the average reading over GRAVITY_WINDOW_S seconds around each
- * reading (never across a pause), and what's left is the push from braking,
- * speeding up, turning and bumps.
+ * The strongest accelerometer reading in each fix's second, in g: the three
+ * axes combined as √(ax² + ay² + az²), with gravity left in, so a logger at
+ * rest reads about 1 g. No filtering: each value is one actual reading.
  */
-function accelPeaks(rows: Row[], r: Readings, perSecond: number): Float32Array {
+function accelPeaks(rows: Row[], r: Readings): Float32Array {
   const out = new Float32Array(rows.length).fill(NaN);
-  if (r.n === 0) return out;
-  const half = Math.max(1, Math.round((GRAVITY_WINDOW_S * perSecond) / 2));
-  // Runs of readings with no pause between their fixes.
-  let k = 0;
-  while (k < rows.length) {
-    let end = k + 1;
-    while (end < rows.length && rows[end].t - rows[end - 1].t <= PAUSE_MS) end++;
-    const a = rows[k].s0, b = rows[end - 1].s1;
-    if (b > a) {
-      const sx = new Float64Array(b - a + 1), sy = new Float64Array(b - a + 1), sz = new Float64Array(b - a + 1);
-      for (let j = a; j < b; j++) {
-        sx[j - a + 1] = sx[j - a] + r.x[j];
-        sy[j - a + 1] = sy[j - a] + r.y[j];
-        sz[j - a + 1] = sz[j - a] + r.z[j];
-      }
-      for (let f = k; f < end; f++) {
-        let peak = NaN;
-        for (let j = rows[f].s0; j < rows[f].s1; j++) {
-          const lo = Math.max(a, j - half) - a, hi = Math.min(b, j + half + 1) - a, m = hi - lo;
-          const dx = r.x[j] - (sx[hi] - sx[lo]) / m, dy = r.y[j] - (sy[hi] - sy[lo]) / m, dz = r.z[j] - (sz[hi] - sz[lo]) / m;
-          const v = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (!(v <= peak)) peak = v;
-        }
-        out[f] = peak;
-      }
+  rows.forEach((f, k) => {
+    let peak = NaN;
+    for (let j = f.s0; j < f.s1; j++) {
+      const v = Math.sqrt(r.x[j] * r.x[j] + r.y[j] * r.y[j] + r.z[j] * r.z[j]);
+      if (!(v <= peak)) peak = v;
     }
-    k = end;
-  }
+    out[k] = peak;
+  });
   return out;
+}
+
+/**
+ * Every reading with its time, for the timeline. The file gives readings no
+ * time of their own: they follow their fix evenly, `perSecond` to a second (or
+ * spread over the time to the next fix, if that's shorter).
+ */
+function readingSeries(rows: Row[], r: Readings, perSecond: number): { t: Float64Array; g: Float32Array } {
+  const t = new Float64Array(r.n), g = new Float32Array(r.n);
+  let m = 0, last = -Infinity;
+  rows.forEach((f, k) => {
+    const count = f.s1 - f.s0;
+    if (!count) return;
+    const next = k + 1 < rows.length ? rows[k + 1].t : Infinity;
+    const step = Math.min(1000 / Math.max(1, perSecond), (next - f.t) / count);
+    for (let j = f.s0; j < f.s1; j++) {
+      const at = f.t + (j - f.s0) * step;
+      if (!(at > last)) continue; // a fix out of time order: its readings can't go on the timeline
+      t[m] = at;
+      g[m] = Math.sqrt(r.x[j] * r.x[j] + r.y[j] * r.y[j] + r.z[j] * r.z[j]);
+      last = at;
+      m++;
+    }
+  });
+  return { t: t.slice(0, m), g: g.slice(0, m) };
 }
 
 export function parseFusion(text: string): ParsedTrack {
@@ -200,7 +200,8 @@ export function parseFusion(text: string): ParsedTrack {
   for (let k = 0; k + 1 < rows.length; k++) if (rows[k + 1].t - rows[k].t === 1000 && rows[k].s1 > rows[k].s0) counts.push(rows[k].s1 - rows[k].s0);
   counts.sort((a, b) => a - b);
   const perSecond = counts.length ? counts[counts.length >> 1] : 1;
-  const accel = accelPeaks(rows, r, perSecond);
+  const accel = accelPeaks(rows, r);
+  const series = r.n ? readingSeries(rows, r, perSecond) : undefined;
 
   const b = new ColumnBuilder();
   rows.forEach((x, k) => b.push({ ...x, accel: accel[k] }));
@@ -230,5 +231,5 @@ export function parseFusion(text: string): ParsedTrack {
   if (present(cols, 'accel')) fields.push('accel');
   if (flags.length) fields.push('flags');
 
-  return { format: 'fusion', creator: null, name: null, cols, flags, problems, notes, fields, lines: lines.length, clock: 'utc' };
+  return { format: 'fusion', creator: null, name: null, cols, flags, problems, notes, fields, lines: lines.length, clock: 'utc', ...(series ? { motion: series } : {}) };
 }

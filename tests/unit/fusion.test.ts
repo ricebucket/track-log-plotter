@@ -1,10 +1,11 @@
 // Columbus Fusion logs (CSV), GPX routes with times, and files whose times
 // have no time zone.
 import { describe, expect, it } from 'vitest';
-import { detectFormat, parseText } from '../../src/parse/index';
+import { detectFormat, parseText, transferables } from '../../src/parse/index';
 import { parseFusion } from '../../src/parse/fusion';
 import { parseGpx } from '../../src/parse/gpx';
 import { clockShift } from '../../src/time/zones';
+import { fixAt } from '../../src/state/inspect';
 import { load } from '../helpers/fixtures';
 
 const HEAD = '# Format=ColumbusFusion; Version=1.0; Type=GNSS\r\ntag,date,time,lat,lon,alt,speed,heading\r\n';
@@ -47,7 +48,7 @@ describe('Columbus Fusion logs', () => {
     expect(p.cols.t[2]).toBe(Date.UTC(2026, 5, 15, 0, 0, 1));
   });
 
-  it('works out acceleration from the motion sensor, without gravity', () => {
+  it('combines the motion sensor\'s three axes, gravity included', () => {
     const tr = load('central-park-loop-motion.csv');
     expect(tr.problems).toEqual([]);
     expect(tr.fields).toContain('accel');
@@ -55,12 +56,63 @@ describe('Columbus Fusion logs', () => {
     const a = Array.from(tr.cols.accel);
     expect(a.every(Number.isFinite)).toBe(true);
     const sorted = [...a].sort((x, y) => x - y);
-    // Riding along: a little road buzz, nowhere near the 1 g of gravity.
-    expect(sorted[sorted.length >> 1]).toBeLessThan(0.15);
+    // Riding along: gravity's 1 g plus a little road buzz.
+    expect(sorted[sorted.length >> 1]).toBeGreaterThan(0.98);
+    expect(sorted[sorted.length >> 1]).toBeLessThan(1.1);
     // The two bumps stand out.
-    const big = a.map((v, i) => [v, i]).filter(([v]) => v > 0.6).map(([, i]) => i);
+    const big = a.map((v, i) => [v, i]).filter(([v]) => v > 1.6).map(([, i]) => i);
     expect(big).toHaveLength(2);
-    expect(tr.derived.stats.maxAccel).toBeGreaterThan(0.6);
+    expect(tr.derived.stats.maxAccel).toBeGreaterThan(1.6);
+  });
+
+  it('keeps every reading, with its time, for the timeline', () => {
+    const tr = load('central-park-loop-motion.csv');
+    const m = tr.motion!;
+    // Ten readings a second for each of the 360 fixes.
+    expect(m.t.length).toBe(3600);
+    expect(m.g.length).toBe(3600);
+    for (let i = 1; i < m.t.length; i++) expect(m.t[i] > m.t[i - 1], `reading ${i} after ${i - 1}`).toBe(true);
+    expect(m.t[1] - m.t[0]).toBe(100);
+    expect(m.t[0]).toBe(tr.cols.t[0]);
+    // The pause in logging is a pause in the readings too.
+    expect(Math.max(...Array.from(m.t.slice(1), (t, i) => t - m.t[i]))).toBeGreaterThan(90_000);
+    // Each fix's value is the strongest of its own second's readings.
+    const c = tr.cols;
+    for (const i of [0, 60, 250, 359]) {
+      const own = Array.from(m.g).filter((_, j) => m.t[j] >= c.t[i] && m.t[j] < c.t[i] + 1000);
+      expect(own).toHaveLength(10);
+      expect(Math.max(...own)).toBeCloseTo(c.accel[i], 5);
+    }
+    // No motion data, no readings.
+    expect(load('roosevelt-island-run.csv').motion).toBeUndefined();
+  });
+
+  it('gives the fix card every reading of the fix\'s second, lowest first', () => {
+    const tr = load('central-park-loop-motion.csv');
+    const f = fixAt(tr, tr.cols.t[60])!;
+    expect(f.readings).toHaveLength(10);
+    for (let k = 1; k < 10; k++) expect(f.readings[k]).toBeGreaterThanOrEqual(f.readings[k - 1]);
+    expect(f.readings[9]).toBeCloseTo(tr.cols.accel[60], 5);
+    // Before the pause: only that fix's own readings, not the next fix's after the pause.
+    expect(fixAt(tr, tr.cols.t[180])!.readings).toHaveLength(10);
+    expect(fixAt(load('roosevelt-island-run.csv'), Date.UTC(2026, 5, 21, 7, 40, 0))!.readings).toEqual([]);
+  });
+
+  it('hands the readings over from the reading worker without copying', () => {
+    const text = '# Format=ColumbusFusion; Version=1.0; Type=GNSS+IMU\r\ntag,date,time,lat,lon,alt,speed,heading,ax,ay,az\r\nT,260614,130500,40.7681,-73.9812,25,10,90,0.00,0.00,1.00\r\n,,130501,40.7682,-73.9811,25,10,90,0.00,0.60,0.80\r\n';
+    const r = parseText(text, 'log.CSV');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const buffers = transferables(r);
+    expect(buffers).toContain(r.track.motion!.t.buffer);
+    expect(buffers).toContain(r.track.motion!.g.buffer);
+  });
+
+  it('shows the strongest raw reading of each second', () => {
+    const head = '# Format=ColumbusFusion; Version=1.0; Type=GNSS+IMU\r\ntag,date,time,lat,lon,alt,speed,heading,ax,ay,az\r\n';
+    const p = parseFusion(head + 'T,260614,130500,40.7681,-73.9812,25,10,90,0.00,0.00,1.00\r\n,,,,,,,,0.30,0.40,1.20\r\n,,130501,40.7682,-73.9811,25,10,90,0.00,0.60,0.80\r\n');
+    expect(p.cols.accel[0]).toBeCloseTo(Math.hypot(0.3, 0.4, 1.2), 5);
+    expect(p.cols.accel[1]).toBeCloseTo(1, 5);
   });
 
   it('notices a pause in logging and keeps the readings on each side apart', () => {

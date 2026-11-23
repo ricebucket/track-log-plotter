@@ -77,5 +77,6 @@ export function transferables(r: ParseResult): ArrayBuffer[] {
   };
   add(r.track.cols);
   add(r.track.derived);
+  if (r.track.motion) add(r.track.motion);
   return [...out];
 }

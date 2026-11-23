@@ -231,7 +231,6 @@
 
   "drop.overlay": "Drop GPX, NMEA or Columbus Fusion files to open them",
   "computed.label": "Computed by the app",
-  "computed.footnote": "Computed by the app, not read from the file",
   "computed.tag": "Computed",
   "computed.distance": "Adds up the straight-line distances between consecutive fixes. Jumps across gaps are left out.",
   "computed.duration": "The time from the first fix to the last.",
@@ -267,13 +266,13 @@
   "google.myMaps": "Google My Maps",
   "google.myMapsHow": "To see the track on Google: in My Maps, create a map, choose Import under its layer and pick your GPX file. This uploads the file to your Google account. NMEA and Columbus Fusion logs can't be imported there.",
   "measure.accel": "Acceleration",
-  "measure.accel.long": "How hard the logger was pushed or shaken at each fix, from its motion sensor: the strongest acceleration in that second, in g, with gravity taken out. Braking, speeding up, turning and bumps all show; at rest it's close to 0.",
+  "measure.accel.long": "How hard the logger was pushed or shaken at each fix, from its motion sensor: the strongest reading in that second, in g, with gravity included, so it's about 1 g at rest. Braking, turning and bumps push it above that.",
   "halo.hint.accel": "Wider halo: harder push or jolt",
   "unit.g": "g",
   "field.accel": "Motion sensor (acceleration)",
   "note.motion": "The logger's motion sensor recorded {n} readings a second. Pick Acceleration under Color or Halo to see them.",
   "note.route": "This file saves the recording as a GPX route, the form meant for planned paths, but every point has a time, so the app shows it as a track.",
-  "computed.accel": "Worked out from the logger's motion sensor: the average reading over {s} seconds is gravity and is taken out, and each fix shows the strongest push left in its second, in g.",
+  "computed.accel": "From the logger's motion sensor, which records three axes about 10 times a second: each reading's axes are combined as √(x² + y² + z²), with gravity left in (about 1 g at rest), and each fix shows the strongest reading in its second.",
   "stat.maxAccel": "Peak acceleration",
   "timeline.logScale": "log scale",
   "details.clock": "Time zone of the file",
@@ -281,6 +280,9 @@
   "clock.local": "This computer: {zone} ({offset})",
   "clock.thisComputer": "This computer's time zone",
   "clock.pick": "Time zone of track {id}'s file",
-  "timeline.showAll": "Show all",
-  "timeline.showAllHint": "Zoom back out to the whole timeline (or double-click it). Drag across the timeline to zoom in."
+  "timeline.resetZoom": "Reset zoom",
+  "timeline.resetZoomHint": "Zoom back out to the whole timeline (or double-click it). Scroll, or drag across the timeline, to zoom in.",
+  "inspect.position": "Lat, lon",
+  "inspect.median": "median {v}",
+  "inspect.readings": "All {n} readings in this second, lowest first; the median is highlighted"
 }

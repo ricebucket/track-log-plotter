@@ -10,6 +10,30 @@ const STEPS_S = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 
 /** The shortest stretch of time the timeline zooms to. */
 export const MIN_ZOOM_MS = 10_000;
 
+/** How much one pixel of scrolling zooms: a mouse wheel notch (100 px) is about 22%. */
+const WHEEL_ZOOM = 1.002;
+
+/**
+ * The view after scrolling `deltaPx` with the pointer `frac` of the way across
+ * the lanes: up (negative) zooms in, down zooms out, keeping the time under the
+ * pointer in place. Null once zoomed all the way out.
+ */
+export function wheelZoom(view: [number, number], full: [number, number], frac: number, deltaPx: number): [number, number] | null {
+  const span = view[1] - view[0], fullSpan = full[1] - full[0];
+  const next = Math.max(MIN_ZOOM_MS, span * WHEEL_ZOOM ** deltaPx);
+  if (next >= fullSpan) return null;
+  const at = view[0] + frac * span;
+  const a = Math.min(full[1] - next, Math.max(full[0], at - frac * next));
+  return [a, a + next];
+}
+
+/** The view moved sideways by `frac` of its width, kept inside the full range. */
+export function panView(view: [number, number], full: [number, number], frac: number): [number, number] {
+  const span = view[1] - view[0];
+  const a = Math.min(full[1] - span, Math.max(full[0], view[0] + frac * span));
+  return [a, a + span];
+}
+
 /**
  * The time of the fix nearest to t (timeline time) on any of the tracks, so
  * the cursor never rests in a gap. Offsets shift each track onto the timeline.
@@ -27,17 +51,25 @@ export function snapTime(t: number, tracks: { id: string; track: LoadedTrack }[]
 }
 
 /**
- * During playback, the next cursor time once a track's gap is reached: the
- * first fix after it, or the start of the range when the track has ended.
+ * During playback, the next cursor time once every shown track is in a gap:
+ * the first fix after it on any of them, or the start of the range when they
+ * have all ended. While any track has a fix near t, t stays.
  */
-export function skipGap(t: number, tr: LoadedTrack, offset: number, t0: number, t1: number): number {
-  const c = tr.cols;
-  if (!c.n) return t;
-  const i = nearestIndex(c.t, t - offset);
-  const slack = Math.max(5000, tr.derived.stats.intervalS * 3000);
-  if (Math.abs(c.t[i] + offset - t) <= slack) return t;
-  const j = c.t[i] + offset > t ? i : i + 1;
-  return j < c.n && c.t[j] + offset <= t1 ? c.t[j] + offset : t0;
+export function skipGap(t: number, tracks: { id: string; track: LoadedTrack }[], offsets: Record<string, number>, t0: number, t1: number): number {
+  let next = Infinity, any = false;
+  for (const it of tracks) {
+    const c = it.track.cols;
+    if (!c.n) continue;
+    any = true;
+    const off = offsets[it.id] ?? 0;
+    const i = nearestIndex(c.t, t - off);
+    const slack = Math.max(5000, it.track.derived.stats.intervalS * 3000);
+    if (Math.abs(c.t[i] + off - t) <= slack) return t;
+    const j = c.t[i] + off > t ? i : i + 1;
+    if (j < c.n) next = Math.min(next, c.t[j] + off);
+  }
+  if (!any) return t;
+  return next <= t1 ? next : t0;
 }
 
 /** Playback speed: track time runs this many times faster than real time. */
@@ -81,18 +113,24 @@ export function columns(tr: LoadedTrack, key: MeasureKey | null, scale: Scale | 
   const out: (Column | null)[] = Array.from({ length: W }, () => null);
   const span = Math.max(1, t1 - t0);
   const counts = new Map<number, number[]>();
-  const c = tr.cols;
-  const gap = tr.derived.gap;
+  // Acceleration draws every motion-sensor reading (about ten a second), so a
+  // zoomed-in timeline shows the real waveform; everything else, one value per
+  // fix. A gap is a pause in the readings, or the gap the fix columns mark.
+  const motion = key === 'accel' ? tr.motion : undefined;
+  const times = motion ? motion.t : tr.cols.t;
+  const n = times.length;
+  const value = (i: number) => (motion ? motion.g[i] : key ? valueAt(tr, key, i) : 0);
+  const isGap = motion ? (i: number) => times[i] - times[i - 1] > 2000 : (i: number) => tr.derived.gap[i] === 1;
   const colOf = (t: number) => Math.floor(((t + offset - t0) / span) * W);
-  for (let i = 0; i < c.n; i++) {
-    const x = colOf(c.t[i]);
+  for (let i = 0; i < n; i++) {
+    const x = colOf(times[i]);
     if (x < 0 || x >= W) continue;
-    // A gap paints every column between the two fixes it separates.
-    if (i > 0 && gap[i]) {
-      const a = Math.max(0, colOf(c.t[i - 1]) + 1);
+    // A gap paints every column between the two points it separates.
+    if (i > 0 && isGap(i)) {
+      const a = Math.max(0, colOf(times[i - 1]) + 1);
       for (let k = a; k < x; k++) out[k] = { step: -1, min: NaN, max: NaN, gap: true };
     }
-    const v = key ? valueAt(tr, key, i) : 0;
+    const v = value(i);
     const s = scale && key ? stepOf(scale, v) : 0;
     let col = out[x];
     if (!col || col.gap) { col = { step: s, min: v, max: v, gap: false }; out[x] = col; }
@@ -104,7 +142,7 @@ export function columns(tr: LoadedTrack, key: MeasureKey | null, scale: Scale | 
   }
   for (const [x, tally] of counts) {
     let best = -1, bestN = -1;
-    tally.forEach((n, k) => { if (n > bestN) { bestN = n; best = k - 1; } });
+    tally.forEach((cnt, k) => { if (cnt > bestN) { bestN = cnt; best = k - 1; } });
     out[x]!.step = best;
   }
   // Fixes logged less often than once per pixel leave empty columns between

@@ -7,6 +7,15 @@ test.beforeEach(async ({ page }) => {
   await page.goto('./');
 });
 
+test('points the panel arrows down to hide the bottom sheet and up to bring it back', async ({ page }) => {
+  await page.getByRole('button', { name: 'Try the sample ride' }).click();
+  const hide = page.getByRole('button', { name: 'Minimize the panel' });
+  // The bottom-sheet icon: a divider near the bottom and a downward arrow.
+  await expect(hide.locator('path')).toHaveAttribute('d', 'M2.5 11h13M7.2 6.2L9 8l1.8-1.8');
+  await hide.click();
+  await expect(page.getByRole('button', { name: 'Show the panel' }).locator('path')).toHaveAttribute('d', 'M2.5 11h13M7.2 8L9 6.2l1.8 1.8');
+});
+
 test('opens the Options menu from the basemap button', async ({ page }) => {
   const vp = page.viewportSize()!;
   await page.getByRole('button', { name: /Options/ }).click();
