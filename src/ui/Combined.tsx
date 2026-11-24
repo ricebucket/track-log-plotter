@@ -7,15 +7,17 @@ import * as S from '../state/store';
 import { t } from '../state/store';
 import type { ComboTrack } from '../combine/combine';
 import { LOG_COLORS } from '../color/palettes';
-import { FORMAT_SHAPE } from '../color/shapes';
 import { fmtPercent } from '../format';
 import { metresText } from './labels';
 import { fullTextIfCut } from './cutText';
 import { IconChevronDown, IconChevronUp, IconEye, IconEyeOff } from './icons';
 
-/** What a combined track calls its sources: the letters they had in the list when it was made. */
-export function sourceNames(item: TrackItem, track: ComboTrack): string[] {
-  return track.combo.sources.map((_, k) => item.sources?.[k] ?? String(k + 1));
+/**
+ * What a combined track calls its sources, its sub-tracks: numbers from 1, in the order they were combined. (Letters
+ * stay for the tracks in the list; the combined track's own name says which of them it was made from.)
+ */
+export function sourceNames(track: ComboTrack): string[] {
+  return track.combo.sources.map((_, k) => String(k + 1));
 }
 
 /** What each source is called in the list, renamed or not; once it has left the list, its file's name. */
@@ -28,13 +30,12 @@ export function sourceTitles(item: TrackItem, track: ComboTrack): string[] {
   });
 }
 
-/** A source's badge, as in the track list (its letter, its file's shape), in the color of its line on the map. */
-export function SourceBadge({ track, k, name, size = 'small' }: { track: ComboTrack; k: number; name: string; size?: 'small' | 'tiny' }) {
-  const f = track.combo.sources[k].track.format;
-  return <span class={`badge ${FORMAT_SHAPE[f]} ${size}`} style={{ background: LOG_COLORS[k % LOG_COLORS.length] }} aria-hidden="true">{name}</span>;
+/** A source's badge: its number, on a dot in the color of its line on the map. */
+export function SourceBadge({ k }: { k: number }) {
+  return <span class="log-num" style={{ background: LOG_COLORS[k % LOG_COLORS.length] }} aria-hidden="true">{k + 1}</span>;
 }
 
-/** "equal", or each source's share: "B at 65%, C at 35%". */
+/** "equal", or each source's share: "1 at 65%, 2 at 35%". */
 export function sharesText(trust: readonly number[], names: readonly string[]): string {
   if (trust.every((v) => Math.abs(v - 1 / trust.length) < 0.005)) return t('combine.equal');
   const loc = S.locale.value;
@@ -55,7 +56,7 @@ export function CombinedLogs({ item, track }: { item: TrackItem; track: ComboTra
   const loc = S.locale.value;
   const src = track.combo.sources;
   const trust = src.map((s) => s.trust);
-  const names = sourceNames(item, track);
+  const names = sourceNames(track);
   const titles = sourceTitles(item, track);
   const zero = zeroText(trust, names);
   const hid = `combo-${item.id}`;
@@ -73,7 +74,7 @@ export function CombinedLogs({ item, track }: { item: TrackItem; track: ComboTra
               <button type="button" class="icon-btn eye" aria-pressed={on ? 'true' : 'false'} aria-label={label} title={label} onClick={() => S.toggleLog(item.id, k)}>
                 {on ? <IconEye size={17} /> : <IconEyeOff size={17} />}
               </button>
-              <SourceBadge track={track} k={k} name={names[k]} />
+              <SourceBadge k={k} />
               <span class="combo-log">
                 <span class="combo-file" onMouseEnter={fullTextIfCut(titles[k])}>{titles[k]}</span>
                 <span class="combo-sub">{sub.join(' · ')}</span>

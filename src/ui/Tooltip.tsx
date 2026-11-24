@@ -172,8 +172,8 @@ export function Tooltip() {
         {/* Decimal degrees: 5 places is about a meter, and pastes into map search boxes. */}
         <div class="tip-coords"><dt>{t('inspect.position')}</dt><dd class="mono coords">{f.lat.toFixed(5)}, {f.lon.toFixed(5)}</dd></div>
       </dl>
-      {isCombined(sel.track) && Number.isFinite(f.ele) && sel.track.combo.eleOffset && <div class="tip-amber">{eleOffsetText(sel.track.combo.eleOffset, sourceNames(sel, sel.track))}</div>}
-      {isCombined(sel.track) && <LogRows track={sel.track} names={sourceNames(sel, sel.track)} i={f.i} />}
+      {isCombined(sel.track) && Number.isFinite(f.ele) && sel.track.combo.eleOffset && <div class="tip-amber">{eleOffsetText(sel.track.combo.eleOffset, sourceNames(sel.track))}</div>}
+      {isCombined(sel.track) && <LogRows track={sel.track} names={sourceNames(sel.track)} i={f.i} />}
       {others.length > 0 && (
         <div class="tip-others">
           {others.map((o) => <div key={o.id}><Badge item={o.item} size="tiny" /><span class="mono small">{o.text}</span></div>)}
@@ -204,7 +204,7 @@ function LogRows({ track, names, i }: { track: ComboTrack; names: readonly strin
           : u === Use.Idle ? t('inspect.logIdle')
           : la !== la ? t('inspect.logNone')
           : t('inspect.logAway', { d });
-        return <li key={k} class={u === Use.LeftOut ? 'is-out' : undefined} data-log={names[k]}><SourceBadge track={track} k={k} name={names[k]} size="tiny" /><span><span class="sr-only">{t('combine.logLabel', { k: names[k] })}{t('label.sep')}</span>{text}</span></li>;
+        return <li key={k} class={u === Use.LeftOut ? 'is-out' : undefined} data-log={names[k]}><SourceBadge k={k} /><span><span class="sr-only">{t('combine.logLabel', { k: names[k] })}{t('label.sep')}</span>{text}</span></li>;
       })}
     </ul>
   );

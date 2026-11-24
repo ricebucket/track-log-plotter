@@ -238,27 +238,30 @@ describe("the combined track's card", () => {
   }
   const combo = () => S.items.value.find((x) => x.id === 'C')!.track as ComboTrack;
 
-  it('names its sources as the track list does: by the letters they had there', () => {
+  it('numbers its sources, its sub-tracks, in the order they were combined: not the letters they had in the list', () => {
     S.addLoaded([load('roosevelt-island-run.gpx'), load('stanford-drive-car.nmea'), load('stanford-drive-phone.gpx')]);
     render(<App Map={NoMap} />);
     tick('B', 'C');
     fireEvent.click(combineBtn());
     const row = document.querySelector('.track-row[data-track="D"]') as HTMLElement;
+    // The combined track's own name says which tracks of the list it was made from.
     expect(row.querySelector('.track-name')!.textContent).toBe('B+C Combined Track');
-    const badges = [...row.querySelectorAll('.combo-logs .badge')];
-    expect(badges.map((b) => b.textContent)).toEqual(['B', 'C']);
-    // The same shapes as in the list: the car's NMEA a square, the phone's GPX a circle.
-    expect(badges.map((b) => [b.classList.contains('square'), b.classList.contains('circle')])).toEqual([[true, false], [false, true]]);
+    // Its sources: 1 and 2, on round dots in the colors of their lines, not the list's lettered badges.
+    expect([...row.querySelectorAll('.combo-logs .log-num')].map((b) => b.textContent)).toEqual(['1', '2']);
+    expect(row.querySelectorAll('.combo-logs .badge')).toHaveLength(0);
+    expect(within(row).getByRole('button', { name: 'Hide source 1' })).toBeTruthy();
     fireEvent.click(within(row).getByRole('button', { name: 'Adjust' }));
-    expect([...row.querySelectorAll('.trust-corner text')].map((x) => x.textContent)).toEqual(['B', 'C']);
+    expect([...row.querySelectorAll('.trust-corner text')].map((x) => x.textContent)).toEqual(['1', '2']);
+    // The timeline's lanes for them, under the combined track's own.
+    expect([...document.querySelectorAll('.log-lane')].map((l) => [l.getAttribute('data-log'), l.querySelector('.log-num')?.textContent])).toEqual([['1', '1'], ['2', '2']]);
   });
 
   it('hides and shows each source by its own eye', () => {
     const row = combinedCarAndPhone();
-    fireEvent.click(within(row).getByRole('button', { name: 'Hide source B' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Hide source 2' }));
     expect(S.items.value.find((x) => x.id === 'C')!.logs).toEqual([true, false]);
     expect(within(row).getAllByRole('listitem')[1].textContent).toContain('hidden');
-    fireEvent.click(within(row).getByRole('button', { name: 'Show source B' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Show source 2' }));
     expect(S.items.value.find((x) => x.id === 'C')!.logs).toEqual([true, true]);
   });
 
@@ -268,7 +271,7 @@ describe("the combined track's card", () => {
     const handle = within(row).getByRole('slider', { name: 'Trust in each source' });
     fireEvent.keyDown(handle, { key: 'ArrowRight' });
     expect(combo().combo.sources.map((s) => s.trust)).toEqual([0.45, 0.55]);
-    expect(within(row).getByText('A at 45%, B at 55%')).toBeTruthy();
+    expect(within(row).getByText('1 at 45%, 2 at 55%')).toBeTruthy();
     fireEvent.keyDown(handle, { key: 'Home' });
     expect(within(row).getAllByText('equal').length).toBeGreaterThan(0);
     for (let k = 0; k < 4; k++) fireEvent.keyDown(handle, { key: 'ArrowLeft' });
@@ -311,7 +314,7 @@ describe("the combined track's card", () => {
     const handle = within(row).getByRole('slider', { name: 'Trust in each source' });
     for (let k = 0; k < 12; k++) fireEvent.keyDown(handle, { key: 'ArrowLeft' });
     expect(combo().combo.sources.map((s) => s.trust)).toEqual([1, 0]);
-    expect(within(row).getByText("Source B is at 0%: it only fills gaps, where no other source has a fix. Source A is at 100%: it's never left out, even where it disagrees with the others.")).toBeTruthy();
+    expect(within(row).getByText("Source 2 is at 0%: it only fills gaps, where no other source has a fix. Source 1 is at 100%: it's never left out, even where it disagrees with the others.")).toBeTruthy();
     // Short of 100%, neither line.
     fireEvent.keyDown(handle, { key: 'ArrowRight' });
     expect(within(row).queryByText(/at 100%|at 0%/)).toBeNull();
@@ -337,8 +340,8 @@ describe("the combined track's card", () => {
     const tip = document.querySelector('.tooltip') as HTMLElement;
     const logs = [...tip.querySelectorAll('.tip-logs li')].map((li) => li.textContent);
     expect(logs).toHaveLength(2);
-    expect(logs[0]).toMatch(/^ASource A: [\d.]+ m away$/);
-    expect(tip.querySelector('.tip-amber')?.textContent).toMatch(/^source B reads 3\d m lower than source A throughout$/);
+    expect(logs[0]).toMatch(/^1Source 1: [\d.]+ m away$/);
+    expect(tip.querySelector('.tip-amber')?.textContent).toMatch(/^source 2 reads 3\d m lower than source 1 throughout$/);
   });
 
   it('lists its sources, their clocks and the height difference on its Properties page', () => {
@@ -346,8 +349,8 @@ describe("the combined track's card", () => {
     fireEvent.click(within(row).getByRole('button', { name: /^Properties/ }));
     const logs = screen.getByRole('region', { name: 'Sources' });
     expect(within(logs).getAllByRole('listitem').map((li) => li.querySelector('.combo-file')!.textContent)).toEqual(['stanford-drive-car.nmea', 'stanford-drive-phone.gpx']);
-    expect(screen.getByText("Source B's clock read 3.0 s ahead of source A's: its times were made 3.0 s earlier to match.")).toBeTruthy();
-    expect(document.querySelector('.amber-note')?.textContent).toMatch(/^Source B reads a steady 3\d m lower than source A: one of them probably gives heights above the ellipsoid/);
+    expect(screen.getByText("Source 2's clock read 3.0 s ahead of source 1's: its times were made 3.0 s earlier to match.")).toBeTruthy();
+    expect(document.querySelector('.amber-note')?.textContent).toMatch(/^Source 2 reads a steady 3\d m lower than source 1: one of them probably gives heights above the ellipsoid/);
   });
 });
 

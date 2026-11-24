@@ -14,7 +14,7 @@ import { axisRange } from '../state/logic';
 import { fixAt, hasFixNear } from '../state/inspect';
 import { LEFT_OUT, LOG_COLORS, palette, UNKNOWN } from '../color/palettes';
 import { isCombined } from '../combine/combine';
-import { SourceBadge, sourceNames } from './Combined';
+import { SourceBadge } from './Combined';
 import { differentDays, fmtClock, fmtDateClock, fmtShortDate, isMidnight, offsetLabel, offsetMinutes, zoneCity } from '../time/zones';
 import { centerView, columns, graphRange, logColumns, MIN_ZOOM_MS, panView, playStep, skipGap, snapInto, snapTime, stepFix, tickStep, ticks, wheelZoom } from './timelineMath';
 import { labeled, measureName, valueText } from './labels';
@@ -209,7 +209,7 @@ function LogLane({ item, k, t0, t1, narrow, labelW, dpr }: { item: TrackItem; k:
   const h = narrow ? 9 : 12;
   const offset = S.offsets.value[item.id] ?? 0;
   const tr = item.track;
-  const name = isCombined(tr) ? sourceNames(item, tr)[k] : String(k + 1);
+  const name = String(k + 1);
   useEffect(() => {
     const el = canvas.current;
     const g = el?.getContext?.('2d');
@@ -233,7 +233,7 @@ function LogLane({ item, k, t0, t1, narrow, labelW, dpr }: { item: TrackItem; k:
     <div class="lane log-lane" data-track={item.id} data-log={name} style={{ height: `${h}px` }}>
       <div class="lane-label" style={{ width: `${labelW - 10}px` }}>
         <span class="badge-space" aria-hidden="true" />
-        {isCombined(tr) && <SourceBadge track={tr} k={k} name={name} size="tiny" />}
+        {isCombined(tr) && <SourceBadge k={k} />}
         {!narrow && <span class="lane-note">{t('timeline.logLane', { k: name })}</span>}
       </div>
       <canvas ref={canvas} class="lane-canvas" style={{ height: `${h}px` }} aria-hidden="true" />

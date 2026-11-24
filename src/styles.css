@@ -244,6 +244,9 @@ button:disabled { cursor: default; opacity: 0.5; }
 .tl-head { display: flex; align-items: center; gap: 10px; min-height: 36px; }
 .tl-time { font-size: 15px; font-weight: 700; white-space: nowrap; }
 .tl-divider { flex: none; width: 1px; height: 18px; background: var(--line); }
+/* The header's buttons keep their width and their label on one line (Chinese may break between any two characters,
+   so "缩放" would stack): the readout gives way instead. */
+.tl-head .btn-outline { flex: none; white-space: nowrap; }
 /* A header with little room (a window not much wider than a phone's, beside the panel): closer together, without the zone's offset, as on a phone. */
 .tl-head.is-tight { gap: 6px; }
 /* Every track hidden: said in place of the time. */
@@ -500,7 +503,11 @@ button:disabled { cursor: default; opacity: 0.5; }
 .combo-logs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .combo-logs li { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .combo-logs .eye { margin-left: -9px; width: 32px; height: 32px; }
-.combo-logs li.is-off .badge, .combo-logs li.is-off .combo-file { opacity: 0.5; }
+.combo-logs li.is-off .log-num, .combo-logs li.is-off .combo-file { opacity: 0.5; }
+/* A combined track's source (sub-track): its number on a dot in the color of its line; smaller in the fix card and the timeline. */
+.log-num { flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: #fff; font-size: 10.5px; font-weight: 800; line-height: 1; }
+.tip-logs .log-num { width: 16px; height: 16px; font-size: 9.5px; }
+.log-lane .log-num { width: 14px; height: 14px; font-size: 9px; }
 .combo-log { min-width: 0; display: flex; flex-direction: column; }
 .combo-file { font-size: 12.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .combo-sub { font-size: 11px; line-height: 15px; color: var(--muted); }

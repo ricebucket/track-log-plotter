@@ -278,9 +278,9 @@ test('combines two logs from select mode: the new track, its logs on the map and
   await expect(map).toHaveAttribute('data-log-out', /^[1-9]\d*$/);
   // On the timeline: a thin lane for each log under the combined track's lane.
   await expect(page.locator('.lane.log-lane')).toHaveCount(2);
-  await row.getByRole('button', { name: 'Hide source B' }).click();
+  await row.getByRole('button', { name: 'Hide source 2' }).click();
   await expect(page.locator('.lane.log-lane')).toHaveCount(1);
-  await row.getByRole('button', { name: 'Show source B' }).click();
+  await row.getByRole('button', { name: 'Show source 2' }).click();
 
   // Trust: open the line and drag the handle most of the way to log 2.
   await expect(row.locator('.trust-val')).toHaveText('equal');
@@ -292,7 +292,7 @@ test('combines two logs from select mode: the new track, its logs on the map and
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.8, box.y + box.height / 2, { steps: 6 });
   await page.mouse.up();
-  await expect(row.locator('.trust-val')).toHaveText(/^A at \d+%, B at \d+%$/);
+  await expect(row.locator('.trust-val')).toHaveText(/^1 at \d+%, 2 at \d+%$/);
   const [one, two] = (await row.locator('.trust-val').textContent())!.match(/\d+/g)!.map(Number);
   expect(two).toBeGreaterThan(one);
   // Clicking the center mark makes them equal again.
@@ -380,6 +380,34 @@ test('closes the fix card with its button and with a click on an empty spot', as
   const panel = (await page.locator('.panel').boundingBox())!;
   await page.mouse.click(panel.x + panel.width + 40, panel.y + 60);
   await expect(card).toHaveCount(0);
+});
+
+test("keeps the timeline's Fit label on one line in Chinese at every width: the readout gives way instead", async ({ page }) => {
+  // "缩放" may break between its two characters, where "Fit" can't break at all. The walk's readout is long.
+  await page.evaluate(() => localStorage.setItem('tlp.prefs.v1', JSON.stringify({ lang: 'zh' })));
+  await page.reload();
+  await open(page, 'lower-manhattan-walk.gpx');
+  await mapSettled(page);
+  const fit = page.locator('.tl-head .btn-outline', { hasText: '缩放' });
+  let seen = 0;
+  for (const width of [1440, 1280, 1120, 1024, 960, 900, 860, 820, 780, 740]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+    await page.mouse.move(lanes.x + lanes.width * 0.6, lanes.y + 20);
+    // Narrow enough, the header shows icons only, without the label.
+    if (!(await fit.count())) continue;
+    seen++;
+    const lines = await fit.evaluate((b) => {
+      const text = [...b.childNodes].find((n) => n.nodeType === Node.TEXT_NODE)!;
+      const r = document.createRange();
+      r.selectNodeContents(text);
+      return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size;
+    });
+    expect(lines, `${width} px wide`).toBe(1);
+    // And the header still fits its pane.
+    expect(await page.locator('.tl-head').evaluate((h) => h.scrollWidth - h.clientWidth), `${width} px wide`).toBeLessThanOrEqual(1);
+  }
+  expect(seen).toBeGreaterThan(3);
 });
 
 test('opens the Options menu above the fix card', async ({ page }) => {

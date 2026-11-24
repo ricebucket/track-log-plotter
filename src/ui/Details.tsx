@@ -151,9 +151,9 @@ export function Details({ id }: { id: string }) {
           {rows.map(([k, v, h]) => (<div key={k}><dt>{k}{h && <Computed text={h} />}</dt><dd>{v}</dd></div>))}
         </dl>
         {/* Next to the elevation figures: a steady difference between the logs' heights, not applied. */}
-        {isCombined(tr) && tr.combo.eleOffset && <p class="amber-note">{eleOffsetNote(tr.combo.eleOffset, sourceNames(item, tr))}</p>}
+        {isCombined(tr) && tr.combo.eleOffset && <p class="amber-note">{eleOffsetNote(tr.combo.eleOffset, sourceNames(tr))}</p>}
       </section>
-      {isCombined(tr) && <CombinedSections track={tr} names={sourceNames(item, tr)} titles={sourceTitles(item, tr)} />}
+      {isCombined(tr) && <CombinedSections track={tr} names={sourceNames(tr)} titles={sourceTitles(item, tr)} />}
 
       <section class="details-sec" aria-labelledby="d-fields">
         <h3 id="d-fields">{t('details.fields')}</h3>
@@ -210,7 +210,7 @@ function CombinedSections({ track, names, titles }: { track: ComboTrack; names: 
         <ul class="combo-logs details-logs">
           {sources.map((s, k) => (
             <li key={k} data-log={names[k]}>
-              <SourceBadge track={track} k={k} name={names[k]} />
+              <SourceBadge k={k} />
               <span class="combo-log">
                 <span class="combo-file">{titles[k]}</span>
                 <span class="combo-sub">{[formatName(s.track.format), t('details.fixesValue', { n: fmtNum(s.track.cols.n, loc, 0, 0), every: fmtNum(s.track.derived.stats.intervalS, loc, 1, 0) })].join(' · ')}</span>
