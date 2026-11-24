@@ -16,6 +16,13 @@ function files(dir: string, out: string[] = []): string[] {
 }
 
 describe('translations', () => {
+  it('defines each key once in each file (a second one would quietly replace the first)', () => {
+    for (const f of ['en-US.json', 'zh-CN.json']) {
+      const keys = [...readFileSync(join(ROOT, 'src', 'i18n', f), 'utf8').matchAll(/^\s*"([^"]+)"\s*:/gm)].map((m) => m[1]);
+      expect(keys.filter((k, i) => keys.indexOf(k) !== i), f).toEqual([]);
+    }
+  });
+
   it('has every key in both languages', () => {
     expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());
   });

@@ -125,17 +125,19 @@ describe('parseGpx', () => {
 describe('a logger that repeats its last position (i-gotU)', () => {
   /**
    * A walk north at 1.4 m/s, a fix a second for 400 s, as i-gotU's software writes it (speed in the Garmin
-   * extension). It repeats one fix from 21 s to 40 s (20 s, with a speed of 0) and another from 101 s to 260 s
-   * (160 s), each time writing fresh satellites as it goes.
+   * extension). It repeats the fix at 20 s until 40 s, and the one at 100 s until 260 s, writing fresh
+   * satellites as it goes; like the logger, it writes the speed of 0 from the fix it repeats on.
    */
-  function igotu(creator = 'igotU_GPS_WIN') {
+  function igotu(creator = 'igotU_GPS_WIN', jumpM = 0) {
     const t0 = Date.UTC(2026, 5, 14, 13, 0, 0);
     const held = (i: number) => (i > 20 && i <= 40) || (i > 100 && i <= 260);
-    let last = 0;
+    let last = [0, 0];
     const pts = Array.from({ length: 400 }, (_, i) => {
-      const north = held(i) ? last : 1.4 * i;
-      if (!held(i)) last = north;
-      return `<trkpt lat="${(40.78 + north / 111_195).toFixed(9)}" lon="-73.965000000"><time>${new Date(t0 + i * 1000).toISOString().replace('.000Z', 'Z')}</time><sat>${7 + (i % 3)}</sat><extensions><gpxtpx:TrackPointExtension><gpxtpx:speed>${held(i) ? '0.0' : '1.4'}</gpxtpx:speed></gpxtpx:TrackPointExtension></extensions></trkpt>`;
+      // jumpM: the fix at 20 s, which it repeats until 40 s, lands that far east of the path, as a position can.
+      const at = held(i) ? last : [1.4 * i, i === 20 ? jumpM : 0];
+      if (!held(i)) last = at;
+      const [north, east] = at;
+      return `<trkpt lat="${(40.78 + north / 111_195).toFixed(9)}" lon="${(-73.965 + east / 84_300).toFixed(9)}"><time>${new Date(t0 + i * 1000).toISOString().replace('.000Z', 'Z')}</time><sat>${7 + (i % 3)}</sat><extensions><gpxtpx:TrackPointExtension><gpxtpx:speed>${held(i) || held(i + 1) ? '0.0' : '1.4'}</gpxtpx:speed></gpxtpx:TrackPointExtension></extensions></trkpt>`;
     });
     return `<?xml version="1.0"?><gpx version="1.1" creator="${creator}" xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v2"><trk><trkseg>${pts.join('')}</trkseg></trk></gpx>`;
   }
@@ -143,29 +145,48 @@ describe('a logger that repeats its last position (i-gotU)', () => {
   it('drops the repeats when reading, and says how many', () => {
     const p = parseGpx(igotu());
     expect(p.cols.n).toBe(400 - 20 - 160);
-    expect(Array.from(p.cols.speed).filter((v) => v === 0)).toEqual([]);
     expect(p.notes).toContainEqual({ kind: 'repeatsDropped', count: 180, long: 1 });
-    // The step across 20 s of repeats is crossed; the one across 160 s isn't (it will be a gap).
     const at = (s: number) => Array.from(p.cols.t).indexOf(p.cols.t[0] + s * 1000);
+    // Every speed kept stays as recorded: the 0s of the fixes it went on to repeat too (only combining leaves those out).
+    expect(p.cols.speed[at(20)]).toBe(0);
+    expect(p.cols.speed[at(100)]).toBe(0);
+    expect(Array.from(p.cols.speed).filter((v) => v === 0)).toHaveLength(2);
+    // The step across 20 s of repeats is crossed; the one across 160 s isn't (it will be a gap).
     expect(p.bridged![at(41)]).toBe(1);
     expect(p.bridged![at(261)]).toBe(0);
     expect(Array.from(p.bridged!).reduce((a, b) => a + b, 0)).toBe(1);
   });
 
-  it('keeps the track whole across short stretches of repeats and shows no 0s, with a gap for the long one', () => {
+  it('keeps the track whole across short stretches of repeats, with a gap for the long one', () => {
     const r = parseText(igotu(), 'walk.gpx');
     if (!r.ok) throw new Error(r.error);
     const d = r.track.derived, t = r.track.cols.t, at = (s: number) => Array.from(t).indexOf(t[0] + s * 1000);
     expect(d.gap[at(41)]).toBe(0);
     expect(d.gap[at(261)]).toBe(1);
+    // Walking pace but for the two 0s it recorded; none of the repeats' 0s.
     expect(d.stats.maxKmh).toBeLessThan(5.1);
-    expect(Array.from(d.kmh).filter((v) => v < 1.5).length).toBeLessThan(3); // only the fixes either side of the gap
-    expect(noteText(r.track.notes.find((x) => x.kind === 'repeatsDropped')!)).toBe('180 fixes that only repeated the position before them were dropped: this logger repeats its last position until it has a new one. The track goes straight across such stretches; 1 longer than 2 minutes count as gaps.');
+    expect(Array.from(d.kmh).filter((v) => v < 4.9)).toEqual([0, 0]);
+    expect(noteText(r.track.notes.find((x) => x.kind === 'repeatsDropped')!)).toBe(
+      '180 fixes that only repeated the position before them were dropped: this logger repeats its last position until it has a new one. The track goes straight across such stretches.'
+      + ' 1 stretch longer than 2 minutes counts as a gap.');
+    // Without a long stretch, no word of one.
+    expect(noteText({ kind: 'repeatsDropped', count: 20, long: 0 })).not.toMatch(/longer than 2 minutes/);
   });
 
-  it("keeps other loggers' repeats: a logger standing still repeats its position", () => {
+  it('works out no speed from positions that jump: the fix it repeats keeps its recorded 0', () => {
+    // The fix at 20 s lands 28 m off the path, and the walk carries on along it: a speed worked out from
+    // the positions either side would be 11 km/h.
+    const r = parseText(igotu('igotU_GPS_WIN', 28), 'walk.gpx');
+    if (!r.ok) throw new Error(r.error);
+    const t = r.track.cols.t;
+    expect(r.track.derived.kmh[Array.from(t).indexOf(t[0] + 20_000)]).toBe(0);
+    expect(r.track.derived.stats.maxKmh).toBeLessThan(5.1);
+  });
+
+  it("keeps other loggers' repeats and their speeds: a logger standing still repeats its position", () => {
     const p = parseGpx(igotu('Garmin Connect'));
     expect(p.cols.n).toBe(400);
+    expect(p.cols.speed[20]).toBe(0);
     expect(p.bridged).toBeUndefined();
     expect(p.notes.some((x) => x.kind === 'repeatsDropped')).toBe(false);
   });

@@ -235,13 +235,16 @@ describe("the combined track's card", () => {
     expect(within(row).queryByRole('slider')).toBeNull();
   });
 
-  it('says a source at 0% only fills gaps', () => {
+  it('says a source at 0% only fills gaps, and the one at 100% is never left out', () => {
     const row = combinedCarAndPhone();
     fireEvent.click(within(row).getByRole('button', { name: 'Adjust' }));
     const handle = within(row).getByRole('slider', { name: 'Trust in each source' });
     for (let k = 0; k < 12; k++) fireEvent.keyDown(handle, { key: 'ArrowLeft' });
     expect(combo().combo.sources.map((s) => s.trust)).toEqual([1, 0]);
-    expect(within(row).getByText('Source B is at 0%: it only fills gaps, where no other source has a fix.')).toBeTruthy();
+    expect(within(row).getByText("Source B is at 0%: it only fills gaps, where no other source has a fix. Source A is at 100%: it's never left out, even where it disagrees with the others.")).toBeTruthy();
+    // Short of 100%, neither line.
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    expect(within(row).queryByText(/at 100%|at 0%/)).toBeNull();
   });
 
   it('works out a new version per animation frame while the handle is dragged', async () => {

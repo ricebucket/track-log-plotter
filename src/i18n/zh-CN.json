@@ -374,5 +374,10 @@
   "combine.sep": "，",
   "timeline.toPoint": "转到该点",
   "timeline.toPointHint": "地图上选中的点不在时间轴放大的范围内：将时间轴移到以它为中心。",
-  "note.repeatsDropped": {"other": "去掉了 {n} 个只重复上一个位置的定位点：这款记录器在没有新位置时会一直重复上一个位置。轨迹以直线跨过这些片段；其中 {long} 段超过 2 分钟，算作空缺。"}
+  "note.repeatsDropped": {"other": "去掉了 {n} 个只重复上一个位置的定位点：这款记录器在没有新位置时，会一直重复上一个位置。轨迹以直线跨过这些片段。"},
+  "note.repeatsLong": {"other": "其中 {n} 段超过 2 分钟，算作空缺。"},
+  "track.rename": "轨迹 {id} 的名称",
+  "track.fileName": "文件名：{file}",
+  "track.origName": "原名称：{name}",
+  "combine.fullTrust": "来源 {k} 为 100%：即使与其他来源不一致，也不会被剔除。"
 }

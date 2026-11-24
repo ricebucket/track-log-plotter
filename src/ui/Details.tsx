@@ -1,17 +1,17 @@
 import type { FieldKey } from '../model/types';
 import * as S from '../state/store';
 import { t } from '../state/store';
-import { fmtBytes, fmtDistance, fmtDuration, fmtEle, fmtNum, fmtPercent, fmtSpeed } from '../format';
+import { fmtDistance, fmtDuration, fmtEle, fmtNum, fmtPercent, fmtSpeed } from '../format';
 import { differentDays, fmtClock, fmtDate, fmtDateClock, localZoneId, offsetLabel, zoneCity } from '../time/zones';
-import type { TrackItem } from '../state/logic';
+import { trackName, type TrackItem } from '../state/logic';
 import { useEffect } from 'preact/hooks';
-import { formatName, noteText, problemBody, problemTitle, unitOf } from './labels';
+import { formatName, noteText, originalName, problemBody, problemTitle, trackTagline, unitOf } from './labels';
 import { Badge } from './Badge';
 import { IconBack, IconChevronRight, IconFlag, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
 import { isCombined, type ComboTrack } from '../combine/combine';
-import { SourceBadge, sourceNames } from './Combined';
+import { SourceBadge, sourceNames, sourceTitles } from './Combined';
 
 /**
  * For files whose times have no time zone: which zone they're read in. The
@@ -82,8 +82,10 @@ export function Details({ id }: { id: string }) {
       <div class="details-title">
         <Badge item={item} size="big" />
         <span class="details-name">
-          <span class="track-name">{tr.file}</span>
-          <span class="track-sub">{(isCombined(tr) ? [formatName(tr.format), t('combine.logs', { n: tr.combo.sources.length })] : [formatName(tr.format), fmtBytes(tr.sizeBytes, loc), tr.creator, tr.name]).filter(Boolean).join(' · ')}</span>
+          <span class="track-name">{trackName(item)}</span>
+          {/* Renamed: the name it came with too. */}
+          {item.customName !== undefined && <span class="details-orig">{originalName(tr)}</span>}
+          <span class="track-sub">{trackTagline(tr)}</span>
         </span>
       </div>
 
@@ -109,7 +111,7 @@ export function Details({ id }: { id: string }) {
         {/* Next to the elevation figures: a steady difference between the logs' heights, not applied. */}
         {isCombined(tr) && tr.combo.eleOffset && <p class="amber-note">{eleOffsetNote(tr.combo.eleOffset, sourceNames(item, tr))}</p>}
       </section>
-      {isCombined(tr) && <CombinedSections track={tr} names={sourceNames(item, tr)} />}
+      {isCombined(tr) && <CombinedSections track={tr} names={sourceNames(item, tr)} titles={sourceTitles(item, tr)} />}
 
       <section class="details-sec" aria-labelledby="d-fields">
         <h3 id="d-fields">{t('details.fields')}</h3>
@@ -152,7 +154,7 @@ function eleOffsetNote(o: { from: number; to: number; m: number }, names: readon
 }
 
 /** A combined track's logs, and how far each clock was moved to line up with the one that kept its own. */
-function CombinedSections({ track, names }: { track: ComboTrack; names: readonly string[] }) {
+function CombinedSections({ track, names, titles }: { track: ComboTrack; names: readonly string[]; titles: readonly string[] }) {
   const loc = S.locale.value;
   const { sources, ref } = track.combo;
   const clock = (k: number, s: number) => {
@@ -168,7 +170,7 @@ function CombinedSections({ track, names }: { track: ComboTrack; names: readonly
             <li key={k} data-log={names[k]}>
               <SourceBadge track={track} k={k} name={names[k]} />
               <span class="combo-log">
-                <span class="combo-file">{s.track.file}</span>
+                <span class="combo-file">{titles[k]}</span>
                 <span class="combo-sub">{[formatName(s.track.format), t('details.fixesValue', { n: fmtNum(s.track.cols.n, loc, 0, 0), every: fmtNum(s.track.derived.stats.intervalS, loc, 1, 0) })].join(' · ')}</span>
               </span>
             </li>

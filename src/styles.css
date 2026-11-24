@@ -99,6 +99,13 @@ button:disabled { cursor: default; opacity: 0.5; }
 .track-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 9px; padding: 2px 0; border: 0; background: transparent; text-align: left; }
 .track-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .track-name { font-size: 13.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The name hugs its text (with a little room, taken back by the margins): on the selected track, clicking it renames the track. */
+.track-main .track-name { align-self: flex-start; max-width: calc(100% + 8px); margin: -2px -4px; padding: 2px 4px; border-radius: 5px; }
+.track-name.can-rename { cursor: text; }
+.track-name.can-rename:hover { background: rgba(16, 24, 32, 0.07); }
+/* The text box takes the name's place exactly, its text where the name's was. */
+.track-name-input { width: calc(100% + 8px); min-width: 0; margin: -2px -4px; padding: 1px 3px; border: 1px solid #2f6cf6; border-radius: 5px; background: #fff; color: var(--ink); font-size: 13.5px; font-weight: 700; box-shadow: 0 0 0 3px rgba(47, 108, 246, 0.18); }
+.track-name-input:focus-visible { outline: none; }
 .track-sub { font-size: 11.5px; line-height: 15px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .problem-badge { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px 0 5px; border-radius: 10px; background: var(--amber-bg); color: var(--amber-ink); font-size: 11px; font-weight: 700; box-shadow: 0 0 0 1px var(--amber-ring); }
 .ramp { flex: none; display: flex; gap: 2px; }
@@ -193,6 +200,7 @@ button:disabled { cursor: default; opacity: 0.5; }
 .details-top { display: flex; align-items: center; gap: 8px; }
 .details-title { display: flex; align-items: center; gap: 10px; }
 .details-name { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.details-orig { font-size: 12px; line-height: 16px; color: var(--ink-2); overflow-wrap: anywhere; }
 .details-sec { display: flex; flex-direction: column; gap: 8px; }
 .details-sec h3 { margin: 0; font-size: 12.5px; font-weight: 800; }
 .kv { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
@@ -420,7 +428,10 @@ button:disabled { cursor: default; opacity: 0.5; }
 .bar-btn { flex: none; height: 34px; padding: 0 12px 0 10px; display: inline-flex; align-items: center; gap: 7px; border: 0; border-radius: 8px; background: rgba(255, 255, 255, 0.14); color: #fff; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
 .bar-btn:hover:not([aria-disabled='true']) { background: rgba(255, 255, 255, 0.24); }
 .bar-btn[aria-disabled='true'] { opacity: 0.45; cursor: default; }
-.bar-btn.remove.is-asking { background: #b3202c; }
+/* Remove reads red on the dark bar; asking "Remove 3?", it turns solid red. */
+.bar-btn.remove { color: #ffa3a3; background: rgba(255, 92, 92, 0.16); }
+.bar-btn.remove:hover:not([aria-disabled='true']) { background: rgba(255, 92, 92, 0.27); }
+.bar-btn.remove.is-asking, .bar-btn.remove.is-asking:hover:not([aria-disabled='true']) { background: #c42532; color: #fff; }
 .bar-count { flex: 1 1 auto; min-width: 0; text-align: center; font-size: 12px; color: rgba(255, 255, 255, 0.78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .select-why { margin: 6px 4px 0; font-size: 11.5px; line-height: 16px; color: var(--muted); }
 
@@ -464,4 +475,4 @@ button:disabled { cursor: default; opacity: 0.5; }
 
 /* Hover text, shown by the app after a short pause instead of the browser's own after a long one. */
 .tip-bubble-wrap { position: fixed; z-index: 80; display: flex; justify-content: center; pointer-events: none; }
-.tip-bubble { max-width: 100%; padding: 5px 9px; border-radius: 7px; background: var(--ink); color: #fff; font-size: 12px; line-height: 16px; font-weight: 500; overflow-wrap: anywhere; box-shadow: var(--shadow); }
+.tip-bubble { max-width: 100%; white-space: pre-line; padding: 5px 9px; border-radius: 7px; background: var(--ink); color: #fff; font-size: 12px; line-height: 16px; font-weight: 500; overflow-wrap: anywhere; box-shadow: var(--shadow); }

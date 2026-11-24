@@ -1,8 +1,10 @@
 // Text built from data: legend ranges, units and readout values.
-import type { ColorKey, HaloKey, MeasureKey, Note, Problem, Format } from '../model/types';
+import type { ColorKey, HaloKey, MeasureKey, Note, Problem, Format, LoadedTrack } from '../model/types';
 import type { Scale } from '../color/scale';
-import { fmtEle, fmtNum, fmtSpeed } from '../format';
+import { fmtBytes, fmtEle, fmtNum, fmtSpeed } from '../format';
 import { locale, t, units } from '../state/store';
+import { trackName, type TrackItem } from '../state/logic';
+import { isCombined } from '../combine/combine';
 
 export function unitOf(key: MeasureKey): string {
   const imp = units.value === 'imperial';
@@ -16,6 +18,22 @@ export function unitOf(key: MeasureKey): string {
 /** A file format's name, as people know it. */
 export function formatName(f: Format): string {
   return f === 'gpx' ? 'GPX' : f === 'nmea' ? 'NMEA' : f === 'fusion' ? 'Columbus Fusion' : t('format.combined');
+}
+
+/** The line under a track's name on its properties page: "GPX · 438 KB · its creator · the name in the file"; for a combined track, how many sources. */
+export function trackTagline(tr: LoadedTrack): string {
+  const parts = isCombined(tr) ? [formatName(tr.format), t('combine.logs', { n: tr.combo.sources.length })] : [formatName(tr.format), fmtBytes(tr.sizeBytes, locale.value), tr.creator, tr.name];
+  return parts.filter(Boolean).join(' · ');
+}
+
+/** What a renamed track was called: its file's name ("File name: …"), or a combined track's first name. */
+export function originalName(tr: LoadedTrack): string {
+  return isCombined(tr) ? t('track.origName', { name: tr.file }) : t('track.fileName', { file: tr.file });
+}
+
+/** A track name's hover text, one line each: its name in full, what it was called when renamed, its tagline. */
+export function nameTip(item: TrackItem): string {
+  return [trackName(item), item.customName !== undefined ? originalName(item.track) : '', trackTagline(item.track)].filter(Boolean).join('\n');
 }
 
 export function measureName(key: ColorKey | HaloKey): string {
@@ -93,7 +111,7 @@ export function noteText(n: Note): string {
     case 'gaps': return t('note.gaps', { n: n.count, longest: Math.round(n.longestS) });
     case 'zeroSats': return t('note.zeroSats', { n: n.count, stale: n.stale });
     case 'motion': return t('note.motion', { n: n.rate });
-    case 'repeatsDropped': return t('note.repeatsDropped', { n: n.count, long: n.long });
+    case 'repeatsDropped': return n.long ? `${t('note.repeatsDropped', { n: n.count })} ${t('note.repeatsLong', { n: n.long })}` : t('note.repeatsDropped', { n: n.count });
     default: return t(`note.${n.kind}`);
   }
 }

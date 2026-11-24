@@ -18,6 +18,31 @@ export interface TrackItem {
   logs?: boolean[];
   /** A combined track only: the letters its sources had in the list when it was made, in its sources' order. */
   sources?: string[];
+  /** A name the user gave the track; its file's own name stays in track.file. */
+  customName?: string;
+}
+
+/** What the app calls a track: the name the user gave it, else its file's name. */
+export function trackName(x: TrackItem): string {
+  return x.customName ?? x.track.file;
+}
+
+/**
+ * Names a track. Spaces at either end don't count; a blank name, or the
+ * file's own name, takes it back to its file's name. A track whose name
+ * doesn't change stays the same object.
+ */
+export function setName(items: TrackItem[], id: string, name: string): TrackItem[] {
+  const v = name.trim();
+  return items.map((x) => {
+    if (x.id !== id) return x;
+    const custom = v && v !== x.track.file ? v : undefined;
+    if (custom === x.customName) return x;
+    const next = { ...x };
+    if (custom === undefined) delete next.customName;
+    else next.customName = custom;
+    return next;
+  });
 }
 
 // Tracks never change after loading, so a number per track identifies its data.

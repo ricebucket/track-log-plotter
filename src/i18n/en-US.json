@@ -374,5 +374,10 @@
   "combine.sep": ", ",
   "timeline.toPoint": "Go to point",
   "timeline.toPointHint": "The point picked on the map is outside the zoomed part of the timeline: center the timeline on it.",
-  "note.repeatsDropped": {"one": "1 fix that only repeated the position before it was dropped: this logger repeats its last position until it has a new one. The track goes straight across such stretches; {long} longer than 2 minutes count as gaps.", "other": "{n} fixes that only repeated the position before them were dropped: this logger repeats its last position until it has a new one. The track goes straight across such stretches; {long} longer than 2 minutes count as gaps."}
+  "note.repeatsDropped": {"one": "1 fix that only repeated the position before it was dropped: this logger repeats its last position until it has a new one. The track goes straight across such stretches.", "other": "{n} fixes that only repeated the position before them were dropped: this logger repeats its last position until it has a new one. The track goes straight across such stretches."},
+  "note.repeatsLong": {"one": "1 stretch longer than 2 minutes counts as a gap.", "other": "{n} stretches longer than 2 minutes count as gaps."},
+  "track.rename": "Name of track {id}",
+  "track.fileName": "File name: {file}",
+  "track.origName": "Original name: {name}",
+  "combine.fullTrust": "Source {k} is at 100%: it's never left out, even where it disagrees with the others."
 }

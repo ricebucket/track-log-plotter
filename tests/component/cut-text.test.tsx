@@ -41,12 +41,12 @@ describe('fullTextIfCut', () => {
     expect(button.getAttribute('data-tip')).toBe('Properties & time zone');
   });
 
-  it('shows a cut-off track name in full when the pointer is on it in the track list', () => {
+  it('names a track in the list in full in its hover text when it is cut off (and always: see rename.test.tsx)', () => {
     S.addLoaded([{ ...load('central-park-loop.nmea'), file: 'a-track-log-with-a-name-far-too-long-for-the-panel.nmea' }]);
     const { container } = render(<App Map={() => <div />} />);
     const name = container.querySelector('.track-row .track-name')!;
     widths(name, 420, 180);
     fireEvent.mouseEnter(name);
-    expect(name.getAttribute('data-tip')).toBe('a-track-log-with-a-name-far-too-long-for-the-panel.nmea');
+    expect(name.getAttribute('data-tip')!.split('\n')[0]).toBe('a-track-log-with-a-name-far-too-long-for-the-panel.nmea');
   });
 });

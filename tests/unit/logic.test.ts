@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addCombined, addTracks, alignOffsets, applyToAll, axisRange, LOAD_LIMIT, nearestIndex, removeTrack, removeTracks, setColor, setHalo, setLogShown, setVisible, SHOW_LIMIT, type TrackItem } from '../../src/state/logic';
+import { addCombined, addTracks, alignOffsets, applyToAll, axisRange, LOAD_LIMIT, nearestIndex, removeTrack, removeTracks, replaceTrack, setColor, setHalo, setLogShown, setName, setVisible, SHOW_LIMIT, trackName, type TrackItem } from '../../src/state/logic';
 import { combineTracks } from '../../src/combine/combine';
 import { load } from '../helpers/fixtures';
 
@@ -112,5 +112,41 @@ describe('combined tracks in the list', () => {
     expect(off.find((x) => x.id === 'C')!.logs).toEqual([true, false]);
     expect(setLogShown(off, 'A', 0, false)).toEqual(off); // a log's own track has no log lines
     expect(removeTracks(c.items, ['A', 'C']).map((x) => x.id)).toEqual(['B']);
+  });
+});
+
+describe('naming a track', () => {
+  const list = () => addTracks([], [ride, other]).items;
+
+  it("goes by its file's name until the user names it", () => {
+    const items = list();
+    expect(items.map(trackName)).toEqual(['central-park-loop.nmea', 'central-park-loop-vendor.gpx']);
+    const named = setName(items, 'B', 'Reservoir loop');
+    expect(named.map(trackName)).toEqual(['central-park-loop.nmea', 'Reservoir loop']);
+    // The file's own name is kept, and the other track is the same object.
+    expect(named[1].track.file).toBe('central-park-loop-vendor.gpx');
+    expect(named[0]).toBe(items[0]);
+  });
+
+  it("drops spaces at either end; a blank name, or the file's own, takes the file's name back", () => {
+    const named = setName(list(), 'A', '  Reservoir loop  ');
+    expect(named[0].customName).toBe('Reservoir loop');
+    for (const back of ['', '   ', 'central-park-loop.nmea', ' central-park-loop.nmea ']) {
+      const r = setName(named, 'A', back);
+      expect(trackName(r[0])).toBe('central-park-loop.nmea');
+      expect('customName' in r[0]).toBe(false);
+    }
+  });
+
+  it('leaves a track whose name stays the same as it was', () => {
+    const named = setName(list(), 'A', 'Reservoir loop');
+    expect(setName(named, 'A', 'Reservoir loop ')[0]).toBe(named[0]);
+    const items = list();
+    expect(setName(items, 'A', 'central-park-loop.nmea')[0]).toBe(items[0]);
+  });
+
+  it('keeps its name when its track is worked out again (a combined track after a trust change)', () => {
+    const named = setName(list(), 'A', 'Reservoir loop');
+    expect(trackName(replaceTrack(named, 'A', run)[0])).toBe('Reservoir loop');
   });
 });

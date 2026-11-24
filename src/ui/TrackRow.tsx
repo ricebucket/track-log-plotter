@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { MeasureKey } from '../model/types';
-import type { TrackItem } from '../state/logic';
+import { trackName, type TrackItem } from '../state/logic';
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { palette, haloExtra, haloStyle, CASING } from '../color/palettes';
@@ -8,7 +8,7 @@ import { Badge } from './Badge';
 import { timeShares, type Scale } from '../color/scale';
 import { fmtDistance, fmtDuration, fmtPercent, fmtSpeed } from '../format';
 import { differentDays, fmtShortDate } from '../time/zones';
-import { formatName, measureName, measureTitle, stepLabels, unitOf } from './labels';
+import { formatName, measureName, measureTitle, nameTip, originalName, stepLabels, unitOf } from './labels';
 import { IconCheck, IconChevronRight, IconCopy, IconDoc, IconEye, IconEyeOff, IconTrash, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
@@ -45,6 +45,38 @@ export function TrackRow({ item }: { item: TrackItem }) {
   // In select mode the eye is a tick box, and the whole row ticks it.
   const selecting = S.selecting.value;
   const tick = selecting && S.ticked.value.includes(item.id);
+  // The selected track's name renames it: clicking it (or F2) turns it into a text box.
+  const name = trackName(item);
+  const canRename = sel && !selecting;
+  const [editing, setEditing] = useState(false);
+  const main = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => { if (!canRename) setEditing(false); }, [canRename]);
+  // Enter or Escape hands the keyboard back to the row.
+  useEffect(() => {
+    if (editing || !refocus.current) return;
+    refocus.current = false;
+    main.current?.focus();
+  }, [editing]);
+  const stopEditing = (back: boolean) => { refocus.current = back; setEditing(false); };
+  const inner = (
+    <>
+      <Badge item={item} />
+      <span class="track-text">
+        {editing ? <NameBox item={item} done={stopEditing} /> : (
+          <span class={`track-name${canRename ? ' can-rename' : ''}`} data-tip={nameTip(item)}>{name}</span>
+        )}
+        {item.customName !== undefined && !editing && <span class="sr-only">{originalName(tr)}</span>}
+        <span class="track-sub" title={`${t('stat.distance')}: ${explain.distance()}`}>{sub}</span>
+        {problems > 0 && (
+          <span class="problem-badge"><IconWarn size={11} />{t('track.problems', { n: problems })}</span>
+        )}
+      </span>
+      <span class="ramp" aria-hidden="true">
+        {ramp.map((c, i) => <span key={i} style={{ background: c }} />)}
+      </span>
+    </>
+  );
 
   return (
     <div ref={row} class={`track-row${sel && !selecting ? ' is-selected' : ''}${item.vis ? '' : ' is-hidden'}${tick ? ' is-ticked' : ''}`} data-track={item.id}>
@@ -62,28 +94,67 @@ export function TrackRow({ item }: { item: TrackItem }) {
             {item.vis ? <IconEye /> : <IconEyeOff />}
           </button>
         )}
-        <button
-          type="button" class="track-main" {...(selecting ? { role: 'checkbox', 'aria-checked': tick ? 'true' : 'false', 'aria-label': `${t('select.track', { id: item.id })}: ${tr.file}` } : { 'aria-expanded': sel ? 'true' : 'false' })}
-          onClick={() => (selecting ? S.toggleTick(item.id) : S.select(item.id))}
-        >
-          <Badge item={item} />
-          <span class="track-text">
-            <span class="track-name" onMouseEnter={fullTextIfCut(tr.file)}>{tr.file}</span>
-            <span class="track-sub" title={`${t('stat.distance')}: ${explain.distance()}`}>{sub}</span>
-            {problems > 0 && (
-              <span class="problem-badge"><IconWarn size={11} />{t('track.problems', { n: problems })}</span>
-            )}
-          </span>
-          <span class="ramp" aria-hidden="true">
-            {ramp.map((c, i) => <span key={i} style={{ background: c }} />)}
-          </span>
-        </button>
+        {/* A text box can't sit inside a button: while renaming, the row is a plain box. */}
+        {editing ? <div class="track-main is-editing">{inner}</div> : (
+          <button
+            ref={main} type="button" class="track-main"
+            {...(selecting ? { role: 'checkbox', 'aria-checked': tick ? 'true' : 'false', 'aria-label': `${t('select.track', { id: item.id })}: ${name}` } : { 'aria-expanded': sel ? 'true' : 'false' })}
+            {...(canRename ? { 'aria-keyshortcuts': 'F2' } : {})}
+            onClick={(e) => {
+              if (selecting) S.toggleTick(item.id);
+              // On the selected track, a click on the name renames it; anywhere else on the row, as before.
+              else if (canRename && (e.target as Element).closest?.('.track-name')) setEditing(true);
+              else S.select(item.id);
+            }}
+            onKeyDown={canRename ? (e) => { if (e.key === 'F2') { e.preventDefault(); setEditing(true); } } : undefined}
+          >
+            {inner}
+          </button>
+        )}
       </div>
       {S.limitNotice.value === item.id && (
         <div class="notice" role="status"><IconWarn size={14} /><span>{t('track.limit')}</span></div>
       )}
       {sel && !selecting && <TrackDetailsInline item={item} />}
     </div>
+  );
+}
+
+/**
+ * The text box a track's name turns into, holding the name with all of it
+ * selected. Enter, or clicking away, keeps what's typed; Escape keeps the old
+ * name. A blank name, or the file's own, goes back to the file's name.
+ */
+function NameBox({ item, done }: { item: TrackItem; done: (refocus: boolean) => void }) {
+  const box = useRef<HTMLInputElement>(null);
+  const [value, setValue] = useState(() => trackName(item));
+  const typed = useRef(value);
+  const over = useRef(false);
+  const finish = (keep: boolean, refocus: boolean) => {
+    if (over.current) return;
+    over.current = true;
+    if (keep) S.renameTrack(item.id, typed.current);
+    done(refocus);
+  };
+  useLayoutEffect(() => {
+    box.current?.focus();
+    box.current?.select();
+    // Closed some other way (another track got selected): what's typed is kept.
+    return () => { if (!over.current) { over.current = true; S.renameTrack(item.id, typed.current); } };
+  }, []);
+  return (
+    <input
+      ref={box} class="track-name-input" type="text" value={value} maxLength={200}
+      aria-label={t('track.rename', { id: item.id })} spellcheck={false} autoComplete="off" enterKeyHint="done"
+      onInput={(e) => { typed.current = e.currentTarget.value; setValue(typed.current); }}
+      onKeyDown={(e) => {
+        if (e.isComposing) return; // Enter or Escape for a input method's word, not for the box
+        if (e.key === 'Enter') { e.preventDefault(); finish(true, true); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false, true); }
+      }}
+      // Switching to another window isn't clicking away: the box is still there to come back to.
+      onBlur={() => { if (typeof document.hasFocus !== 'function' || document.hasFocus()) finish(true, false); }}
+    />
   );
 }
 

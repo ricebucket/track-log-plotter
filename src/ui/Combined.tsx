@@ -2,7 +2,7 @@
 // counts, its typical error) and how much to trust each, set by dragging a
 // handle on a line (two logs) or in a triangle (three logs).
 import { useRef, useState } from 'preact/hooks';
-import type { TrackItem } from '../state/logic';
+import { trackName, type TrackItem } from '../state/logic';
 import * as S from '../state/store';
 import { t } from '../state/store';
 import type { ComboTrack } from '../combine/combine';
@@ -18,6 +18,16 @@ export function sourceNames(item: TrackItem, track: ComboTrack): string[] {
   return track.combo.sources.map((_, k) => item.sources?.[k] ?? String(k + 1));
 }
 
+/** What each source is called in the list, renamed or not; once it has left the list, its file's name. */
+export function sourceTitles(item: TrackItem, track: ComboTrack): string[] {
+  const list = S.items.value;
+  return track.combo.sources.map((s, k) => {
+    // The same track, or (its time zone changed since) the same file under the letter it had.
+    const x = list.find((it) => it.track === s.track) ?? list.find((it) => it.id === item.sources?.[k] && it.track.file === s.track.file);
+    return x ? trackName(x) : s.track.file;
+  });
+}
+
 /** A source's badge, as in the track list (its letter, its file's shape), in the color of its line on the map. */
 export function SourceBadge({ track, k, name, size = 'small' }: { track: ComboTrack; k: number; name: string; size?: 'small' | 'tiny' }) {
   const f = track.combo.sources[k].track.format;
@@ -31,11 +41,12 @@ export function sharesText(trust: readonly number[], names: readonly string[]): 
   return trust.map((v, k) => t('combine.share', { k: names[k], p: fmtPercent(v, loc) })).join(t('combine.sep'));
 }
 
-/** What a source at 0% trust still does: fills gaps. */
+/** What a source at 0% trust still does (fills gaps), and what one with all the trust gets: never left out. */
 function zeroText(trust: readonly number[], names: readonly string[]): string | null {
   const zero = trust.flatMap((v, k) => (v < 0.005 ? [names[k]] : []));
-  if (zero.length === 1) return t('combine.zeroOne', { k: zero[0] });
-  if (zero.length === 2) return t('combine.zeroTwo', { a: zero[0], b: zero[1], c: names[trust.findIndex((v) => v >= 0.005)] });
+  const full = zero.length === trust.length - 1 ? ` ${t('combine.fullTrust', { k: names[trust.findIndex((v) => v >= 0.005)] })}` : '';
+  if (zero.length === 1) return t('combine.zeroOne', { k: zero[0] }) + full;
+  if (zero.length === 2) return t('combine.zeroTwo', { a: zero[0], b: zero[1], c: names[trust.findIndex((v) => v >= 0.005)] }) + full;
   return null;
 }
 
@@ -45,6 +56,7 @@ export function CombinedLogs({ item, track }: { item: TrackItem; track: ComboTra
   const src = track.combo.sources;
   const trust = src.map((s) => s.trust);
   const names = sourceNames(item, track);
+  const titles = sourceTitles(item, track);
   const zero = zeroText(trust, names);
   const hid = `combo-${item.id}`;
   return (
@@ -63,7 +75,7 @@ export function CombinedLogs({ item, track }: { item: TrackItem; track: ComboTra
               </button>
               <SourceBadge track={track} k={k} name={names[k]} />
               <span class="combo-log">
-                <span class="combo-file" onMouseEnter={fullTextIfCut(s.track.file)}>{s.track.file}</span>
+                <span class="combo-file" onMouseEnter={fullTextIfCut(titles[k])}>{titles[k]}</span>
                 <span class="combo-sub">{sub.join(' · ')}</span>
               </span>
             </li>

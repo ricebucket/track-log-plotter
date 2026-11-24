@@ -36,7 +36,7 @@ function combined(tracks: LoadedTrack[], trust?: number[]): ComboTrack {
 }
 
 // ---------- synthetic walks in Central Park ----------
-interface Walk { offsetM?: number; shiftS?: number; seconds?: number; gap?: [number, number]; hold?: [number, number]; holds?: (i: number) => boolean; holdSpeed?: number; creator?: string; hdop?: (i: number) => number; seed?: number; drop?: number[]; speed?: boolean; ele?: number }
+interface Walk { offsetM?: number; shiftS?: number; seconds?: number; gap?: [number, number]; hold?: [number, number]; holds?: (i: number) => boolean; holdSpeed?: number; zero?: (i: number) => boolean; creator?: string; hdop?: (i: number) => number; seed?: number; drop?: number[]; speed?: boolean; ele?: number }
 /**
  * A walk at 1.5 m/s, a fix a second, as GPX: east for 150 s, then north (a clock
  * offset only shows where the way turns). `offsetM` puts it that far north.
@@ -59,7 +59,7 @@ function walk(o: Walk = {}): LoadedTrack {
     if (o.gap && i >= o.gap[0] && i < o.gap[1]) continue;
     if (o.drop?.includes(i)) continue;
     const time = new Date(t0 + i * 1000).toISOString().replace('.000Z', 'Z');
-    const extra = `${o.ele === undefined ? '' : `<ele>${o.ele}</ele>`}${o.hdop ? `<hdop>${o.hdop(i).toFixed(1)}</hdop>` : ''}${o.speed === false ? '' : `<extensions><gpxtpx:TrackPointExtension><gpxtpx:speed>${holding && o.holdSpeed !== undefined ? o.holdSpeed.toFixed(2) : '1.50'}</gpxtpx:speed></gpxtpx:TrackPointExtension></extensions>`}`;
+    const extra = `${o.ele === undefined ? '' : `<ele>${o.ele}</ele>`}${o.hdop ? `<hdop>${o.hdop(i).toFixed(1)}</hdop>` : ''}${o.speed === false ? '' : `<extensions><gpxtpx:TrackPointExtension><gpxtpx:speed>${holding && o.holdSpeed !== undefined ? o.holdSpeed.toFixed(2) : o.zero?.(i) ? '0.00' : '1.50'}</gpxtpx:speed></gpxtpx:TrackPointExtension></extensions>`}`;
     lines.push(`<trkpt lat="${lat.toFixed(7)}" lon="${lon.toFixed(7)}"><time>${time}</time>${extra}</trkpt>`);
   }
   const gpx = `<?xml version="1.0"?><gpx version="1.1" creator="${o.creator ?? 'test'}" xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v2"><trk><trkseg>${lines.join('')}</trkseg></trk></gpx>`;
@@ -199,6 +199,35 @@ describe('combining logs: the Stanford drive', () => {
   });
 });
 
+describe('a source trusted 100%', () => {
+  // The phone jumps off the road around 691-711 s, and is left out there; with all the trust in it, it isn't.
+  // Both versions keep the phone's clock (it's trusted most in each), so their seconds line up.
+  const most = combined([car, phone], [0.01, 0.99]);
+  const all = recombine(most, [0, 1]);
+  const leftOut = (c: ComboTrack) => Array.from(c.combo.use[1]).flatMap((u, i) => (u === Use.LeftOut ? [i] : []));
+
+  it('is never left out: where it was, the combined track is that source', () => {
+    const out = leftOut(most);
+    expect(out.length).toBeGreaterThanOrEqual(10);
+    expect(leftOut(all)).toEqual([]);
+    for (const i of out) {
+      expect(all.combo.use[1][i]).toBe(Use.Used);
+      expect(all.combo.use[0][i]).toBe(Use.Idle); // at 0%, not needed there
+      expect(metres(all.cols.lat[i], all.cols.lon[i], all.combo.srcLat[1][i], all.combo.srcLon[1][i])).toBeLessThan(0.01);
+    }
+  });
+
+  it('is the same from a trust change as from a fresh combination', () => {
+    const fresh = combined([car, phone], [0, 1]);
+    expect(Array.from(fresh.combo.use[1])).toEqual(Array.from(all.combo.use[1]));
+    expect(Array.from(fresh.cols.lat)).toEqual(Array.from(all.cols.lat));
+  });
+
+  it('takes nothing from leaving out short of 100%: at 99% the phone is still left out in its jump', () => {
+    expect(leftOut(most)).toEqual(leftOut(combined([car, phone], [0.4, 0.6])));
+  });
+});
+
 describe('combining logs: corner cases', () => {
   // A logger that repeats its last fix while it has no new one (i-gotU, recording a speed of 0 meanwhile):
   // the repeats are dropped when its file is read, and the step across them isn't a gap.
@@ -247,6 +276,42 @@ describe('combining logs: corner cases', () => {
     // And its speed never drops to the stuck log's recorded 0s.
     const slow = Array.from(c.cols.speed).filter((v, i) => (c.cols.t[i] - T0) / 1000 < 140 && v < 1).length;
     expect(slow).toBe(0);
+  });
+
+  it("leaves out a recorded 0 at a fix that moved, and runs that log's speed straight across the hold after it", () => {
+    // Like the logger: the fix at 100 s moves on but already says 0, then it repeats that fix until 140 s.
+    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [100, 140], holdSpeed: 0, zero: (i) => i === 100, creator: IGOTU });
+    const T0 = moving.cols.t[0];
+    // On its own the log keeps what it recorded.
+    const j = stuck.cols.t.findIndex((t) => t === T0 + 100_000);
+    expect(stuck.cols.speed[j]).toBe(0);
+    expect(stuck.derived.kmh[j]).toBe(0);
+    // Combined, its 0 never pulls the speed down: at 100 s and all through the hold, walking pace.
+    const c = combined([moving, stuck]);
+    const at = (s: number) => c.cols.t.findIndex((t) => t === T0 + s * 1000);
+    for (let s = 100; s < 140; s++) expect(Math.abs(c.cols.speed[at(s)] - 1.5)).toBeLessThan(0.05);
+  });
+
+  it('still counts a recorded 0 where the position stayed put: that log stood still', () => {
+    // Its fixes from 101 s to 139 s repeat the one at 100 s, with a speed of 0, and it keeps them (not a logger
+    // whose repeats are dropped). The other walks on; neither is believed over the other, so both count.
+    const moving = walk({ seed: 2 }), still = walk({ seed: 3, offsetM: 3, hold: [100, 140], holdSpeed: 0 });
+    const c = combined([moving, still]);
+    const T0 = moving.cols.t[0], i = c.cols.t.findIndex((t) => t === T0 + 120_000);
+    expect(c.combo.use[1][i]).toBe(Use.Used);
+    expect(c.cols.speed[i]).toBeLessThan(1);
+  });
+
+  it('has no speed at a second where no log has one, rather than one worked out from its points', () => {
+    // The first log's fix at 149 s moves on but says 0, and a gap follows: nothing to run its speed to.
+    // The second log stops at 100 s.
+    const a = walk({ seed: 2, gap: [150, 200], zero: (i) => i === 149 }), b = walk({ seed: 3, offsetM: 3, seconds: 100 });
+    const c = combined([a, b]);
+    const i = c.cols.t.findIndex((t) => t === a.cols.t[0] + 149_000);
+    expect(c.combo.use[0][i]).toBe(Use.Used);
+    expect(c.cols.speed[i]).toBeNaN();
+    expect(c.derived.kmh[i]).toBeNaN();
+    expect(c.derived.stats.maxKmh).toBeLessThan(5.6);
   });
 
   it('works out an elevation offset only from the seconds both logs have', () => {

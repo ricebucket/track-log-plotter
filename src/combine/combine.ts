@@ -16,9 +16,14 @@
 //     those repeats dropped when its file is read: see parse/gpx.)
 //  5. Each logger's typical error from the spread between the logs.
 //  6. A log too far from the others to be believed is left out at that second.
+//     That is only marked (its values stay), so a log trusted 100% keeps
+//     every second it has: it is never left out.
 //  7. Weights: trust / error^2. A log at 0% trust only fills gaps.
 //  8. Position, elevation (as recorded), speed and course: weighted averages
-//     of the logs' own values. Speed never comes from the combined points.
+//     of the logs' own values. Speed never comes from the combined points. A
+//     recorded speed of 0 at a fix that moved from the one before is left out
+//     (the log runs straight between its speeds either side instead); a 0
+//     where the position stayed put is a stop, and counts.
 //  9. A steady elevation offset between logs is worked out, not applied.
 //     Where the logs giving the height change, grade and climb don't reach
 //     across (the height may jump there by that offset).
@@ -107,12 +112,26 @@ function toSrc(tr: LoadedTrack, lat0: number, lon0: number): Src {
   const c = tr.cols, n = c.n, d = tr.derived;
   const kx = 111_320 * Math.cos((lat0 * Math.PI) / 180), ky = 110_540;
   const x = new Float64Array(n), y = new Float64Array(n), v = new Float64Array(n);
-  const fromFile = d.speedFromFile;
+  const fromFile = d.speedFromFile, gap = d.gap;
+  let dropped = 0;
   for (let i = 0; i < n; i++) {
     x[i] = (c.lon[i] - lon0) * kx; y[i] = (c.lat[i] - lat0) * ky;
-    // The log's own speed: recorded where it has one, else what the app works out for it alone.
+    // The log's own speed: recorded where it has one, else what the app works out for it alone. A recorded 0
+    // at a fix that moved from the one before can't be right (a logger that holds its last fix writes it as
+    // it starts holding): left out here only; the log on its own keeps it.
     const sp = c.speed[i];
+    const moved = i > 0 && !gap[i] && (c.lat[i] !== c.lat[i - 1] || c.lon[i] !== c.lon[i - 1]);
+    if (fromFile && sp === 0 && moved) { v[i] = NaN; dropped++; continue; }
     v[i] = fromFile && sp === sp ? sp : d.kmh[i] / 3.6;
+  }
+  // A speed left out is skipped, not replaced: at each second the log's speed runs straight between its nearest
+  // fixes that have one, as its position runs between fixes. Without one on each side before a gap, it has none.
+  for (let i = 0; dropped && i < n; i++) {
+    if (v[i] === v[i]) continue;
+    let a = i, b = i;
+    while (a > 0 && !gap[a]) { a--; if (v[a] === v[a]) break; }
+    while (b < n - 1 && !gap[b + 1]) { b++; if (v[b] === v[b]) break; }
+    if (a < i && b > i && v[a] === v[a] && v[b] === v[b]) v[i] = v[a] + ((v[b] - v[a]) * (c.t[i] - c.t[a])) / (c.t[b] - c.t[a]);
   }
   // Accuracy over time, and what it's measured against: kept since the log loaded.
   const hasH = tr.fields.includes('hdop');
@@ -336,6 +355,10 @@ function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: s
   const lat = new Float64Array(n), lon = new Float64Array(n), oEle = new Float32Array(n), speed = new Float32Array(n), course = new Float32Array(n);
   const use = new Uint8Array(n * K), eleBreak = new Uint8Array(n);
   const shareSum = new Float64Array(K), shareN = new Float64Array(K), w = new Float64Array(K), counted = new Int8Array(K);
+  // The one log with any trust, when every other is at 0%: it is never left out, so the track is that log
+  // wherever it has a fix (and the others only fill its gaps).
+  let full = -1;
+  for (let k = 0; k < K; k++) if (trust[k] > 0) full = full === -1 ? k : -2;
   let prevEleMask = -1;
   for (let i = 0; i < n; i++) {
     const b = idx[i] * K, u = i * K;
@@ -343,7 +366,7 @@ function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: s
     for (let k = 0; k < K; k++) {
       const j = b + k;
       if (x[j] !== x[j]) continue; // Use.Absent
-      if (left[j]) { use[u + k] = Use.LeftOut; continue; }
+      if (left[j] && k !== full) { use[u + k] = Use.LeftOut; continue; }
       counted[nc++] = k;
       if (trust[k] > 0) nTrusted++;
     }

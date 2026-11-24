@@ -15,7 +15,7 @@ export function Toasts() {
       {n && (
         <div class="toast" role="status">
           <IconWarn size={16} />
-          <span>{t('toast.problems', { file: n.file, n: n.problems })}</span>
+          <span>{t('toast.problems', { file: S.nameFor(n.id, n.file), n: n.problems })}</span>
           <button type="button" class="btn-amber" onClick={() => S.openDetails(n.id)}>{t('toast.showDetails')}</button>
           <button type="button" class="icon-btn" aria-label={t('common.dismiss')} title={t('common.dismiss')} onClick={() => { S.loadNotice.value = null; }}><IconClose size={14} /></button>
         </div>
@@ -42,7 +42,7 @@ export function Toasts() {
 /** What pressing Combine ran into: a time zone to check, the same recording twice, logs that may not be one trip. */
 function ComboToast({ notice: n }: { notice: S.ComboNotice }) {
   const dismiss = () => { S.comboNotice.value = null; };
-  const text = n.kind === 'zone' ? t('combine.zone', { file: n.file })
+  const text = n.kind === 'zone' ? t('combine.zone', { file: S.nameFor(n.id, n.file) })
     : n.kind === 'duplicate' ? t('combine.duplicate')
     : n.kind === 'apart' ? t('combine.apart')
     : n.kind === 'full' ? t('combine.full')

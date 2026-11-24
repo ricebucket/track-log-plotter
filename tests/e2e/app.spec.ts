@@ -180,7 +180,7 @@ test('keeps Properties and Remove? on one line inside the card in a wide fallbac
   await expect(page.locator('.tip-bubble')).toHaveText('Properties & time zone');
 });
 
-test('shows a track name cut off in the list in full on hover, and only then', async ({ page }) => {
+test("shows a track's name in full on hover, with its file's line from the properties page, cut off or not", async ({ page }) => {
   const long = 'central-park-loop-with-a-very-long-file-name-from-the-logger-2026-10-17.gpx';
   await openAs(page, 'central-park-loop-garmin.gpx', long);
   await openAs(page, 'central-park-loop-vendor.gpx', 'short.gpx');
@@ -189,14 +189,67 @@ test('shows a track name cut off in the list in full on hover, and only then', a
   // Both loaded (and the list settled) before pointing at a name.
   await expect(page.locator('.track-row')).toHaveCount(2);
   await expect(page.locator('.track-row[data-track="B"]')).toHaveClass(/is-selected/);
-  // The app's own bubble (its short pause is pinned in tests/component/tips.test.tsx).
+  // The app's own bubble (its short pause is pinned in tests/component/tips.test.tsx), a line each.
+  const tip = page.locator('.tip-bubble');
   await longName.hover();
-  await expect(page.locator('.tip-bubble')).toHaveText(long);
+  await expect(tip).toBeVisible();
+  expect((await tip.innerText()).split('\n')).toEqual([long, expect.stringMatching(/^GPX · \d+ KB · /)]);
   await page.mouse.move(5, 5);
-  await expect(page.locator('.tip-bubble')).toHaveCount(0);
+  await expect(tip).toHaveCount(0);
+  // A name that fits has its bubble too.
   await shortName.hover();
-  await page.waitForTimeout(500);
-  await expect(page.locator('.tip-bubble')).toHaveCount(0);
+  await expect(tip).toBeVisible();
+  expect((await tip.innerText()).split('\n')).toEqual(['short.gpx', expect.stringMatching(/^GPX · \d+ KB · /)]);
+});
+
+test('renames a track in place: a text box right where its name was, and the new name wherever the track is named', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea', 'central-park-loop-vendor.gpx');
+  const row = page.locator('.track-row[data-track="B"]');
+  await row.locator('.track-main').click();
+  await expect(row).toHaveClass(/is-selected/);
+  const name = row.locator('.track-name');
+  const before = (await name.boundingBox())!, rowBefore = (await row.boundingBox())!;
+  await name.click();
+  const box = row.getByRole('textbox', { name: 'Name of track B' });
+  await expect(box).toBeFocused();
+  // Over the name exactly, its text where the name's was: nothing in the row moves.
+  const at = (await box.boundingBox())!;
+  for (const k of ['x', 'y', 'height'] as const) expect(Math.abs(at[k] - before[k])).toBeLessThanOrEqual(1);
+  expect(Math.abs((await row.boundingBox())!.height - rowBefore.height)).toBeLessThanOrEqual(0.5);
+  expect(await box.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, 'central-park-loop-vendor.gpx'.length]);
+  const serious = (await new AxeBuilder({ page }).exclude('.map').analyze()).violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+  expect(serious.map((v) => `${v.id}: ${v.help}`)).toEqual([]);
+  // Typing replaces the name, all of it selected; Enter keeps it.
+  await page.keyboard.type('Reservoir loop');
+  await page.keyboard.press('Enter');
+  await expect(name).toHaveText('Reservoir loop');
+  await expect(row.locator('.track-main')).toBeFocused();
+  // Both names and the file's line on hover, though the name fits.
+  await name.hover();
+  const tip = page.locator('.tip-bubble');
+  await expect(tip).toBeVisible();
+  expect((await tip.innerText()).split('\n')).toEqual(['Reservoir loop', 'File name: central-park-loop-vendor.gpx', expect.stringMatching(/^GPX · \d+ KB · /)]);
+  // The properties page: the new name, and the file's.
+  await row.getByRole('button', { name: 'Properties' }).click();
+  await expect(page.locator('.details-name .track-name')).toHaveText('Reservoir loop');
+  await expect(page.locator('.details-orig')).toHaveText('File name: central-park-loop-vendor.gpx');
+});
+
+test("colors the select bar's Remove button red, and solid red when it asks", async ({ page }) => {
+  await open(page, 'central-park-loop.nmea', 'central-park-loop-vendor.gpx');
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('checkbox', { name: /^Select track A:/ }).click();
+  const remove = page.getByRole('toolbar', { name: 'Act on the selected tracks' }).getByRole('button', { name: 'Remove' });
+  const rgb = (prop: 'color' | 'backgroundColor') => remove.evaluate((el, p) => getComputedStyle(el)[p].match(/[\d.]+/g)!.slice(0, 3).map(Number), prop);
+  const [r, g, b] = await rgb('color');
+  expect(r).toBeGreaterThan(220);
+  expect(Math.max(g, b)).toBeLessThan(r - 60);
+  await remove.click();
+  await expect(remove).toHaveText('Remove 1?');
+  const [br, bg, bb] = await rgb('backgroundColor');
+  expect(br).toBeGreaterThan(150);
+  expect(Math.max(bg, bb)).toBeLessThan(80);
+  expect(await rgb('color')).toEqual([255, 255, 255]);
 });
 
 test('combines two logs from select mode: the new track, its logs on the map and the timeline, and its trust', async ({ page }) => {

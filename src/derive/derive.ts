@@ -104,13 +104,18 @@ export function derive(p: ParsedTrack): Derived {
   // ---- Pass 2: distance, gaps, speed, moving time, and each fix's accuracy.
   const dist = new Float64Array(n), gap = new Uint8Array(n), kmh = new Float32Array(n), now = new Float64Array(n);
   const moving = new Float32Array(n); // speeds as stored (32-bit), for their spread
-  const speedFromFile = n > 0 && withSpeed >= n * 0.5;
+  const speedFromFile = n > 0 && withSpeed >= n * 0.5, combined = p.format === 'combined';
   let nm = 0, distanceM = 0, movingS = 0, maxKmh = 0;
   // Speed at fix j: from the file, or from positions over its neighbors within the same run. It needs the
   // next fix's distance and gap, so it is worked out one fix behind.
   const speedAt = (j: number) => {
     const f = speed[j];
-    if (speedFromFile && f - f === 0) kmh[j] = f * 3.6;
+    if (combined) {
+      // A combined track's speed comes only from its logs' own speeds, never from its points: where none of
+      // them has one, it has none.
+      if (!(f - f === 0)) { kmh[j] = NaN; return; }
+      kmh[j] = f * 3.6;
+    } else if (speedFromFile && f - f === 0) kmh[j] = f * 3.6;
     else {
       const a = j > 0 && !gap[j] ? j - 1 : j;
       const b = j < n - 1 && !gap[j + 1] ? j + 1 : j;

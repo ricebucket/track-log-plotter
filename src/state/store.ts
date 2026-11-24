@@ -1,7 +1,7 @@
 import { batch, computed, effect, signal } from '@preact/signals';
 import type { ColorKey, HaloKey, LoadedTrack, MeasureKey, ParseResult } from '../model/types';
 import { initialLang, LOCALE, translate, type Lang, type Params } from '../i18n/i18n';
-import { addCombined, addTracks, alignOffsets, applyToAll, LOAD_LIMIT, removeTrack, removeTracks, replaceTrack, setColor, setHalo, setLogShown, setVisible, SHOW_LIMIT, trackUid, type TrackItem } from './logic';
+import { addCombined, addTracks, alignOffsets, applyToAll, LOAD_LIMIT, removeTrack, removeTracks, replaceTrack, setColor, setHalo, setLogShown, setName, setVisible, SHOW_LIMIT, trackName, trackUid, type TrackItem } from './logic';
 import { checkCombine, combineTracks, isCombined, MAX_LOGS, recombine, type ComboTrack } from '../combine/combine';
 import { buildScale, type Scale } from '../color/scale';
 import { eleFactor, speedFactor, type Units } from '../format';
@@ -243,6 +243,18 @@ export function select(id: string) {
   });
 }
 
+/** Names a track (see setName); the list is left alone when its name stays the same. */
+export function renameTrack(id: string, name: string) {
+  const now = items.value, next = setName(now, id, name);
+  if (next.some((x, i) => x !== now[i])) items.value = next;
+}
+
+/** What a notice should call a track: its name now (it may have been renamed since), else the file the notice named. */
+export function nameFor(id: string, file: string): string {
+  const x = items.value.find((it) => it.id === id);
+  return x && x.track.file === file ? trackName(x) : file;
+}
+
 export function setMeasure(id: string, which: 'color' | 'halo', key: ColorKey | HaloKey) {
   items.value = which === 'color' ? setColor(items.value, id, key as ColorKey) : setHalo(items.value, id, key as HaloKey);
 }
@@ -349,7 +361,7 @@ export function combineBlock(ids: readonly string[]): 'few' | 'many' | 'combined
 
 /** The name of a new combined track, from its sources' letters in the order ticked: "B+C Combined Track", then "B+C Combined Track 2". */
 function combinedName(ids: readonly string[]): string {
-  const taken = new Set(items.value.map((x) => x.track.file));
+  const taken = new Set(items.value.flatMap((x) => [x.track.file, trackName(x)]));
   const p = { ids: ids.join('+') };
   const base = t('combine.name', p);
   if (!taken.has(base)) return base;
