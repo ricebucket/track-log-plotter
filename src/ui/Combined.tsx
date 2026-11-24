@@ -174,11 +174,17 @@ export function TrustShape({ item, trust, names }: { item: TrackItem; trust: rea
     set(fromEvent(e), true);
     setDrag(null);
   };
-  // Arrows move the handle a step in their direction; Home puts it back in the center.
+  // Arrows move the handle a step in their direction; Home puts it back in the center. On the line of two
+  // sources, Up and Down move it along the line like Right and Left, as on any slider: Up and Right give
+  // the right-hand source more trust, which is the value read out. In the triangle, the value is the top
+  // source's trust, which Up raises and Down lowers (Left and Right move between the bottom two).
+  // A step that changes nothing (at the end of the line) works nothing out again: the store skips shares the track already has.
   const onKey = (e: KeyboardEvent) => {
     const step = (K === 2 ? pts[1][0] - pts[0][0] : W - 2 * PAD) * 0.05;
     const [x, y] = at(shown);
-    const moves: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+    const moves: Record<string, [number, number]> = K === 2
+      ? { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [step, 0], ArrowDown: [-step, 0] }
+      : { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
     if (e.key === 'Home') { e.preventDefault(); set(equal, true); return; }
     const m = moves[e.key];
     if (!m) return;
@@ -212,7 +218,7 @@ export function TrustShape({ item, trust, names }: { item: TrackItem; trust: rea
       ))}
       <circle
         class="trust-handle" cx={hx} cy={hy} r={8} tabIndex={0} role="slider" aria-label={t('combine.handle')}
-        aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(shown[0] * 100)} aria-valuetext={sharesText(shown, names)} onKeyDown={onKey}
+        aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((K === 2 ? shown[1] : shown[0]) * 100)} aria-valuetext={sharesText(shown, names)} onKeyDown={onKey}
       />
     </svg>
   );

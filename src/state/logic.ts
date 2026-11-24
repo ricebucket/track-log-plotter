@@ -124,7 +124,8 @@ export type CombinedResult = { items: TrackItem[]; id: string } | { items: Track
 /**
  * Adds a combined track right after the last of its logs in the list, with
  * every log's lines on. Its logs are hidden (the combined track draws them
- * itself) and it is shown; nothing is added when the list is full.
+ * itself) and it is shown, unless three other tracks already show: then it is
+ * added hidden (the list says why). Nothing is added when the list is full.
  */
 export function addCombined(items: TrackItem[], track: LoadedTrack, sourceIds: readonly string[]): CombinedResult {
   if (items.length >= LOAD_LIMIT) return { items, id: null };

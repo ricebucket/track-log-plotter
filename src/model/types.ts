@@ -60,6 +60,8 @@ export type Problem =
   | { kind: 'checksum'; count: number; line: number }
   | { kind: 'glued'; count: number; line: number }
   | { kind: 'garbage'; count: number; line: number }
+  /** CSV rows with the wrong number of fields. */
+  | { kind: 'badRows'; count: number; line: number }
   | { kind: 'backwards'; count: number; line: number }
   | { kind: 'jump'; count: number; line: number }
   | { kind: 'unclosed'; kept: number }
@@ -69,11 +71,20 @@ export type Problem =
 export type SpeedUnit = 'ms' | 'kmh' | 'knots' | 'mph';
 
 export type Note =
-  | { kind: 'speedUnit'; unit: SpeedUnit; inferred: boolean }
+  /**
+   * The unit of the file's speeds. `inferred`: the file doesn't say, so the
+   * unit was worked out by comparing the speeds with the positions. `unsure`:
+   * that didn't settle it (too little movement to compare, or numbers between
+   * two units), so the unit is a guess. `chosen`: the user has since picked
+   * the unit on the properties page.
+   */
+  | { kind: 'speedUnit'; unit: SpeedUnit; inferred: boolean; unsure?: true; chosen?: true }
   | { kind: 'speedDerived' }
   | { kind: 'hdopRelative' }
   | { kind: 'ignored'; fields: string[] }
   | { kind: 'void'; count: number }
+  /** Fixes without a time. */
+  | { kind: 'timeless'; count: number }
   | { kind: 'duplicates'; count: number }
   | { kind: 'noZone' }
   | { kind: 'noDate' }

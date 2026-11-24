@@ -127,7 +127,8 @@ function signedZeros(a: Float64Array, m: number): (p: number) => number {
 export function spread(a: Float32Array, m: number, size: number): Float32Array {
   if (m === 0) return new Float32Array(0);
   const keys = new Uint32Array(a.buffer, a.byteOffset, m);
-  const start = new Int32Array(GROUPS + 1); // start[g]: where group g begins in sorted order
+  const { start, room, next } = (tallies ??= { start: new Int32Array(GROUPS + 1), room: new Int32Array(GROUPS).fill(-1), next: new Int32Array(GROUPS).fill(-1) });
+  start.fill(0); // start[g]: where group g begins in sorted order
   for (let i = 0; i < m; i++) {
     const bits = keys[i];
     const k = (bits & 0x80000000 ? ~bits : bits | 0x80000000) >>> 0; // negatives reversed, below the positives
@@ -137,15 +138,14 @@ export function spread(a: Float32Array, m: number, size: number): Float32Array {
   for (let g = 1; g <= GROUPS; g++) start[g] += start[g - 1];
   // The wanted positions ascend, and so do their groups.
   const want = new Int32Array(size), groupOf = new Int32Array(size);
-  const room = new Int32Array(GROUPS).fill(-1); // where a needed group's keys go in the gathered array
   let total = 0;
   for (let j = 0, g = 0; j < size; j++) {
     const p = Math.round((j * (m - 1)) / (size - 1));
     while (start[g + 1] <= p) g++;
     want[j] = p; groupOf[j] = g;
-    if (room[g] < 0) { room[g] = total; total += start[g + 1] - start[g]; }
+    if (room[g] < 0) { room[g] = next[g] = total; total += start[g + 1] - start[g]; }
   }
-  const got = new Uint32Array(total), next = room.slice();
+  const got = new Uint32Array(total);
   for (let i = 0; i < m; i++) { const k = keys[i], at = next[k >>> 16]; if (at >= 0) { got[at] = k; next[k >>> 16] = at + 1; } }
   // Inside each group, its wanted positions by selection; then the keys back to values.
   const pos = new Int32Array(size), out = new Float32Array(size), bitsOut = new Uint32Array(out.buffer);
@@ -156,18 +156,37 @@ export function spread(a: Float32Array, m: number, size: number): Float32Array {
     placeKeys(got, room[g], room[g] + start[g + 1] - start[g], pos, 0, np);
     for (; j < e; j++) { const k = got[want[j] + base]; bitsOut[j] = k & 0x80000000 ? k & 0x7fffffff : ~k >>> 0; }
   }
+  for (let j = 0; j < size; j++) room[groupOf[j]] = next[groupOf[j]] = -1;
   return out;
 }
 
 /** Groups of keys by their top 16 bits. */
 const GROUPS = 65536;
 
+/**
+ * spread()'s tallies by group (0.8 MB), made on its first call and kept for
+ * the next ones: `room` (where a needed group's keys go in the gathered array)
+ * and `next` (where its next key goes) are -1 except during a call.
+ */
+let tallies: { start: Int32Array; room: Int32Array; next: Int32Array } | null = null;
+
+/**
+ * How many partition rounds a selection over `size` values gets: about
+ * twice the halvings it takes. An order made to defeat the middle pivot (each
+ * round then sets aside a single value) would make the work grow with the
+ * square of the count; once the rounds run out, what is left is sorted.
+ */
+function roundsFor(size: number): number {
+  return 2 * Math.ceil(Math.log2(size + 1)) + 8;
+}
+
 /** place() for keys: every position in pos[pa, pb) (ascending) of a[from, to) gets the key a sort would put there. */
 function placeKeys(a: Uint32Array, from: number, to: number, pos: Int32Array, pa: number, pb: number) {
   while (pa < pb) {
     const mid = (pa + pb) >> 1, p = pos[mid];
-    let lo = from, hi = to - 1;
+    let lo = from, hi = to - 1, rounds = roundsFor(to - from);
     while (lo < hi) {
+      if (--rounds < 0) { a.subarray(lo, hi + 1).sort(); break; }
       const pivot = a[(lo + hi) >> 1];
       let i = lo, j = hi;
       while (i <= j) {
@@ -192,11 +211,13 @@ export function nth(a: Float64Array, m: number, p: number): number {
 /**
  * Rearranges a[from, to) so that a[k] is its (k - from)-th smallest value,
  * with nothing larger before it and nothing smaller after it (Hoare's
- * selection, middle pivot).
+ * selection, middle pivot; sorting what is left if the rounds run out, see
+ * roundsFor).
  */
 function select(a: Float64Array, from: number, to: number, k: number) {
-  let lo = from, hi = to - 1;
+  let lo = from, hi = to - 1, rounds = roundsFor(to - from);
   while (lo < hi) {
+    if (--rounds < 0) { a.subarray(lo, hi + 1).sort(); return; }
     const pivot = a[(lo + hi) >> 1];
     let i = lo, j = hi;
     while (i <= j) {

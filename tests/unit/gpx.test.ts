@@ -3,6 +3,7 @@ import { parseGpx, parseIsoTime } from '../../src/parse/gpx';
 import { parseText } from '../../src/parse/index';
 import { noteText } from '../../src/ui/labels';
 import { fixture } from '../helpers/fixtures';
+import { vendorGpx } from '../helpers/vendor-speed';
 
 const gpx = (body: string, extra = '') =>
   `<?xml version="1.0"?><gpx version="1.1" creator="Test" xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v2" ${extra}>${body}</gpx>`;
@@ -122,13 +123,44 @@ describe('parseGpx', () => {
   });
 });
 
-describe('a logger that repeats its last position (i-gotU)', () => {
+describe('a vendor speed without a unit', () => {
+  const unitNote = (text: string) => parseGpx(text).notes.find((n) => n.kind === 'speedUnit');
+
+  it('says the unit is a guess when the positions are too slow to compare: a walk in km/h is read as m/s', () => {
+    // 1.3 m/s, written as 4.7 (km/h): below the pace at which speeds are compared with the positions.
+    const p = parseGpx(vendorGpx(1.3));
+    expect(p.notes.filter((n) => n.kind === 'speedUnit')).toEqual([{ kind: 'speedUnit', unit: 'ms', inferred: true, unsure: true }]);
+    expect(p.cols.speed[60]).toBeCloseTo(4.7, 5);
+  });
+
+  it('is sure when the positions settle it: a run in km/h', () => {
+    const p = parseGpx(vendorGpx(3));
+    expect(p.notes.filter((n) => n.kind === 'speedUnit')).toEqual([{ kind: 'speedUnit', unit: 'kmh', inferred: true }]);
+    expect(p.cols.speed[60]).toBeCloseTo(3, 5);
+  });
+
+  it('says the unit is a guess when the numbers fall between two units, and reads them in the nearer one', () => {
+    // 2.9 times the speed in m/s: 19% under km/h, 30% over mph.
+    expect(unitNote(vendorGpx(3, { field: (v) => v * 2.9 }))).toEqual({ kind: 'speedUnit', unit: 'kmh', inferred: true, unsure: true });
+  });
+
+  it('keeps a speed whose unit the file gives as it was', () => {
+    const garmin = gpx(`<trk><trkseg>${pt(0, '<extensions><gpxtpx:TrackPointExtension><gpxtpx:speed>1.3</gpxtpx:speed></gpxtpx:TrackPointExtension></extensions>')}${pt(1)}</trkseg></trk>`);
+    expect(unitNote(garmin)).toEqual({ kind: 'speedUnit', unit: 'ms', inferred: false });
+    expect(unitNote(gpx(`<trk><trkseg>${pt(0, '<speed>1.3</speed>')}${pt(1)}</trkseg></trk>`))).toEqual({ kind: 'speedUnit', unit: 'ms', inferred: false });
+  });
+});
+
+describe('a logger that repeats its last position', () => {
   /**
-   * A walk north at 1.4 m/s, a fix a second for 400 s, as i-gotU's software writes it (speed in the Garmin
+   * A walk north at 1.4 m/s, a fix a second for 400 s, as that logger's software writes it (speed in the Garmin
    * extension). It repeats the fix at 20 s until 40 s, and the one at 100 s until 260 s, writing fresh
    * satellites as it goes; like the logger, it writes the speed of 0 from the fix it repeats on.
    */
-  function igotu(creator = 'igotU_GPS_WIN', jumpM = 0) {
+  // The creator its software writes, which the reader goes by (data, so it keeps the maker's name).
+  const REPEATER = 'igotU_GPS_WIN';
+
+  function repeater(creator = REPEATER, jumpM = 0) {
     const t0 = Date.UTC(2026, 5, 14, 13, 0, 0);
     const held = (i: number) => (i > 20 && i <= 40) || (i > 100 && i <= 260);
     let last = [0, 0];
@@ -143,7 +175,7 @@ describe('a logger that repeats its last position (i-gotU)', () => {
   }
 
   it('drops the repeats when reading, and says how many', () => {
-    const p = parseGpx(igotu());
+    const p = parseGpx(repeater());
     expect(p.cols.n).toBe(400 - 20 - 160);
     expect(p.notes).toContainEqual({ kind: 'repeatsDropped', count: 180, long: 1 });
     const at = (s: number) => Array.from(p.cols.t).indexOf(p.cols.t[0] + s * 1000);
@@ -158,7 +190,7 @@ describe('a logger that repeats its last position (i-gotU)', () => {
   });
 
   it('keeps the track whole across short stretches of repeats, with a gap for the long one', () => {
-    const r = parseText(igotu(), 'walk.gpx');
+    const r = parseText(repeater(), 'walk.gpx');
     if (!r.ok) throw new Error(r.error);
     const d = r.track.derived, t = r.track.cols.t, at = (s: number) => Array.from(t).indexOf(t[0] + s * 1000);
     expect(d.gap[at(41)]).toBe(0);
@@ -176,7 +208,7 @@ describe('a logger that repeats its last position (i-gotU)', () => {
   it('works out no speed from positions that jump: the fix it repeats keeps its recorded 0', () => {
     // The fix at 20 s lands 28 m off the path, and the walk carries on along it: a speed worked out from
     // the positions either side would be 11 km/h.
-    const r = parseText(igotu('igotU_GPS_WIN', 28), 'walk.gpx');
+    const r = parseText(repeater(REPEATER, 28), 'walk.gpx');
     if (!r.ok) throw new Error(r.error);
     const t = r.track.cols.t;
     expect(r.track.derived.kmh[Array.from(t).indexOf(t[0] + 20_000)]).toBe(0);
@@ -184,7 +216,7 @@ describe('a logger that repeats its last position (i-gotU)', () => {
   });
 
   it("keeps other loggers' repeats and their speeds: a logger standing still repeats its position", () => {
-    const p = parseGpx(igotu('Garmin Connect'));
+    const p = parseGpx(repeater('Garmin Connect'));
     expect(p.cols.n).toBe(400);
     expect(p.cols.speed[20]).toBe(0);
     expect(p.bridged).toBeUndefined();
@@ -195,9 +227,99 @@ describe('a logger that repeats its last position (i-gotU)', () => {
     const t0 = Date.UTC(2026, 5, 14, 13, 0, 0);
     const p1 = (i: number, north: number) => `<trkpt lat="${(40.78 + north / 111_195).toFixed(9)}" lon="-73.965"><time>${new Date(t0 + i * 1000).toISOString()}</time></trkpt>`;
     const body = `<trkseg>${p1(0, 0)}${p1(1, 1.4)}${p1(2, 1.4)}</trkseg><trkseg>${p1(3, 1.4)}${p1(4, 5.6)}</trkseg>`;
-    const p = parseGpx(`<?xml version="1.0"?><gpx version="1.1" creator="igotU_GPS_WIN"><trk>${body}</trk></gpx>`);
+    const p = parseGpx(`<?xml version="1.0"?><gpx version="1.1" creator="${REPEATER}"><trk>${body}</trk></gpx>`);
     expect(p.cols.n).toBe(3);
     expect(Array.from(p.cols.seg)).toEqual([0, 0, 1]);
     expect(Array.from(p.bridged!)).toEqual([0, 0, 0]);
+  });
+});
+
+describe('reading odd or damaged GPX', () => {
+  const trk = (pts: string) => gpx(`<trk><trkseg>${pts}</trkseg></trk>`);
+
+  it('names extension fields called "constructor" and "__proto__" as they are, and the result can be sent to the page', () => {
+    const ext = '<extensions><constructor>1</constructor><__proto__>2</__proto__></extensions>';
+    const r = parseText(trk(pt(0, ext) + pt(1, ext)), 'odd.gpx');
+    if (!r.ok) throw new Error(r.error);
+    expect(r.track.notes).toContainEqual({ kind: 'ignored', fields: ['__proto__', 'constructor'] });
+    expect(() => structuredClone(r)).not.toThrow();
+  });
+
+  it('reads an empty value as missing, not as 0', () => {
+    const empty = pt(0, '<sat/><geoidheight></geoidheight><course> </course>').replace('<ele>20</ele>', '<ele></ele>');
+    const p = parseGpx(trk(empty + pt(1, '<sat>8</sat><geoidheight>-32.6</geoidheight><course>90</course>')));
+    expect(p.cols.n).toBe(2);
+    for (const k of ['ele', 'sats', 'geoid', 'course'] as const) expect(p.cols[k][0], k).toBeNaN();
+    expect([p.cols.ele[1], p.cols.sats[1], p.cols.course[1]]).toEqual([21, 8, 90]);
+  });
+
+  it('skips a point whose position is blank, off the Earth or 0, 0, and counts it with those without a position', () => {
+    const bad = ['lat="" lon="-73.965"', 'lat="40.78" lon=""', 'lat="95.1" lon="-73.965"', 'lat="0" lon="0"'];
+    const pts = bad.map((a, i) => `<trkpt ${a}><time>2026-06-14T13:05:0${i}Z</time></trkpt>`).join('');
+    const p = parseGpx(trk(pts + pt(5) + pt(6) + pt(7, '<fix>none</fix>')));
+    expect(p.cols.n).toBe(2);
+    expect(p.notes).toContainEqual({ kind: 'void', count: 5 });
+  });
+
+  it('notes points without a time apart from points without a position', () => {
+    const p = parseGpx(trk(`<trkpt lat="40.7801" lon="-73.965"></trkpt><trkpt lat="40.7802" lon="-73.965"><ele>3</ele></trkpt>${pt(3, '<fix>none</fix>')}${pt(4)}${pt(5)}`));
+    expect(p.cols.n).toBe(2);
+    expect(p.notes.filter((n) => n.kind === 'timeless' || n.kind === 'void')).toEqual([{ kind: 'void', count: 1 }, { kind: 'timeless', count: 2 }]);
+    expect(noteText({ kind: 'timeless', count: 2 })).toBe('2 fixes without a time were skipped.');
+    expect(noteText({ kind: 'timeless', count: 1 })).toBe('1 fix without a time was skipped.');
+  });
+
+  it('reads a time zone given in hours alone', () => {
+    expect(parseIsoTime('2026-06-14T09:05:00-04')).toEqual({ t: Date.UTC(2026, 5, 14, 13, 5), zoned: true });
+    expect(parseIsoTime('2026-06-14T15:05:00.5+02').t).toBe(Date.UTC(2026, 5, 14, 13, 5, 0, 500));
+    const p = parseGpx(trk('<trkpt lat="40.78" lon="-73.965"><time>2026-06-14T09:05:00-04</time></trkpt>'));
+    expect(Array.from(p.cols.t)).toEqual([Date.UTC(2026, 5, 14, 13, 5)]);
+    expect(p.notes).not.toContainEqual({ kind: 'noZone' });
+  });
+
+  it('ignores a close tag for an element that isn\'t open, and keeps reading the point', () => {
+    const p = parseGpx(trk(`${pt(0)}<trkpt lat="40.7801" lon="-73.965"></ele><ele>21</ele></sat><time>2026-06-14T13:05:01Z</time></extensions></trkpt>${pt(2)}`));
+    expect(p.cols.n).toBe(3);
+    expect(p.cols.ele[1]).toBe(21);
+    expect(p.problems).toEqual([]);
+  });
+
+  it('reads the waypoints after one with a damaged close tag as waypoints of their own', () => {
+    const w = (i: number, close = '</wpt>') => `<wpt lat="40.78${i}" lon="-73.96${i}"><time>2026-06-14T13:0${i}:00Z</time><name>00${i}</name>${close}`;
+    const p = parseGpx(gpx(`${w(1, '</t>')}${w(2)}${w(3)}<trk><trkseg>${pt(0)}${pt(1)}</trkseg></trk>`));
+    expect(p.flags.map((f) => [f.name, f.lat, f.lon, f.t])).toEqual([
+      ['002', 40.782, -73.962, Date.UTC(2026, 5, 14, 13, 2)],
+      ['003', 40.783, -73.963, Date.UTC(2026, 5, 14, 13, 3)],
+    ]);
+    expect(p.cols.n).toBe(2);
+  });
+
+  it('closes what a close tag leaves open inside it', () => {
+    // <ele> and <hdop> never closed: </trkpt> closes them with the point.
+    const p = parseGpx(trk(`<trkpt lat="40.7801" lon="-73.965"><time>2026-06-14T13:05:01Z</time><hdop>0.9</hdop><ele>21</trkpt>${pt(2)}`));
+    expect(p.cols.n).toBe(2);
+    expect(p.cols.hdop[0]).toBeCloseTo(0.9);
+    expect([...p.cols.seg]).toEqual([0, 0]);
+  });
+
+  it('reads a value whose open or close tag is garbled, and keeps the point after a stray close tag', () => {
+    const at = (i: number) => `<trkpt lat="40.78${i}" lon="-73.965"><time>2026-06-14T13:05:0${i}Z</time>`;
+    const p = parseGpx(trk(`${at(1)}<c#ourse>120</course><hdoxp>2.5</hdop><fix>dgps</fix></trkpt>${at(2)}<ele>5</el><sat>7</sat></trkpt>${at(3)}<ele>9</ele></el></trkpt>`));
+    expect(p.cols.n).toBe(3);
+    expect(p.cols.course[0]).toBe(120);
+    expect(p.cols.hdop[0]).toBeCloseTo(2.5);
+    expect(p.cols.fixq[0]).toBe(2);
+    expect(p.cols.ele[1]).toBe(5);
+    expect(p.cols.sats[1]).toBe(7);
+    expect(p.cols.ele[2]).toBe(9);
+  });
+
+  it('handles any number of stray or unclosed tags in one pass', () => {
+    const n = 50_000;
+    for (const body of ['<a>'.repeat(n) + '</b>'.repeat(n), '<trk>' + '<a>'.repeat(n) + '</trk>'.repeat(n)]) {
+      // How quickly: tests/unit/performance.test.ts.
+      const p = parseGpx(`<gpx version="1.1">${body}</gpx>`);
+      expect(p.problems).toContainEqual({ kind: 'noFixes' });
+    }
   });
 });

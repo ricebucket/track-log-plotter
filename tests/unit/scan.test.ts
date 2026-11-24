@@ -106,13 +106,12 @@ describe('quantiles by selection', () => {
     expect(Array.from(sp).every((y, j) => same(y, s[Math.round((j * (s.length - 1)) / 511)]))).toBe(true);
   });
 
-  it('stays fast on a long run of equal values and zeros (a log at sea level, a logger standing still)', () => {
+  it('handles a long run of equal values and zeros (a log at sea level, a logger standing still)', () => {
+    // How quickly: tests/unit/performance.test.ts.
     const zeros = new Float32Array(400_000);
     for (let i = 0; i < zeros.length; i += 7) zeros[i] = -0;
-    const t0 = performance.now();
     const sp = spread(zeros, zeros.length, 512);
     const q = quantilesIn(new Float64Array(400_000).fill(3), 400_000, [0.1, 0.25, 0.5, 0.75]);
-    expect(performance.now() - t0).toBeLessThan(500);
     expect(Object.is(sp[0], -0) && Object.is(sp[511], 0)).toBe(true);
     expect(q).toEqual([3, 3, 3, 3]);
   });

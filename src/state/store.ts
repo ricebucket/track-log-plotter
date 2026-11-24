@@ -1,5 +1,5 @@
 import { batch, computed, effect, signal } from '@preact/signals';
-import type { ColorKey, HaloKey, LoadedTrack, MeasureKey, ParseResult } from '../model/types';
+import type { ColorKey, HaloKey, LoadedTrack, MeasureKey, Note, ParseResult, SpeedUnit } from '../model/types';
 import { initialLang, LOCALE, translate, type Lang, type Params } from '../i18n/i18n';
 import { addCombined, addTracks, alignOffsets, applyToAll, LOAD_LIMIT, removeTrack, removeTracks, replaceTrack, setColor, setHalo, setLogShown, setName, setVisible, SHOW_LIMIT, trackName, trackUid, type TrackItem } from './logic';
 import { checkCombine, combineTracks, isCombined, MAX_LOGS, recombine, type ComboTrack } from '../combine/combine';
@@ -9,6 +9,8 @@ import { clockShift, isValidZone, type ZoneSel } from '../time/zones';
 import type { BasemapId } from '../map/basemaps';
 import { BASEMAP_IDS, isDarkBasemap } from '../map/basemaps';
 import { parseFile } from '../parse/client';
+import { rereadSpeeds } from '../parse/units';
+import { derive } from '../derive/derive';
 import { hasFixNear } from './inspect';
 
 // ---------- preferences (remembered in this browser) ----------
@@ -16,36 +18,46 @@ import { hasFixNear } from './inspect';
 const KEY = 'tlp.prefs.v1';
 interface Prefs { lang?: Lang; basemap?: BasemapId; dim?: number; zone?: ZoneSel; lastZone?: ZoneSel; units?: Units; panelMin?: boolean; timelineMin?: boolean; arrows?: boolean; fixes?: boolean; gaps?: boolean; haloGraph?: boolean }
 
-function readPrefs(): Prefs {
-  try { return JSON.parse(localStorage.getItem(KEY) || '{}') as Prefs; } catch { return {}; }
+/**
+ * The saved preferences, each value still to be checked: an older version of
+ * the app, or a hand edit, may have left anything there (even `null`).
+ */
+function readPrefs(): { [K in keyof Prefs]?: unknown } {
+  try {
+    const p: unknown = JSON.parse(localStorage.getItem(KEY) || '{}');
+    return p !== null && typeof p === 'object' && !Array.isArray(p) ? p : {};
+  } catch { return {}; }
 }
 const saved = readPrefs();
 const narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 720px)').matches;
+/** A saved switch, or its default when what's saved isn't true or false (the text "false" is truthy). */
+const flag = (v: unknown, otherwise: boolean): boolean => (typeof v === 'boolean' ? v : otherwise);
+const isZone = (z: unknown): z is ZoneSel => typeof z === 'string' && isValidZone(z);
 
 export const lang = signal<Lang>(initialLang(
   typeof location === 'undefined' ? '' : location.search,
-  saved.lang ?? null,
+  typeof saved.lang === 'string' ? saved.lang : null,
   typeof navigator === 'undefined' ? [] : navigator.languages ?? [navigator.language],
 ));
 export const locale = computed(() => LOCALE[lang.value]);
 /** Translate; reading it inside a component re-renders that component when the language changes. */
 export const t = (key: string, params?: Params) => translate(lang.value, key, params);
 
-export const basemap = signal<BasemapId>(saved.basemap && BASEMAP_IDS.includes(saved.basemap) ? saved.basemap : 'light');
+export const basemap = signal<BasemapId>(BASEMAP_IDS.includes(saved.basemap as BasemapId) ? saved.basemap as BasemapId : 'light');
 export const dim = signal(typeof saved.dim === 'number' ? Math.min(0.7, Math.max(0, saved.dim)) : 0);
-export const zone = signal<ZoneSel>(saved.zone && isValidZone(saved.zone) ? saved.zone : 'local');
-const isNamedZone = (z: ZoneSel | undefined): z is ZoneSel => !!z && z !== 'local' && z !== 'utc' && isValidZone(z);
+export const zone = signal<ZoneSel>(isZone(saved.zone) ? saved.zone : 'local');
+const isNamedZone = (z: unknown): z is ZoneSel => isZone(z) && z !== 'local' && z !== 'utc';
 /** The last zone picked from the list (not Local or UTC): its button keeps showing it. */
 export const lastZone = signal<ZoneSel | null>(isNamedZone(saved.zone) ? saved.zone : isNamedZone(saved.lastZone) ? saved.lastZone : null);
 effect(() => { const z = zone.value; if (isNamedZone(z)) lastZone.value = z; });
 export const units = signal<Units>(saved.units === 'imperial' ? 'imperial' : 'metric');
-export const panelMin = signal(saved.panelMin ?? false);
-export const timelineMin = signal(saved.timelineMin ?? narrow);
-export const showArrows = signal(saved.arrows ?? true);
-export const showFixes = signal(saved.fixes ?? false);
-export const showGaps = signal(saved.gaps ?? true);
+export const panelMin = signal(flag(saved.panelMin, false));
+export const timelineMin = signal(flag(saved.timelineMin, narrow));
+export const showArrows = signal(flag(saved.arrows, true));
+export const showFixes = signal(flag(saved.fixes, false));
+export const showGaps = signal(flag(saved.gaps, true));
 /** The selected track's halo measure as a second graph on the timeline. */
-export const showHaloGraph = signal(saved.haloGraph ?? false);
+export const showHaloGraph = signal(flag(saved.haloGraph, false));
 
 effect(() => {
   const p: Prefs = {
@@ -53,7 +65,11 @@ effect(() => {
     panelMin: panelMin.value, timelineMin: timelineMin.value, arrows: showArrows.value, fixes: showFixes.value, gaps: showGaps.value, haloGraph: showHaloGraph.value,
   };
   try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* private mode: nothing to remember */ }
-  if (typeof document !== 'undefined') document.documentElement.lang = LOCALE[p.lang!];
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = LOCALE[p.lang!];
+    // The window's title (its tab, the task bar) is the app's name in the language in use.
+    document.title = translate(p.lang!, 'app.name');
+  }
 });
 
 // ---------- tracks ----------
@@ -63,6 +79,11 @@ export const selectedId = signal<string | null>(null);
 export const visible = computed(() => items.value.filter((x) => x.vis));
 export const single = computed(() => visible.value.length === 1);
 export const selected = computed(() => items.value.find((x) => x.id === selectedId.value) ?? items.value[0] ?? null);
+/**
+ * The selected track's letter. It changes only when another track gets selected, not when the
+ * selected one changes (a new trust share, a new name): what reads only this doesn't redraw then.
+ */
+export const selectedLetter = computed(() => selected.value?.id ?? null);
 export const dark = computed(() => isDarkBasemap(basemap.value));
 
 /** Offsets that line the visible tracks up on the timeline (see alignOffsets). */
@@ -168,7 +189,8 @@ export type ComboNotice =
   | { kind: 'duplicate' }
   | { kind: 'apart'; track: ComboTrack; ids: string[] }
   | { kind: 'full' }
-  | { kind: 'empty' };
+  | { kind: 'empty' }
+  | { kind: 'tooLong' };
 export const comboNotice = signal<ComboNotice | null>(null);
 
 /** Bumped when the map should zoom to the visible tracks. */
@@ -215,12 +237,31 @@ export async function openFiles(files: File[]) {
 
 export const SAMPLE_FILES = ['central-park-loop.nmea', 'roosevelt-island-run.gpx'];
 
+/**
+ * Opens the sample logs. One that can't be fetched (offline, or not found)
+ * gets the usual "couldn't be read" notice, rather than a page of HTML read
+ * as a log, or nothing at all.
+ */
 export async function loadSample(base = import.meta.env.BASE_URL) {
-  const files = await Promise.all(SAMPLE_FILES.map(async (name) => {
-    const res = await fetch(`${base}sample/${name}`);
-    return new File([await res.blob()], name);
-  }));
-  await openFiles(files);
+  // The start screen shows "Reading files…" and holds its buttons from the first click.
+  loadingCount.value += SAMPLE_FILES.length;
+  let got: (File | null)[];
+  try {
+    got = await Promise.all(SAMPLE_FILES.map(async (name) => {
+      try {
+        const res = await fetch(`${base}sample/${name}`);
+        return res.ok ? new File([await res.blob()], name) : null;
+      } catch {
+        return null;
+      }
+    }));
+  } finally {
+    loadingCount.value -= SAMPLE_FILES.length;
+  }
+  const files = got.filter((f): f is File => f !== null);
+  const failed = SAMPLE_FILES.filter((_, k) => !got[k]).map((file) => ({ file, error: 'unreadable' as const }));
+  if (files.length) await openFiles(files);
+  if (failed.length) loadErrors.value = files.length ? [...failed, ...loadErrors.value] : failed;
 }
 
 export function toggleVisible(id: string) {
@@ -291,13 +332,20 @@ export function applyAll(id: string) {
   items.value = applyToAll(items.value, id);
 }
 
+/** Drops the notices about tracks that are gone: their buttons would open nothing, or another track given the same letter. */
+function forgetNotices(gone: readonly string[]) {
+  if (loadNotice.value && gone.includes(loadNotice.value.id)) loadNotice.value = null;
+  const c = comboNotice.value;
+  if (c?.kind === 'zone' && gone.includes(c.id)) comboNotice.value = null;
+}
+
 export function remove(id: string) {
   batch(() => {
     items.value = removeTrack(items.value, id);
     ticked.value = ticked.value.filter((x) => x !== id);
     if (selectedId.value === id) selectedId.value = items.value[0]?.id ?? null;
     if (page.value.kind === 'details' && page.value.id === id) page.value = { kind: 'tracks' };
-    if (loadNotice.value?.id === id) loadNotice.value = null;
+    forgetNotices([id]);
   });
 }
 
@@ -341,7 +389,7 @@ export function removeTicked() {
     items.value = removeTracks(items.value, ids);
     if (selectedId.value && ids.includes(selectedId.value)) selectedId.value = items.value[0]?.id ?? null;
     if (page.value.kind === 'details' && ids.includes(page.value.id)) page.value = { kind: 'tracks' };
-    if (loadNotice.value && ids.includes(loadNotice.value.id)) loadNotice.value = null;
+    forgetNotices(ids);
     endSelect();
   });
 }
@@ -372,50 +420,64 @@ function combinedName(ids: readonly string[]): string {
  * Combines the ticked logs into a new track. The instant checks first: a log
  * whose time zone may be wrong, or the same recording twice, stops it with a
  * notice. Logs far apart for most of their shared time may not be one trip:
- * that asks before the combined track is added.
+ * that asks before the combined track is added. Returns the combined track's
+ * letter once it is added, else null.
  */
-export function combineTicked() {
+export function combineTicked(): string | null {
   const ids = ticked.value;
   const its = ids.map((id) => items.value.find((x) => x.id === id)).filter((x): x is TrackItem => !!x);
   const c = checkCombine(its.map((x) => x.track));
   if (!c.ok) {
     if (c.reason === 'zone') comboNotice.value = { kind: 'zone', id: its[c.log].id, file: its[c.log].track.file };
     else if (c.reason === 'duplicate') comboNotice.value = { kind: 'duplicate' };
-    return;
+    return null;
   }
-  if (items.value.length >= LOAD_LIMIT) { comboNotice.value = { kind: 'full' }; return; }
+  if (items.value.length >= LOAD_LIMIT) { comboNotice.value = { kind: 'full' }; return null; }
   const r = combineTracks(its.map((x) => x.track), { name: combinedName(its.map((x) => x.id)) });
-  if (!r.ok) { comboNotice.value = { kind: r.reason === 'duplicate' ? 'duplicate' : 'empty' }; return; }
-  if (r.apart) { comboNotice.value = { kind: 'apart', track: r.track, ids }; return; }
-  addCombo(r.track, ids);
+  if (!r.ok) { comboNotice.value = { kind: r.reason === 'duplicate' || r.reason === 'tooLong' ? r.reason : 'empty' }; return null; }
+  if (r.apart) { comboNotice.value = { kind: 'apart', track: r.track, ids }; return null; }
+  return addCombo(r.track, ids);
 }
 
-/** "Combine anyway": adds the combined track held back by the "not the same trip?" question. */
-export function confirmApart() {
+/** "Combine anyway": adds the combined track held back by the "not the same trip?" question. Returns its letter, else null. */
+export function confirmApart(): string | null {
   const n = comboNotice.value;
-  if (n?.kind === 'apart') addCombo(n.track, n.ids);
+  return n?.kind === 'apart' ? addCombo(n.track, n.ids) : null;
 }
 
-function addCombo(track: ComboTrack, ids: string[]) {
+function addCombo(track: ComboTrack, ids: string[]): string | null {
   const r = addCombined(items.value, track, ids);
-  if (!r.id) { comboNotice.value = { kind: 'full' }; return; }
+  if (!r.id) { comboNotice.value = { kind: 'full' }; return null; }
   const id = r.id;
   batch(() => {
     items.value = r.items;
     selecting.value = false;
     ticked.value = [];
     comboNotice.value = null;
-    // Like a newly loaded track: selected, open in the list, and in view.
+    // Like a newly loaded track: selected, open in the list, and in view. Added hidden because three other
+    // tracks already show, its row says so, as when its eye is pressed.
     select(id);
+    if (!r.items.find((x) => x.id === id)?.vis) limitNotice.value = id;
     reveal.value = id;
     fitRequest.value++;
     cursorT.value = null;
   });
+  return id;
+}
+
+/** Whether trust shares (in any scale, as recombine takes them) are the ones a combined track has already. */
+function sameTrust(track: ComboTrack, trust: readonly number[]): boolean {
+  const src = track.combo.sources;
+  if (trust.length !== src.length) return false;
+  const sum = trust.reduce((s, v) => s + (v > 0 ? v : 0), 0);
+  return sum > 0 && src.every((s, k) => Math.abs(s.trust - Math.max(0, trust[k]) / sum) < 1e-9);
 }
 
 function trustNow(id: string, trust: number[]) {
   const it = items.value.find((x) => x.id === id);
   if (!it || !isCombined(it.track)) return;
+  // The same shares again (an arrow key at the end of the line, Home at the center): nothing to work out.
+  if (sameTrust(it.track, trust)) return;
   items.value = replaceTrack(items.value, id, recombine(it.track, trust));
 }
 
@@ -475,6 +537,34 @@ export function setClock(id: string, z: ZoneSel) {
     items.value = items.value.map((x) => (x.id === id ? { ...x, track } : x));
     if (cursorT.value !== null && selectedId.value === id) cursorT.value += delta;
   });
+}
+
+/** A track's note on a speed unit its file doesn't give (worked out from the positions, or picked since), if it has one. */
+export function inferredUnit(track: LoadedTrack): Extract<Note, { kind: 'speedUnit' }> | undefined {
+  for (const n of track.notes) if (n.kind === 'speedUnit' && n.inferred) return n;
+  return undefined;
+}
+
+/**
+ * Reads the speeds of a file that doesn't say their unit in another unit:
+ * each speed is read again from the file's number, and everything worked out
+ * from them (the stats, the colors and their steps) follows. The note then
+ * says the user picked the unit. The track keeps its name and settings; a
+ * combined track made from it keeps its own copy.
+ */
+export function setSpeedUnit(id: string, unit: SpeedUnit) {
+  const it = items.value.find((x) => x.id === id);
+  const note = it && inferredUnit(it.track);
+  if (!it || !note || (note.unit === unit && note.chosen)) return;
+  const tr = it.track;
+  const notes = tr.notes.map((n): Note => (n === note ? { kind: 'speedUnit', unit, inferred: true, chosen: true } : n));
+  let track: LoadedTrack = { ...tr, notes };
+  // Picking the unit already in use only says it's no longer a guess: the speeds stay as they are.
+  if (note.unit !== unit) {
+    const parsed = { ...track, cols: { ...tr.cols, speed: rereadSpeeds(tr.cols.speed, note.unit, unit) } };
+    track = { ...parsed, derived: derive(parsed) };
+  }
+  items.value = replaceTrack(items.value, id, track);
 }
 
 /** Removes the cursor, which closes the fix card on the map. */

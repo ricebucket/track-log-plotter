@@ -12,8 +12,12 @@ export function googleBaseFor(basemap: string): GoogleBase {
 
 const c = (v: number) => v.toFixed(6);
 
+/**
+ * The same view in Google Maps. `zoom` is MapLibre's, whose tiles are 512
+ * pixels wide; Google's are 256, so the same scale is one zoom level more there.
+ */
 export function googleViewUrl(lat: number, lon: number, zoom: number, base: GoogleBase): string {
-  const z = Math.max(0, Math.min(21, Math.round(zoom)));
+  const z = Math.max(0, Math.min(21, Math.round(zoom + 1)));
   return `https://www.google.com/maps/@?api=1&map_action=map&center=${c(lat)}%2C${c(lon)}&zoom=${z}&basemap=${base}`;
 }
 

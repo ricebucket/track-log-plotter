@@ -12,16 +12,16 @@
 // - date is YYMMDD and time HHMMSS, on the logger's own clock with no time
 //   zone. They're read as UTC; the properties page can set another zone. A row
 //   may leave the date (and the tag) empty: the last date carries on.
-// - lat and lon are decimal degrees. The older Columbus CSV layout writes a
-//   positive number with N/S/E/W after it, pads its fields with NUL bytes and
-//   names some columns differently (LATITUDE N/S, HEIGHT); that's read too.
+// - lat and lon are decimal degrees. An older CSV layout writes a positive
+//   number with N/S/E/W after it, pads its fields with NUL bytes and names
+//   some columns differently (LATITUDE N/S, HEIGHT); that's read too.
 // - alt is meters, speed km/h and heading degrees.
 // - tag: T and G are ordinary fixes (G the first after a pause in logging);
 //   C marks a point the user saved and V a voice note, both shown as button
 //   presses.
 import type { FieldKey, FixQuality, Flag, Note, ParsedTrack, Problem } from '../model/types';
 import { ColumnBuilder, present } from './columns';
-import { isSpace, lastNonSpace, numAt } from './scan';
+import { blankAt, isSpace, lastNonSpace, numAt } from './scan';
 
 /** A field's number, or NaN when it is blank. */
 const num = (s: string, a: number, b: number): number => numAt(s, a, b, NaN);
@@ -60,9 +60,10 @@ function coord(s: string, a: number, b: number): number {
 }
 
 /**
- * Each fix as the file gives it, before any is dropped: its time, its
- * accelerometer readings [s0, s1) and its place among the kept fixes (-1 if
- * dropped). Struct of arrays, so no object per fix.
+ * Each fix as the file gives it, before any is dropped, and each time without
+ * a position: its time, its accelerometer readings [s0, s1) and its place
+ * among the kept fixes (-1 if dropped, or no fix). Struct of arrays, so no
+ * object per row.
  */
 class Rows {
   n = 0;
@@ -207,13 +208,15 @@ export function parseFusion(text: string): ParsedTrack {
   const r = new Readings();
   let yr = 0, mo = 0, dy = 0, haveYmd = false;
   let dayShift = 0, lastTod = -1;
-  let noDate = false, garbage = 0, garbageLine = 0, voidCount = 0;
+  let noDate = false, badRows = 0, badRowsLine = 0, voidCount = 0;
   let truncated: { line: number; chars: number } | null = null;
   if (cut.length < N) cut = new Int32Array(N);
   // Field k of the current line is src[FS[k], FE[k]).
   const FS = new Int32Array(N), FE = new Int32Array(N);
   const field = (k: number) => src.slice(FS[k], FE[k]);
   const numField = (k: number) => num(src, FS[k], FE[k]);
+  /** A dilution of precision; 0 is a placeholder, so it counts as missing (as in GPX and NMEA). */
+  const dopField = (k: number) => { const v = numField(k); return v > 0 ? v : NaN; };
 
   if (iTime >= 0 && iLat >= 0 && iLon >= 0) {
     while (more) {
@@ -221,15 +224,20 @@ export function parseFusion(text: string): ParsedTrack {
       more = nextLine(e);
       const fc = firstChar(a, e);
       if (fc < 0 || src.charCodeAt(fc) === 35) continue;
+      let end = e; // where the last field ends
       if (nComma + 1 !== N) {
-        const lastLine = a <= lastNonWs && lastNonWs < e;
-        if (lastLine && !complete && nComma + 1 < N) truncated = { line: lineNo, chars: e - a };
-        else { if (!garbage) garbageLine = lineNo; garbage++; }
-        continue;
+        // One field too many but blank: a comma at the end of the row.
+        if (nComma === N && blankAt(src, cut[N - 1] + 1, e)) end = cut[N - 1];
+        else {
+          const lastLine = a <= lastNonWs && lastNonWs < e;
+          if (lastLine && !complete && nComma + 1 < N) truncated = { line: lineNo, chars: e - a };
+          else { if (!badRows) badRowsLine = lineNo; badRows++; }
+          continue;
+        }
       }
       FS[0] = a;
       for (let k = 1; k < N; k++) { FE[k - 1] = cut[k - 1]; FS[k] = cut[k - 1] + 1; }
-      FE[N - 1] = e;
+      FE[N - 1] = end;
 
       let t0 = FS[iTime], t1 = FE[iTime];
       while (t0 < t1 && isSpace(src.charCodeAt(t0))) t0++;
@@ -276,8 +284,8 @@ export function parseFusion(text: string): ParsedTrack {
           const fixq: FixQuality = valid.includes('DGPS') ? 2 : /[23]D/.test(mode) ? 1 : 0;
           const kept = b.push({
             t, lat, lon, ele: iAlt >= 0 ? numField(iAlt) : NaN, speed: iSpeed >= 0 ? numField(iSpeed) / 3.6 : NaN,
-            course: iHead >= 0 ? numField(iHead) : NaN, hdop: iHdop >= 0 ? numField(iHdop) : NaN,
-            vdop: iVdop >= 0 ? numField(iVdop) : NaN, pdop: iPdop >= 0 ? numField(iPdop) : NaN,
+            course: iHead >= 0 ? numField(iHead) : NaN, hdop: iHdop >= 0 ? dopField(iHdop) : NaN,
+            vdop: iVdop >= 0 ? dopField(iVdop) : NaN, pdop: iPdop >= 0 ? dopField(iPdop) : NaN,
             fixq, line: lineNo,
           });
           rows.push(t, r.n, kept ? b.n - 1 : -1);
@@ -289,11 +297,18 @@ export function parseFusion(text: string): ParsedTrack {
             const c = g1 - g0 === 1 ? src.charCodeAt(g0) | 32 : 0;
             if (c === 99 || c === 118) flags.push({ n: flags.length + 1, t, lat, lon, name: null });
           }
+        } else if (timed) {
+          // A time without a position: a row that is no fix, so the readings after it count toward none.
+          // It gets the time a fix would, but leaves moving the date on to the fixes.
+          const tod = hh * 3600 + mi * 60 + ss;
+          const past = !dated && lastTod >= 0 && tod < lastTod - 43200 ? 1 : 0;
+          rows.push(haveYmd ? Date.UTC(yr, mo - 1, dy + dayShift + past, hh, mi, ss, ms) : Date.UTC(1970, 0, 1, hh, mi, ss, ms), r.n, -1);
+          voidCount++;
         } else voidCount++;
       } else if (Number.isFinite(lat) || Number.isFinite(lon)) {
         voidCount++;
       }
-      // An accelerometer reading belongs to the fix above it.
+      // An accelerometer reading belongs to the timed row above it: a fix, or a time without a position.
       if (motion && rows.n) {
         const x = numField(iAx), y = numField(iAy), z = numField(iAz);
         if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
@@ -327,7 +342,7 @@ export function parseFusion(text: string): ParsedTrack {
   const cols = b.build();
 
   if (truncated) problems.push({ kind: 'truncated', line: truncated.line, chars: truncated.chars, kept: cols.n });
-  if (garbage) problems.push({ kind: 'garbage', count: garbage, line: garbageLine });
+  if (badRows) problems.push({ kind: 'badRows', count: badRows, line: badRowsLine });
   if (b.counts.backwards) problems.push({ kind: 'backwards', count: b.counts.backwards, line: b.counts.backwardsLine });
   if (b.counts.jumps) problems.push({ kind: 'jump', count: b.counts.jumps, line: b.counts.jumpLine });
   if (cols.n === 0) problems.push({ kind: 'noFixes' });
@@ -336,7 +351,8 @@ export function parseFusion(text: string): ParsedTrack {
   notes.push({ kind: 'noZone' });
   if (noDate) notes.push({ kind: 'noDate' });
   if (r.n) notes.push({ kind: 'motion', rate: perSecond });
-  if (voidCount) notes.push({ kind: 'void', count: voidCount });
+  const noPosition = voidCount + b.counts.noPosition;
+  if (noPosition) notes.push({ kind: 'void', count: noPosition });
   if (b.counts.duplicates) notes.push({ kind: 'duplicates', count: b.counts.duplicates });
 
   const fields: FieldKey[] = ['time', 'position'];

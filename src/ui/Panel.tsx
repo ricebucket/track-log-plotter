@@ -9,7 +9,7 @@ import { hint, hintHandlers, useHintId } from './Computed';
 import { TrackRow } from './TrackRow';
 import { Details } from './Details';
 import { IconCheck, IconChevronDown, IconCombine, IconExternal, IconEye, IconEyeOff, IconLayers, IconMap, IconPanelHide, IconPanelShow, IconPegman, IconPlus, IconSelect, IconSheetHide, IconSheetShow, IconTrash } from './icons';
-import { NARROW, useDismiss, useMedia } from './hooks';
+import { focusAfterRender, NARROW, openButton, rowButton, useDismiss, useFocusAfterRender, useMedia } from './hooks';
 
 export function openFilePicker() {
   document.getElementById('tlp-file-input')?.click();
@@ -130,19 +130,25 @@ function GoogleMenu({ trigger, close }: { trigger: { current: HTMLButtonElement 
   );
 }
 
+/** Whether a menu, list or sheet is open over the page: Escape closes that first. */
+const popoverOpen = () => !!(S.picker.peek() || S.zoneOpen.peek() || S.basemapOpen.peek() || S.clockPicker.peek());
+
 function TracksPage() {
   const all = S.items.value;
   const shown = S.visible.value.length;
   const selecting = S.selecting.value;
   const ticked = S.ticked.value;
-  // Escape ends select mode (a menu or sheet open on top closes first, and keeps the key).
+  useFocusAfterRender();
+  // Escape ends select mode. A menu, list or sheet open on top closes first and keeps the key: its
+  // Escape is marked as used when it saw it first, and it is still open when this sees it first.
   useEffect(() => {
     if (!selecting) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented && !S.picker.peek()) S.endSelect(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented && !popoverOpen()) S.endSelect(); };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [selecting]);
   const allTicked = all.length > 0 && ticked.length === all.length;
+  const someTicked = !allTicked && ticked.length > 0;
   return (
     <>
       <section class={`panel-sec${selecting ? ' is-selecting' : ''}`} aria-labelledby="tracks-h">
@@ -151,8 +157,8 @@ function TracksPage() {
           {selecting ? (
             <>
               <span class="grow" />
-              <button type="button" class="select-all" role="checkbox" aria-checked={allTicked ? 'true' : 'false'} onClick={() => S.tickAll()}>
-                <span class={`tick-box${allTicked ? ' is-on' : ''}`} aria-hidden="true">{allTicked && <IconCheck size={13} />}</span>{t('select.all')}
+              <button type="button" class="select-all" role="checkbox" aria-checked={allTicked ? 'true' : someTicked ? 'mixed' : 'false'} onClick={() => S.tickAll()}>
+                <span class={`tick-box${allTicked ? ' is-on' : someTicked ? ' is-mixed' : ''}`} aria-hidden="true">{allTicked && <IconCheck size={13} />}</span>{t('select.all')}
               </button>
               <button type="button" class="btn-dark small" onClick={() => S.endSelect()}>{t('select.done')}</button>
             </>
@@ -166,16 +172,17 @@ function TracksPage() {
               >
                 {shown ? <IconEye size={17} /> : <IconEyeOff size={17} />}
               </button>
-              <button type="button" class="icon-btn outline" aria-label={t('tracks.select')} title={t('tracks.selectHint')} onClick={() => S.startSelect()}>
+              <button type="button" id="tlp-select" class="icon-btn outline" aria-label={t('tracks.select')} title={t('tracks.selectHint')} onClick={() => S.startSelect()}>
                 <IconSelect size={17} />
               </button>
-              <button type="button" class="btn-dark small" onClick={openFilePicker} disabled={all.length >= LOAD_LIMIT} title={all.length >= LOAD_LIMIT ? t('tracks.full') : undefined}>
+              <button type="button" id="tlp-add" class="btn-dark small" onClick={openFilePicker} disabled={all.length >= LOAD_LIMIT} title={all.length >= LOAD_LIMIT ? t('tracks.full') : undefined}>
                 <IconPlus />{t('tracks.add')}
               </button>
             </>
           )}
         </div>
         <ul class="track-list">
+          {/* Each row redraws only when its own track changes (TrackRow is memoized), not for every change to the list. */}
           {all.map((it) => <li key={it.id}><TrackRow item={it} /></li>)}
         </ul>
         {selecting && <SelectBar />}
@@ -215,7 +222,12 @@ function SelectBar() {
       <div class="select-bar" role="toolbar" aria-label={t('select.bar')}>
         <button
           type="button" class="bar-btn" aria-disabled={why ? 'true' : undefined} aria-describedby={why ? 'combine-why' : undefined}
-          onClick={() => { if (!why) S.combineTicked(); }}
+          onClick={() => {
+            if (why) return;
+            // The bar goes with select mode: the keyboard moves on to the new track's row.
+            const id = S.combineTicked();
+            if (id) focusAfterRender(() => rowButton(id));
+          }}
         >
           <IconCombine />{t('select.combine')}
         </button>
@@ -223,7 +235,14 @@ function SelectBar() {
         <button
           type="button" class={`bar-btn remove${asking ? ' is-asking' : ''}`} aria-disabled={ids.length ? undefined : 'true'}
           title={asking ? t('select.removeAgain') : undefined}
-          onClick={() => { if (!ids.length) return; if (asking) S.removeTicked(); else setAsking(true); }} onBlur={() => setAsking(false)}
+          onClick={() => {
+            if (!ids.length) return;
+            if (!asking) { setAsking(true); return; }
+            // The bar goes with select mode: the keyboard goes to the Select button that brings it back.
+            focusAfterRender(() => document.getElementById('tlp-select') ?? openButton());
+            S.removeTicked();
+          }}
+          onBlur={() => setAsking(false)}
         >
           <IconTrash />{asking ? t('select.removeAsk', { n: ids.length }) : t('select.remove')}
         </button>

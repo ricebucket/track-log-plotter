@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useComputed } from '@preact/signals';
 import type { MeasureKey } from '../model/types';
 import { trackName, type TrackItem } from '../state/logic';
 import * as S from '../state/store';
@@ -8,18 +9,30 @@ import { Badge } from './Badge';
 import { timeShares, type Scale } from '../color/scale';
 import { fmtDistance, fmtDuration, fmtPercent, fmtSpeed } from '../format';
 import { differentDays, fmtShortDate } from '../time/zones';
-import { formatName, measureName, measureTitle, nameTip, originalName, stepLabels, unitOf } from './labels';
+import { formatName, labeled, measureName, measureTitle, nameTip, originalName, stepLabels, unitOf } from './labels';
 import { IconCheck, IconChevronRight, IconCopy, IconDoc, IconEye, IconEyeOff, IconTrash, IconWarn } from './icons';
 import { Computed } from './Computed';
 import { explain } from './computedText';
 import { fullTextIfCut } from './cutText';
 import { CombinedLogs } from './Combined';
 import { isCombined } from '../combine/combine';
+import { focusAfterRender, memo, openButton, rowButton } from './hooks';
 
 export { badgeOf } from './Badge';
 
-export function TrackRow({ item }: { item: TrackItem }) {
-  const sel = S.selected.value?.id === item.id;
+/**
+ * A track's row in the list. It redraws when its own track changes, not on
+ * every change to the list: dragging another track's trust handle, or
+ * renaming one, leaves the other rows alone. (@preact/signals already skips a
+ * component that reads signals when its props are the same; memo makes sure
+ * of it for the rows, which also hold hook state.)
+ */
+export const TrackRow = memo(TrackRowView);
+
+function TrackRowView({ item }: { item: TrackItem }) {
+  // Whether this is the selected track, from the selected track's letter: a new trust share for the selected
+  // track doesn't redraw every row, and selecting another redraws just the two rows whose card opens or closes.
+  const sel = useComputed(() => S.selectedLetter.value === item.id).value;
   // A newly added track scrolls into view, so its open card isn't left below the fold.
   const row = useRef<HTMLDivElement>(null);
   const revealing = S.reveal.value === item.id;
@@ -67,7 +80,7 @@ export function TrackRow({ item }: { item: TrackItem }) {
           <span class={`track-name${canRename ? ' can-rename' : ''}`} data-tip={nameTip(item)}>{name}</span>
         )}
         {item.customName !== undefined && !editing && <span class="sr-only">{originalName(tr)}</span>}
-        <span class="track-sub" title={`${t('stat.distance')}: ${explain.distance()}`}>{sub}</span>
+        <span class="track-sub" title={labeled(t('stat.distance'), explain.distance())}>{sub}</span>
         {problems > 0 && (
           <span class="problem-badge"><IconWarn size={11} />{t('track.problems', { n: problems })}</span>
         )}
@@ -98,12 +111,13 @@ export function TrackRow({ item }: { item: TrackItem }) {
         {editing ? <div class="track-main is-editing">{inner}</div> : (
           <button
             ref={main} type="button" class="track-main"
-            {...(selecting ? { role: 'checkbox', 'aria-checked': tick ? 'true' : 'false', 'aria-label': `${t('select.track', { id: item.id })}: ${name}` } : { 'aria-expanded': sel ? 'true' : 'false' })}
+            {...(selecting ? { role: 'checkbox', 'aria-checked': tick ? 'true' : 'false', 'aria-label': labeled(t('select.track', { id: item.id }), name) } : { 'aria-expanded': sel ? 'true' : 'false' })}
             {...(canRename ? { 'aria-keyshortcuts': 'F2' } : {})}
             onClick={(e) => {
               if (selecting) S.toggleTick(item.id);
-              // On the selected track, a click on the name renames it; anywhere else on the row, as before.
-              else if (canRename && (e.target as Element).closest?.('.track-name')) setEditing(true);
+              // On the selected track, a click on the name renames it; anywhere else on the row, as before. The
+              // second click of a double-click isn't one: on a track not yet selected, the first selected it.
+              else if (canRename && (e.target as Element).closest?.('.track-name')) { if (e.detail <= 1) setEditing(true); }
               else S.select(item.id);
             }}
             onKeyDown={canRename ? (e) => { if (e.key === 'F2') { e.preventDefault(); setEditing(true); } } : undefined}
@@ -148,7 +162,9 @@ function NameBox({ item, done }: { item: TrackItem; done: (refocus: boolean) => 
       aria-label={t('track.rename', { id: item.id })} spellcheck={false} autoComplete="off" enterKeyHint="done"
       onInput={(e) => { typed.current = e.currentTarget.value; setValue(typed.current); }}
       onKeyDown={(e) => {
-        if (e.isComposing) return; // Enter or Escape for a input method's word, not for the box
+        // Enter or Escape for an input method's word, not for the box. Safari ends a word with an
+        // Enter that no longer says it is composing, but still has the input method's key code, 229.
+        if (e.isComposing || e.keyCode === 229) return;
         if (e.key === 'Enter') { e.preventDefault(); finish(true, true); }
         else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false, true); }
       }}
@@ -159,6 +175,8 @@ function NameBox({ item, done }: { item: TrackItem; done: (refocus: boolean) => 
 }
 
 function TrackDetailsInline({ item }: { item: TrackItem }) {
+  // Whether there are other tracks to copy the settings to: the open card doesn't redraw for every change to the list.
+  const others = useComputed(() => S.items.value.length > 1).value;
   const st = item.track.derived.stats;
   const detailsLabel = item.track.clock ? t('track.detailsClock') : t('track.details');
   const loc = S.locale.value;
@@ -173,14 +191,15 @@ function TrackDetailsInline({ item }: { item: TrackItem }) {
       <dl class="stats">
         {stats.map((s) => (
           <div key={s.label}>
-            <dt>{s.label}<Computed text={s.hint} /></dt>
+            {/* A label too long for its column (a wide fallback font, a phone) ends in an ellipsis, its calculator kept beside it. */}
+            <dt><span class="stat-label" onMouseEnter={fullTextIfCut(s.label)}>{s.label}</span><Computed text={s.hint} /></dt>
             <dd><span class="num">{s.value}</span>{s.unit && <span class="unit"> {s.unit}</span>}</dd>
           </div>
         ))}
       </dl>
       <SettingsCard item={item} />
       {isCombined(item.track) && <CombinedLogs item={item} track={item.track} />}
-      {S.items.value.length > 1 && (
+      {others && (
         <div class="card-links">
           <button type="button" class="link-btn" title={applyAllHint(item)} onClick={() => S.applyAll(item.id)}>
             <IconCopy /><span>{t('colorHalo.applyAll')}</span>
@@ -189,7 +208,7 @@ function TrackDetailsInline({ item }: { item: TrackItem }) {
       )}
       <div class="card-actions">
         {/* Files whose times have no zone: a reminder that the zone is set there. */}
-        <button type="button" class="btn-outline" onClick={() => S.openDetails(item.id)} onMouseEnter={fullTextIfCut(detailsLabel, (el) => el.querySelector('.btn-label'))}>
+        <button type="button" id={`tlp-props-${item.id}`} class="btn-outline" onClick={() => S.openDetails(item.id)} onMouseEnter={fullTextIfCut(detailsLabel, (el) => el.querySelector('.btn-label'))}>
           <IconDoc /><span class="btn-label">{detailsLabel}</span>
         </button>
         <RemoveButton item={item} />
@@ -213,7 +232,16 @@ function RemoveButton({ item }: { item: TrackItem }) {
     <button
       type="button" class={`icon-btn outline danger${asking ? ' is-asking' : ''}`}
       aria-label={asking ? undefined : t('details.remove')} title={asking ? t('details.removeAgain') : t('details.remove')}
-      onClick={() => { if (asking) S.remove(item.id); else setAsking(true); }} onBlur={() => setAsking(false)}
+      onClick={() => {
+        if (!asking) { setAsking(true); return; }
+        // The button goes with its track: the keyboard moves on to the next row (the one before, after the
+        // last), or to the start screen's Open button when no track is left.
+        const ids = S.items.value.map((x) => x.id), at = ids.indexOf(item.id);
+        const next = ids[at + 1] ?? ids[at - 1];
+        focusAfterRender(() => (next ? rowButton(next) : null) ?? openButton());
+        S.remove(item.id);
+      }}
+      onBlur={() => setAsking(false)}
     >
       <IconTrash />{asking && <span>{t('details.removeAsk')}</span>}
     </button>

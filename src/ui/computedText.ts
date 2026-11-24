@@ -1,5 +1,6 @@
 // Explanations for values the app computes, quoting the same constants the
 // computations use.
+import type { MeasureKey } from '../model/types';
 import { locale, t, units } from '../state/store';
 import { CLIMB_HYSTERESIS, ELE_SMOOTH_S, GRADE_HALF_WINDOW, MOVING_KMH } from '../derive/derive';
 import { fmtEle, fmtNum, fmtSpeed } from '../format';
@@ -7,6 +8,11 @@ import { RUNNING_KMH } from '../color/scale';
 import { unitOf } from './labels';
 
 const eleText = (m: number) => `${fmtEle(m, units.value, locale.value)} ${unitOf('ele')}`;
+
+/** A measure's description in the settings sheet; grade's says the distance it's worked out over, in the units in use. */
+export function measureLong(key: MeasureKey): string {
+  return t(`measure.${key}.long`, key === 'grade' ? { distance: eleText(GRADE_HALF_WINDOW * 2) } : undefined);
+}
 
 export const explain = {
   distance: () => t('computed.distance'),

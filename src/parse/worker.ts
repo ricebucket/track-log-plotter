@@ -15,5 +15,10 @@ self.addEventListener('message', async (e: MessageEvent<Job>) => {
   } catch {
     res = { ok: false, file: file.name, error: 'unreadable' };
   }
-  post({ id, res }, transferables(res));
+  try {
+    post({ id, res }, transferables(res));
+  } catch {
+    // A result that can't be sent (something in it can't be copied): the file counts as unreadable.
+    post({ id, res: { ok: false, file: file.name, error: 'unreadable' } }, []);
+  }
 });

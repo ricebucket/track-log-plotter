@@ -1,14 +1,14 @@
-import { useRef } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
 import type { RefObject } from 'preact';
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { LANGS, LOCALE, langName } from '../i18n/i18n';
-import { BASEMAPS, BASEMAP_IDS, type BasemapId } from '../map/basemaps';
+import { BASEMAPS, BASEMAP_IDS, basemapFailed, type BasemapId } from '../map/basemaps';
 import { mapApi } from '../map/bridge';
 import { fmtNum } from '../format';
 import { useDismiss } from './hooks';
 import { scaleBar } from './scaleBar';
-import { IconCheck, IconClose, IconCompass, IconFit, IconGear, IconZoomIn, IconZoomOut } from './icons';
+import { IconCheck, IconClose, IconCompass, IconFit, IconGear, IconWarn, IconZoomIn, IconZoomOut } from './icons';
 
 function Thumb({ id, size = 64 }: { id: BasemapId; size?: number }) {
   const c = BASEMAPS[id].thumb;
@@ -39,6 +39,16 @@ export function LangToggle() {
 function OptionsMenu({ trigger }: { trigger: RefObject<HTMLButtonElement | null> }) {
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, () => { S.basemapOpen.value = false; }, trigger);
+  // The focus moves into the menu as it opens, onto the basemap in use. When the menu closes with the
+  // focus inside (Escape, its Close button, the Options button), the focus goes back to the Options button.
+  useEffect(() => {
+    const el = ref.current;
+    (el?.querySelector<HTMLElement>('.bm-tile[aria-pressed="true"]') ?? el)?.focus();
+    return () => {
+      const at = document.activeElement;
+      if (!at || at === document.body || el?.contains(at)) trigger.current?.focus();
+    };
+  }, [trigger]);
   return (
     <div class="popover options-menu" role="dialog" aria-labelledby="opt-h" ref={ref}>
       <div class="picker-head">
@@ -85,6 +95,22 @@ function OptionsMenu({ trigger }: { trigger: RefObject<HTMLButtonElement | null>
   );
 }
 
+/**
+ * The basemap couldn't load, so the tracks are drawn on a plain background (see MapView).
+ * The notice stands where the app's other notices do, which go below it.
+ */
+function BasemapNotice() {
+  return (
+    <div class="map-notices">
+      <div class="toast" role="status">
+        <IconWarn size={16} />
+        <span>{t('map.styleFailed')}</span>
+        <button type="button" class="icon-btn" aria-label={t('common.dismiss')} title={t('common.dismiss')} onClick={() => { basemapFailed.value = false; }}><IconClose size={14} /></button>
+      </div>
+    </div>
+  );
+}
+
 export function MapTools() {
   const id = S.basemap.value;
   const btn = useRef<HTMLButtonElement>(null);
@@ -95,25 +121,29 @@ export function MapTools() {
   // Fit lives in the timeline's header; while the timeline is minimized it shows here instead.
   const fitHere = S.items.value.length > 0 && S.timelineMin.value;
   return (
-    <div class="map-tools">
-      {/* One button for every option: it keeps showing the basemap, and the gear says it holds more. */}
-      <button ref={btn} type="button" class="bm-button" aria-haspopup="dialog" aria-expanded={S.basemapOpen.value ? 'true' : 'false'} title={t('options.hint')} onClick={() => { S.basemapOpen.value = !S.basemapOpen.value; }}>
-        <span class="bm-mini"><Thumb id={id} size={40} /></span>
-        <span class="bm-button-text"><span class="eyebrow">{t('basemap.title')}</span><span class="bm-current">{t(`basemap.${id}`)}</span></span>
-        <span class="bm-opts"><IconGear size={21} /><span class="sr-only">{t('options.title')}</span></span>
-      </button>
-      <div class={`zoom-stack${turned ? ' has-compass' : ''}${fitHere ? ' has-fit' : ''}`}>
-        <button type="button" class="zoom-btn" aria-label={t('map.zoomIn')} title={t('map.zoomIn')} onClick={() => mapApi.zoomIn()}><IconZoomIn /></button>
-        <button type="button" class="zoom-btn" aria-label={t('map.zoomOut')} title={t('map.zoomOut')} onClick={() => mapApi.zoomOut()}><IconZoomOut /></button>
-        {fitHere && <button type="button" aria-label={t('map.fit')} title={t('map.fit')} onClick={() => mapApi.fit()}><IconFit /></button>}
-        {turned && (
-          <button type="button" class="compass" aria-label={t('map.north')} title={t('map.north')} onClick={() => mapApi.north()}>
-            <span style={{ transform: `rotate(${-v.bearing}deg)` }}><IconCompass /></span>
-          </button>
-        )}
+    <>
+      <div class="map-tools">
+        {/* One button for every option: it keeps showing the basemap, and the gear says it holds more. */}
+        <button ref={btn} type="button" class="bm-button" aria-haspopup="dialog" aria-expanded={S.basemapOpen.value ? 'true' : 'false'} title={t('options.hint')} onClick={() => { S.basemapOpen.value = !S.basemapOpen.value; }}>
+          <span class="bm-mini"><Thumb id={id} size={40} /></span>
+          <span class="bm-button-text"><span class="eyebrow">{t('basemap.title')}</span><span class="bm-current">{t(`basemap.${id}`)}</span></span>
+          <span class="bm-opts"><IconGear size={21} /><span class="sr-only">{t('options.title')}</span></span>
+        </button>
+        <div class={`zoom-stack${turned ? ' has-compass' : ''}${fitHere ? ' has-fit' : ''}`}>
+          <button type="button" class="zoom-btn" aria-label={t('map.zoomIn')} title={t('map.zoomIn')} onClick={() => mapApi.zoomIn()}><IconZoomIn /></button>
+          <button type="button" class="zoom-btn" aria-label={t('map.zoomOut')} title={t('map.zoomOut')} onClick={() => mapApi.zoomOut()}><IconZoomOut /></button>
+          {fitHere && <button type="button" aria-label={t('map.fit')} title={t('map.fit')} onClick={() => mapApi.fit()}><IconFit /></button>}
+          {turned && (
+            <button type="button" class="compass" aria-label={t('map.north')} title={t('map.north')} onClick={() => mapApi.north()}>
+              <span style={{ transform: `rotate(${-v.bearing}deg)` }}><IconCompass /></span>
+            </button>
+          )}
+        </div>
+        {S.basemapOpen.value && <OptionsMenu trigger={btn} />}
       </div>
-      {S.basemapOpen.value && <OptionsMenu trigger={btn} />}
-    </div>
+      {/* Out of the way while the Options menu is open: on a phone it would cover the menu. */}
+      {basemapFailed.value && !S.basemapOpen.value && <BasemapNotice />}
+    </>
   );
 }
 

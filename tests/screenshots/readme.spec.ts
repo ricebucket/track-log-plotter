@@ -4,8 +4,8 @@ import { expect, test, type Browser, type BrowserContextOptions, type Page } fro
 
 const OUT = 'docs/screenshots';
 const TEXT = {
-  en: { sample: 'Try the sample ride' },
-  zh: { sample: '试试示例骑行' },
+  en: { sample: 'Try the samples' },
+  zh: { sample: '试试示例' },
 } as const;
 type Lang = keyof typeof TEXT;
 

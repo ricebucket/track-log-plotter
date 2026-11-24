@@ -3,17 +3,16 @@
 // the elevation offset. The Stanford drive brings three real-looking loggers;
 // small synthetic walks in Central Park cover the rest.
 import { describe, expect, it } from 'vitest';
-import { checkCombine, combineTracks, isCombined, recombine, Use, type ComboTrack } from '../../src/combine/combine';
-import { parseText } from '../../src/parse/index';
+import { checkCombine, combineTracks, isCombined, MAX_LOG_SECONDS, recombine, Use, type ComboTrack } from '../../src/combine/combine';
 import type { LoadedTrack } from '../../src/model/types';
 import { load } from '../helpers/fixtures';
+import { KY, loop, walk } from '../helpers/walks';
 
 const car = load('stanford-drive-car.nmea');
 const phone = load('stanford-drive-phone.gpx');
 const loggerCsv = load('stanford-drive-logger.csv');
 const logger = load('stanford-drive-logger.gpx');
 
-const KY = 110_540;
 const metres = (lat1: number, lon1: number, lat2: number, lon2: number) => Math.hypot((lat1 - lat2) * KY, (lon1 - lon2) * KY * Math.cos((lat1 * Math.PI) / 180));
 const median = (v: number[]) => [...v].sort((a, b) => a - b)[v.length >> 1];
 
@@ -32,39 +31,6 @@ function gapsTo(c: LoadedTrack, log: LoadedTrack, shiftS = 0): number[] {
 function combined(tracks: LoadedTrack[], trust?: number[]): ComboTrack {
   const r = combineTracks(tracks, { trust, name: 'Combined' });
   if (!r.ok) throw new Error(r.reason);
-  return r.track;
-}
-
-// ---------- synthetic walks in Central Park ----------
-interface Walk { offsetM?: number; shiftS?: number; seconds?: number; gap?: [number, number]; hold?: [number, number]; holds?: (i: number) => boolean; holdSpeed?: number; zero?: (i: number) => boolean; creator?: string; hdop?: (i: number) => number; seed?: number; drop?: number[]; speed?: boolean; ele?: number }
-/**
- * A walk at 1.5 m/s, a fix a second, as GPX: east for 150 s, then north (a clock
- * offset only shows where the way turns). `offsetM` puts it that far north.
- */
-function walk(o: Walk = {}): LoadedTrack {
-  const t0 = Date.UTC(2026, 5, 14, 9, 0, 0) + (o.shiftS ?? 0) * 1000;
-  let seed = o.seed ?? 1;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 2;
-  const lines: string[] = [];
-  let lastLat = 0, lastLon = 0;
-  for (let i = 0; i < (o.seconds ?? 300); i++) {
-    // Noise is drawn for every second, so skipping a fix doesn't change the others.
-    const east = Math.min(i, 150) * 1.5, north = Math.max(0, i - 150) * 1.5;
-    let lat = 40.7712 + ((o.offsetM ?? 0) + north + rnd() * 0.8) / KY;
-    let lon = -73.9742 + (east + rnd() * 0.8) / (KY * Math.cos((40.7712 * Math.PI) / 180));
-    // A logger holding its position: it repeats its last fix (and, some, a speed of 0) until it has a new one.
-    const holding = (o.hold && i > o.hold[0] && i < o.hold[1]) || o.holds?.(i);
-    if (holding) { lat = lastLat; lon = lastLon; }
-    lastLat = lat; lastLon = lon;
-    if (o.gap && i >= o.gap[0] && i < o.gap[1]) continue;
-    if (o.drop?.includes(i)) continue;
-    const time = new Date(t0 + i * 1000).toISOString().replace('.000Z', 'Z');
-    const extra = `${o.ele === undefined ? '' : `<ele>${o.ele}</ele>`}${o.hdop ? `<hdop>${o.hdop(i).toFixed(1)}</hdop>` : ''}${o.speed === false ? '' : `<extensions><gpxtpx:TrackPointExtension><gpxtpx:speed>${holding && o.holdSpeed !== undefined ? o.holdSpeed.toFixed(2) : o.zero?.(i) ? '0.00' : '1.50'}</gpxtpx:speed></gpxtpx:TrackPointExtension></extensions>`}`;
-    lines.push(`<trkpt lat="${lat.toFixed(7)}" lon="${lon.toFixed(7)}"><time>${time}</time>${extra}</trkpt>`);
-  }
-  const gpx = `<?xml version="1.0"?><gpx version="1.1" creator="${o.creator ?? 'test'}" xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v2"><trk><trkseg>${lines.join('')}</trkseg></trk></gpx>`;
-  const r = parseText(gpx, `walk-${o.offsetM ?? 0}-${o.seed ?? 1}.gpx`);
-  if (!r.ok) throw new Error(r.error);
   return r.track;
 }
 
@@ -87,6 +53,42 @@ describe('combining logs: the instant checks', () => {
   it('refuses logs that share no time at all when no time zone can be set', () => {
     expect(checkCombine([car, load('central-park-loop.nmea')])).toEqual({ ok: false, reason: 'noOverlap' });
   });
+
+  it('checks a log of a single fix too: it shares no time with a log it lies outside', () => {
+    const lone = (s: number) => walk({ seed: 3, seconds: 1, shiftS: s });
+    expect(checkCombine([walk(), lone(120)])).toEqual({ ok: true });
+    expect(checkCombine([walk(), lone(-3600)])).toEqual({ ok: false, reason: 'noOverlap' });
+    expect(checkCombine([lone(0), lone(20 * 365 * 86_400)])).toEqual({ ok: false, reason: 'noOverlap' });
+  });
+});
+
+describe('combining logs that span a long time', () => {
+  it('lays out only the seconds the logs cover: a stray fix 60 days before adds one second, not 60 days of them', () => {
+    const a = walk({ seed: 41 }), b = walk({ seed: 42, offsetM: 3 }), stray = walk({ seed: 42, offsetM: 3, stray: 60 * 86_400 });
+    const plain = combined([a, b]), far = combined([a, stray]);
+    expect(far.cols.n).toBe(plain.cols.n + 1);
+    expect(far.cols.t[0]).toBe(a.cols.t[0] - 60 * 86_400_000);
+    for (const k of ['t', 'lat', 'lon', 'speed'] as const) expect(Array.from(far.cols[k].subarray(1))).toEqual(Array.from(plain.cols[k]));
+    // How quickly: tests/unit/performance.test.ts.
+  }, 30_000);
+
+  it(`refuses logs covering more than ${MAX_LOG_SECONDS / 1e6} million seconds between them, and counts only the seconds they cover`, () => {
+    // Two loggers with a fix every 1000 s for 40 days (no gap at that pace): 3.46 million seconds each.
+    const n = (40 * 86_400) / 1000;
+    expect(combineTracks([loop(n, { stepS: 1000 }), loop(n, { stepS: 1000, northM: 3, seed: 2 })])).toEqual({ ok: false, reason: 'tooLong' });
+    // The same 40 days with fixes only in the first and last 12 hours: 43,001 seconds each, twice.
+    const keep = (i: number) => i <= 43 || i >= n - 44;
+    const r = combineTracks([loop(n, { stepS: 1000, keep }), loop(n, { stepS: 1000, northM: 3, seed: 2, keep })]);
+    expect(r.ok && r.track.cols.n).toBe(2 * 43_001);
+  }, 30_000);
+
+  it("fills in a log's left-out speeds in one pass, however many come in a row", () => {
+    // Every fix of the second log records 0 while it moves. Each was filled by looking along the whole run: 2.5 s.
+    const a = loop(40_000), zero = loop(40_000, { northM: 3, seed: 2, speed: 0 });
+    const c = combined([a, zero]); // how quickly: tests/unit/performance.test.ts
+    // With no speed after them to run to, its 0s stay left out: past its first fix, the speed is the first log's.
+    expect(Array.from(c.cols.speed.subarray(1)).every((v) => Math.abs(v - 1.5) < 1e-6)).toBe(true);
+  }, 30_000);
 });
 
 describe('combining logs: the Stanford drive', () => {
@@ -185,6 +187,10 @@ describe('combining logs: the Stanford drive', () => {
     expect(median(gapsTo(carOnly, phone))).toBeLessThan(0.01);
   });
 
+  it('takes any new trust: no change of the log trusted most finds two of the logs to be one recording', () => {
+    for (const trust of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) expect(recombine(three, trust).combo.sources.map((s) => s.trust)).toEqual(trust);
+  });
+
   it('gives the same track when trust changes as when combining afresh with that trust', () => {
     // The same log trusted most: only the weighted averages are redone. Then a
     // change of the log trusted most, which moves the clocks: everything is.
@@ -229,13 +235,13 @@ describe('a source trusted 100%', () => {
 });
 
 describe('combining logs: corner cases', () => {
-  // A logger that repeats its last fix while it has no new one (i-gotU, recording a speed of 0 meanwhile):
+  // A logger that repeats its last fix while it has no new one, recording a speed of 0 meanwhile:
   // the repeats are dropped when its file is read, and the step across them isn't a gap.
-  const IGOTU = 'igotU_GPS_WIN';
+  const REPEATER = 'igotU_GPS_WIN'; // the creator its software writes (data, so it keeps the maker's name)
 
   it('draws a log across the repeats dropped from it, straight from where it stopped to where it moved on', () => {
     // The stuck log repeats its fix from 100 s to 140 s while both walk east at 1.5 m/s.
-    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [100, 140], holdSpeed: 0, creator: IGOTU });
+    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [100, 140], holdSpeed: 0, creator: REPEATER });
     expect(stuck.cols.n).toBe(300 - 39);
     const c = combined([moving, stuck]);
     const T0 = moving.cols.t[0];
@@ -250,7 +256,7 @@ describe('combining logs: corner cases', () => {
   });
 
   it('treats repeats over two minutes as a gap in that log, following the logs that move', () => {
-    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [20, 200], creator: IGOTU });
+    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [20, 200], creator: REPEATER });
     const c = combined([moving, stuck]);
     const T0 = moving.cols.t[0];
     const i = c.cols.t.findIndex((t) => t === T0 + 130_000);
@@ -262,7 +268,7 @@ describe('combining logs: corner cases', () => {
   it("doesn't zigzag between the logs while one keeps repeating its fix and catching up", () => {
     // 8 m apart; the second log repeats its fix 15 s out of every 20, like a logger that only now and then gets
     // a new one. With the repeats counted, the combined line went to the stale fix and snapped back.
-    const a = walk({ seed: 4 }), b = walk({ seed: 5, offsetM: 8, holds: (i) => i % 20 > 4 && i < 150, holdSpeed: 0, creator: IGOTU });
+    const a = walk({ seed: 4 }), b = walk({ seed: 5, offsetM: 8, holds: (i) => i % 20 > 4 && i < 150, holdSpeed: 0, creator: REPEATER });
     const c = combined([a, b]);
     const T0 = a.cols.t[0];
     // The walk heads east until 150 s: the combined line's north offset there should hold steady.
@@ -280,7 +286,7 @@ describe('combining logs: corner cases', () => {
 
   it("leaves out a recorded 0 at a fix that moved, and runs that log's speed straight across the hold after it", () => {
     // Like the logger: the fix at 100 s moves on but already says 0, then it repeats that fix until 140 s.
-    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [100, 140], holdSpeed: 0, zero: (i) => i === 100, creator: IGOTU });
+    const moving = walk({ seed: 2 }), stuck = walk({ seed: 3, offsetM: 3, hold: [100, 140], holdSpeed: 0, zero: (i) => i === 100, creator: REPEATER });
     const T0 = moving.cols.t[0];
     // On its own the log keeps what it recorded.
     const j = stuck.cols.t.findIndex((t) => t === T0 + 100_000);
@@ -342,6 +348,38 @@ describe('combining logs: corner cases', () => {
     const a = walk({ seed: 6 }), b = walk({ seed: 6, drop: [150] });
     expect(checkCombine([a, b])).toEqual({ ok: true });
     expect(combineTracks([a, b])).toEqual({ ok: false, reason: 'duplicate' });
+  });
+
+  it('knows the same recording at a fix every 3, 5 or 10 s, and still combines two loggers 3 m apart at that pace', () => {
+    // The fixes taken at the same instant were counted only where the fixes either side came within 4 s.
+    for (const step of [3, 5, 10]) {
+      const a = walk({ seed: 6, seconds: 900, step });
+      expect(combineTracks([a, walk({ seed: 6, seconds: 900, step, drop: [450] })])).toEqual({ ok: false, reason: 'duplicate' });
+      expect(combineTracks([a, walk({ seed: 7, seconds: 900, step, offsetM: 3 })]).ok).toBe(true);
+    }
+  });
+
+  it('finds the same recording in any two of three logs, whichever is trusted most, so no change of trust can turn one up later', () => {
+    // Only the pairs with the log keeping its clock were checked: trusted most, the other log let the copies through.
+    const other = walk({ seed: 9, offsetM: 3, seconds: 299 }), rec = walk({ seed: 6 }), copy = walk({ seed: 6, drop: [150] });
+    expect(checkCombine([other, rec, copy])).toEqual({ ok: true });
+    for (const trust of [undefined, [1, 0, 0], [0, 1, 0], [0, 0, 1], [0.6, 0.2, 0.2]]) expect(combineTracks([other, rec, copy], { trust })).toEqual({ ok: false, reason: 'duplicate' });
+  });
+
+  it("never gives a position that isn't a number, whatever a log's accuracy says", () => {
+    // The first log has a gap from 100 s to 200 s, where the second is alone. The second's accuracy is replaced.
+    const a = walk({ seed: 2, gap: [100, 200] }), b = walk({ seed: 3, offsetM: 3 });
+    const accuracy = (f: (i: number) => number): LoadedTrack => ({ ...b, derived: { ...b.derived, accuracy: Float64Array.from({ length: b.cols.n }, (_, i) => f(i)) } });
+    const numbers = (c: ComboTrack) => Array.from(c.cols.lat).every(Number.isFinite) && Array.from(c.cols.lon).every(Number.isFinite);
+    // 0 wherever both logs have a fix: its error from their spread came out infinite, and its weight where alone 0.
+    const zero = combined([a, accuracy((i) => (i >= 100 && i < 200 ? 1 : 0))]);
+    expect(zero.combo.sources.map((s) => Number.isFinite(s.typicalM))).toEqual([true, true]);
+    expect(numbers(zero)).toBe(true);
+    // Infinite where it is alone: the only weight there is 0, so the logs used there count alike.
+    const inf = combined([a, accuracy((i) => (i >= 100 && i < 200 ? Infinity : 1))]);
+    expect(numbers(inf)).toBe(true);
+    const i = inf.cols.t.findIndex((t) => t === a.cols.t[0] + 150_000);
+    expect(metres(inf.cols.lat[i], inf.cols.lon[i], inf.combo.srcLat[1][i], inf.combo.srcLon[1][i])).toBeLessThan(0.01);
   });
 
   it('warns when the logs are too far apart to be the same trip', () => {

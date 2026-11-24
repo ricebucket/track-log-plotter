@@ -63,11 +63,16 @@ describe('select mode', () => {
     render(<App Map={NoMap} />);
     fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     const all = screen.getByRole('checkbox', { name: 'Select all' });
+    expect(all.getAttribute('aria-checked')).toBe('false');
     fireEvent.click(all);
     expect(S.ticked.value).toEqual(['A', 'B', 'C']);
     expect(all.getAttribute('aria-checked')).toBe('true');
     fireEvent.click(all);
     expect(S.ticked.value).toEqual([]);
+    // Some ticked: neither all nor none.
+    fireEvent.click(rowBox('B'));
+    expect(all.getAttribute('aria-checked')).toBe('mixed');
+    expect(all.querySelector('.tick-box')!.classList.contains('is-mixed')).toBe(true);
   });
 
   it('removes the ticked tracks after asking once more, and leaves select mode', () => {
@@ -86,15 +91,15 @@ describe('select mode', () => {
     render(<App Map={NoMap} />);
     tick('A');
     expect(combineBtn().getAttribute('aria-disabled')).toBe('true');
-    expect(screen.getByText('Select 2 or 3 logs of the same trip to combine them.')).toBeTruthy();
+    expect(screen.getByText('Select 2 or 3 tracks of the same trip to combine them.')).toBeTruthy();
     fireEvent.click(rowBox('C'));
-    expect(screen.getByText('These logs share no time.')).toBeTruthy();
+    expect(screen.getByText('These tracks share no time.')).toBeTruthy();
     fireEvent.click(rowBox('C'));
     fireEvent.click(rowBox('B'));
     expect(combineBtn().getAttribute('aria-disabled')).toBeNull();
     fireEvent.click(rowBox('C'));
     fireEvent.click(rowBox('D'));
-    expect(screen.getByText('At most 3 logs can be combined.')).toBeTruthy();
+    expect(screen.getByText('At most 3 tracks can be combined.')).toBeTruthy();
     // Pressing a greyed-out Combine does nothing.
     fireEvent.click(combineBtn());
     expect(S.items.value).toHaveLength(4);
@@ -185,6 +190,44 @@ describe('combining', () => {
   });
 });
 
+describe('combining while three other tracks show', () => {
+  it('adds the combined track hidden, and its row says why', () => {
+    S.addLoaded([walk('phone.gpx'), walk('watch.gpx', 3, 280), load('central-park-loop.nmea'), load('roosevelt-island-run.gpx'), load('lower-manhattan-walk.gpx')]);
+    render(<App Map={NoMap} />);
+    // A, B and C show at first: hide the two walks, show the others.
+    act(() => { S.toggleVisible('A'); S.toggleVisible('B'); S.toggleVisible('D'); S.toggleVisible('E'); });
+    expect(S.items.value.filter((x) => x.vis).map((x) => x.id)).toEqual(['C', 'D', 'E']);
+    tick('A', 'B');
+    fireEvent.click(combineBtn());
+    const f = S.items.value.find((x) => x.id === 'F')!;
+    expect([f.vis, S.selected.value?.id]).toEqual([false, 'F']);
+    expect(within(document.querySelector('.track-row[data-track="F"]') as HTMLElement).getByText('Three tracks are showing. Hide one to show this one.')).toBeTruthy();
+  });
+});
+
+describe('logs too long to combine', () => {
+  /** A logger with a fix every 1000 s for 40 days: no gap at that pace, so it covers every second. */
+  function longLog(file: string, eastM: number, offsetMs = 0): LoadedTrack {
+    const t0 = Date.UTC(2026, 5, 1) + offsetMs;
+    const pts = Array.from({ length: 3457 }, (_, i) =>
+      `<trkpt lat="${(40.775 + (i % 50) / 111_195).toFixed(7)}" lon="${(-73.969 + eastM / 84_300).toFixed(7)}"><time>${new Date(t0 + i * 1_000_000).toISOString()}</time></trkpt>`);
+    const r = parseText(`<?xml version="1.0"?><gpx version="1.1" creator="Test"><trk><trkseg>${pts.join('')}</trkseg></trk></gpx>`, file);
+    if (!r.ok) throw new Error(r.error);
+    return r.track;
+  }
+
+  it('says so, rather than that they have no moment in common', () => {
+    // Half a second apart, so they aren't taken for one recording opened twice.
+    S.addLoaded([longLog('long-a.gpx', 0), longLog('long-b.gpx', 4, 500)]);
+    render(<App Map={NoMap} />);
+    tick('A', 'B');
+    fireEvent.click(combineBtn());
+    expect(S.comboNotice.value).toEqual({ kind: 'tooLong' });
+    expect(screen.getByText(/^These tracks cover too much time to combine/)).toBeTruthy();
+    expect(S.items.value).toHaveLength(2);
+  });
+});
+
 describe("the combined track's card", () => {
   function combinedCarAndPhone() {
     S.addLoaded([load('stanford-drive-car.nmea'), load('stanford-drive-phone.gpx')]);
@@ -231,8 +274,35 @@ describe("the combined track's card", () => {
     for (let k = 0; k < 4; k++) fireEvent.keyDown(handle, { key: 'ArrowLeft' });
     fireEvent.click(within(row).getByRole('button', { name: 'Make them equal' }));
     expect(combo().combo.sources.map((s) => s.trust)).toEqual([0.5, 0.5]);
-    fireEvent.click(within(row).getByRole('button', { name: 'Hide' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Done' }));
     expect(within(row).queryByRole('slider')).toBeNull();
+  });
+
+  it('moves the handle on the line with Up and Down as with Right and Left, reads out the share they raise, and works nothing out for a step that changes nothing', () => {
+    const row = combinedCarAndPhone();
+    fireEvent.click(within(row).getByRole('button', { name: 'Adjust' }));
+    const handle = within(row).getByRole('slider', { name: 'Trust in each source' });
+    expect(handle.getAttribute('aria-valuenow')).toBe('50');
+    fireEvent.keyDown(handle, { key: 'ArrowUp' });
+    expect(combo().combo.sources.map((s) => s.trust)).toEqual([0.45, 0.55]);
+    // The value read out is the right-hand source's share: Up and Right raise it.
+    expect(handle.getAttribute('aria-valuenow')).toBe('55');
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    expect(handle.getAttribute('aria-valuenow')).toBe('60');
+    fireEvent.keyDown(handle, { key: 'ArrowDown' });
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' });
+    expect(handle.getAttribute('aria-valuenow')).toBe('50');
+    // Home at the center, or an arrow at the end of the line: the same shares, nothing worked out again.
+    const equal = combo();
+    fireEvent.keyDown(handle, { key: 'Home' });
+    fireEvent.click(within(row).getByRole('button', { name: 'Make them equal' }));
+    expect(combo()).toBe(equal);
+    for (let k = 0; k < 10; k++) fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    expect(combo().combo.sources.map((s) => s.trust)).toEqual([0, 1]);
+    const end = combo();
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    fireEvent.keyDown(handle, { key: 'ArrowUp' });
+    expect(combo()).toBe(end);
   });
 
   it('says a source at 0% only fills gaps, and the one at 100% is never left out', () => {
@@ -276,7 +346,7 @@ describe("the combined track's card", () => {
     fireEvent.click(within(row).getByRole('button', { name: /^Properties/ }));
     const logs = screen.getByRole('region', { name: 'Sources' });
     expect(within(logs).getAllByRole('listitem').map((li) => li.querySelector('.combo-file')!.textContent)).toEqual(['stanford-drive-car.nmea', 'stanford-drive-phone.gpx']);
-    expect(screen.getByText("Source B's clock read 3.0 s ahead of source A's: its times were moved back to match.")).toBeTruthy();
+    expect(screen.getByText("Source B's clock read 3.0 s ahead of source A's: its times were made 3.0 s earlier to match.")).toBeTruthy();
     expect(document.querySelector('.amber-note')?.textContent).toMatch(/^Source B reads a steady 3\d m lower than source A: one of them probably gives heights above the ellipsoid/);
   });
 });
@@ -287,12 +357,12 @@ describe('the timeline', () => {
     render(<App Map={NoMap} />);
     const t = S.items.value[0].track.cols.t, n = t.length;
     act(() => { S.timelineView.value = [t[0], t[Math.floor(n / 4)]]; });
-    expect(screen.queryByRole('button', { name: 'Go to point' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show the cursor' })).toBeNull();
     act(() => { S.cursorT.value = t[Math.floor((n * 3) / 4)]; });
-    fireEvent.click(screen.getByRole('button', { name: 'Go to point' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show the cursor' }));
     const [a, b] = S.timelineView.value!;
     expect(b - a).toBe(t[Math.floor(n / 4)] - t[0]);
     expect(Math.abs((a + b) / 2 - S.cursorT.value!)).toBeLessThan(1000);
-    expect(screen.queryByRole('button', { name: 'Go to point' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show the cursor' })).toBeNull();
   });
 });

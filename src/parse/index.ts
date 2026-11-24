@@ -8,8 +8,9 @@ import { parseFusion } from './fusion';
 export const MAX_BYTES = 300 * 1024 * 1024;
 
 const NMEA_LINE = /^\s*\$(GP|GN|GL|GA|GB|BD|GQ|GI)[A-Z]{3},/m;
-// Columbus Fusion (and older Columbus CSV) logs: a "# Format=" line, or a
-// header that starts with tag,date,time (optionally after INDEX) and the position.
+// Columbus Fusion logs (and an older CSV layout, which the same reader takes): a
+// "# Format=" line, or a header that starts with tag,date,time (optionally
+// after INDEX) and the position.
 const CSV_HEADER = /^\s*(?:index\s*,\s*)?tag\s*,\s*date\s*,\s*time\s*,\s*lat/im;
 const CSV_FORMAT = /^\s*#\s*format\s*=/im;
 

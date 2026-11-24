@@ -1,14 +1,20 @@
 // Combining 2 or 3 logs of the same trip into one track. Every step is one
-// pass (or a fixed few) through the logs in time order, so the work grows in
-// step with the number of fixes, and the hot loops allocate nothing: buffers
-// are typed arrays sized once, distances are compared squared.
+// pass (or a fixed few) through the logs in time order, over their fixes and
+// the whole seconds they cover, so the work grows in step with the time the
+// logs cover (a second for each fix, at a fix a second), not with the span
+// from the first fix to the last: a stray fix days away adds one second, not
+// days of them. Logs covering more than MAX_LOG_SECONDS between them aren't
+// combined. The hot loops allocate nothing: buffers are typed arrays sized
+// once, distances are compared squared.
 //
+//  0. Two copies of the same recording aren't combined: every pair of logs
+//     is checked, the same way whichever log keeps its clock.
 //  1. Clocks: a least-squares fit of the gap between each log and the
 //     reference as a steady offset minus (clock difference x velocity),
 //     rounded to tenths of a second and applied from 0.2 s up to 10 s.
-//  2. Points on whole seconds; each log placed there from its own fixes,
-//     interpolated between them unless the log has a gap there (a step
-//     across repeats dropped when the file was read isn't one).
+//  2. Points on the whole seconds some log covers; each log placed there from
+//     its own fixes, interpolated between them unless the log has a gap there
+//     (a step across repeats dropped when the file was read isn't one).
 //  3. Each fix's accuracy (HDOP, else satellites, against the log's own
 //     median; corrected fixes count double) averaged over 10 s: worked out
 //     when the log loaded (derived.accuracy).
@@ -28,13 +34,18 @@
 //     Where the logs giving the height change, grade and climb don't reach
 //     across (the height may jump there by that offset).
 import type { Columns, FieldKey, LoadedTrack } from '../model/types';
-import { ACCURACY_SMOOTH_S, derive } from '../derive/derive';
+import { derive } from '../derive/derive';
 
 export const MAX_LOGS = 3;
-/** Each fix's accuracy is averaged over this many seconds (when the log loads). */
-export const SMOOTH_S = ACCURACY_SMOOTH_S;
 /** Expected errors never go below this (m). */
 export const MIN_ERROR_M = 0.5;
+/**
+ * Most seconds of logs a combination takes: the seconds some log covers, once
+ * for each log (2 logs covering about 17 days, 3 about 11). Each takes about
+ * 50 bytes, kept with the combined track for changes of trust: about 150 MB
+ * at most, with several combined tracks able to be open at once.
+ */
+export const MAX_LOG_SECONDS = 3_000_000;
 
 /** What happened to a log at one second of the combined track. Idle: at 0% trust and not needed to fill a gap. */
 export const Use = { Absent: 0, Used: 1, LeftOut: 2, Idle: 3 } as const;
@@ -87,8 +98,9 @@ export function checkCombine(tracks: LoadedTrack[]): CheckResult {
     const a0 = A.t[0], a1 = A.t[A.n - 1], b0 = B.t[0], b1 = B.t[B.n - 1];
     // The same recording: the same number of fixes over the same time, whatever the file type.
     if (A.n === B.n && a0 === b0 && a1 === b1) return { ok: false, reason: 'duplicate' };
-    const shared = Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
-    if (shared < Math.min(a1 - a0, b1 - b0) / 2) {
+    const from = Math.max(a0, b0), to = Math.min(a1, b1), shared = Math.max(0, to - from);
+    // to < from: no instant in common. (A log of one fix has no time to share, but may still lie inside the other.)
+    if (to < from || shared < Math.min(a1 - a0, b1 - b0) / 2) {
       // A log whose file doesn't say its time zone may simply be read in the wrong one.
       const zone = tracks[a].clock !== undefined ? a : tracks[b].clock !== undefined ? b : -1;
       if (zone >= 0) return { ok: false, reason: 'zone', log: zone };
@@ -126,12 +138,16 @@ function toSrc(tr: LoadedTrack, lat0: number, lon0: number): Src {
   }
   // A speed left out is skipped, not replaced: at each second the log's speed runs straight between its nearest
   // fixes that have one, as its position runs between fixes. Without one on each side before a gap, it has none.
-  for (let i = 0; dropped && i < n; i++) {
+  // One pass: each run of fixes without a speed, [i, j), ends at the next speed or the next gap, and is filled
+  // fix by fix from the one before (just filled) to the speed after.
+  for (let i = 1; dropped && i < n; i++) {
     if (v[i] === v[i]) continue;
-    let a = i, b = i;
-    while (a > 0 && !gap[a]) { a--; if (v[a] === v[a]) break; }
-    while (b < n - 1 && !gap[b + 1]) { b++; if (v[b] === v[b]) break; }
-    if (a < i && b > i && v[a] === v[a] && v[b] === v[b]) v[i] = v[a] + ((v[b] - v[a]) * (c.t[i] - c.t[a])) / (c.t[b] - c.t[a]);
+    let j = i + 1;
+    while (j < n && !gap[j] && v[j] !== v[j]) j++;
+    if (!gap[i] && v[i - 1] === v[i - 1] && j < n && !gap[j]) {
+      for (let k = i; k < j; k++) v[k] = v[k - 1] + ((v[j] - v[k - 1]) * (c.t[k] - c.t[k - 1])) / (c.t[j] - c.t[k - 1]);
+    }
+    i = j - 1;
   }
   // Accuracy over time, and what it's measured against: kept since the log loaded.
   const hasH = tr.fields.includes('hdop');
@@ -177,12 +193,14 @@ export function clockFit(ref: Src, b: Src, shiftMs: number): { tau: number; rms:
   let n = 0, mdx = 0, mdy = 0, mvx = 0, mvy = 0, vd = 0, vv = 0, d2 = 0, exact = 0, exact2 = 0;
   const rx = ref.x, ry = ref.y, rt = ref.t, bx = b.x, by = b.y;
   for (let i = 1; i < ref.n - 1; i++) {
-    const dt = rt[i + 1] - rt[i - 1];
-    if (dt <= 0 || dt > 4000 || !cur.at(rt[i])) continue;
+    if (!cur.at(rt[i])) continue;
     const dx = cur.val(bx) - rx[i], dy = cur.val(by) - ry[i];
     const dd = dx * dx + dy * dy;
+    // Fixes at the same instant count however far apart the fixes come: a logger may take one every 5 s.
     if (cur.fixAt >= 0) { exact++; exact2 += dd; }
-    if (dd > 10_000) continue; // over 100 m apart: not for the fit
+    // The fit needs the velocity, from the fixes either side within 4 s; and not over 100 m apart.
+    const dt = rt[i + 1] - rt[i - 1];
+    if (dt <= 0 || dt > 4000 || dd > 10_000) continue;
     const vx = ((rx[i + 1] - rx[i - 1]) / dt) * 1000, vy = ((ry[i + 1] - ry[i - 1]) / dt) * 1000;
     n++; mdx += dx; mdy += dy; mvx += vx; mvy += vy; vd += vx * dx + vy * dy; vv += vx * vx + vy * vy; d2 += dd;
   }
@@ -196,13 +214,62 @@ export function clockFit(ref: Src, b: Src, shiftMs: number): { tau: number; rms:
   return { tau, rms: Math.sqrt(Math.max(0, vard + 2 * tau * cov + tau * tau * varv)), used: n, exact, exactRms };
 }
 
+// ---------------------------------------------------------------- 2. seconds
+
+/**
+ * The whole seconds (as times, ms) where some log has a position, in order,
+ * from the first fix of all the logs to the last: with its clock moved, a log
+ * has one from 1 ms before the first fix of each of its runs without a gap to
+ * 1 ms after the last (see Cursor.at). Each log's runs come in time order, so
+ * one pass through them all merges them, and seconds no log covers take no
+ * room. Null when there are more than `max`.
+ */
+function coveredSeconds(S: Src[], shift: Float64Array, max: number): Float64Array | null {
+  const K = S.length, sh = new Float64Array(K), at = new Int32Array(K); // at: each log's next run starts at that fix
+  let first = Infinity, last = -Infinity;
+  for (let k = 0; k < K; k++) {
+    sh[k] = shift[k] * 1000;
+    first = Math.min(first, S[k].t[0] - sh[k]); last = Math.max(last, S[k].t[S[k].n - 1] - sh[k]);
+  }
+  const s0 = Math.ceil(first / 1000), s1 = Math.floor(last / 1000);
+  // The covered seconds as ranges [from, to], in whole seconds. (Rounding may add a second just outside a run,
+  // which the run doesn't reach: a second where no log has a position changes nothing.)
+  const ranges: number[] = [];
+  let count = 0;
+  for (;;) {
+    let k = -1, from = Infinity;
+    for (let q = 0; q < K; q++) {
+      if (at[q] >= S[q].n) continue;
+      const f = Math.ceil((S[q].t[at[q]] - sh[q] - 1) / 1000);
+      if (f < from) { from = f; k = q; }
+    }
+    if (k < 0) break;
+    const s = S[k], gap = s.gap;
+    let b = at[k];
+    while (b + 1 < s.n && !gap[b + 1]) b++;
+    at[k] = b + 1;
+    let to = Math.floor((s.t[b] - sh[k] + 1) / 1000);
+    if (from < s0) from = s0;
+    if (to > s1) to = s1;
+    if (from > to) continue;
+    const r = ranges.length;
+    if (r && from <= ranges[r - 1] + 1) { if (to > ranges[r - 1]) { count += to - ranges[r - 1]; ranges[r - 1] = to; } }
+    else { ranges.push(from, to); count += to - from + 1; }
+    if (count > max) return null;
+  }
+  const secs = new Float64Array(count);
+  for (let r = 0, m = 0; r < ranges.length; r += 2) for (let s = ranges[r]; s <= ranges[r + 1]; s++) secs[m++] = s * 1000;
+  return secs;
+}
+
 // ---------------------------------------------------------------- the combination
 
 export interface ComboOptions { trust?: number[]; name?: string }
 
+/** Not combined: two of the logs are the same recording; none has a position at a whole second; or they cover more than MAX_LOG_SECONDS. */
 export type ComboOutcome =
   | { ok: true; track: ComboTrack; apart: boolean }
-  | { ok: false; reason: 'duplicate' | 'empty' };
+  | { ok: false; reason: 'duplicate' | 'empty' | 'tooLong' };
 
 const NaN64 = (n: number) => new Float64Array(n).fill(NaN);
 
@@ -236,12 +303,21 @@ function mostTrusted(trust: Float64Array): number {
   return ref;
 }
 
-/** Steps 1 to 6, and what follows from them. Null for two copies of the same recording. */
-function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
+/** Steps 0 (unless `checked`: done before for these logs) to 6, and what follows from them; or why the logs aren't combined. */
+function prepare(tracks: LoadedTrack[], ref: number, checked: boolean): Prepared | 'duplicate' | 'tooLong' {
   const K = tracks.length;
   const lat0 = tracks[0].cols.lat[0], lon0 = tracks[0].cols.lon[0];
   const kx = 111_320 * Math.cos((lat0 * Math.PI) / 180), ky = 110_540;
   const S = tracks.map((t) => toSrc(t, lat0, lon0));
+
+  // 0. No clock difference, and the fixes taken at the same instants identical: the same recording. Every pair
+  // is checked, and each the same way whichever log is the reference, so a change of trust can't find one later.
+  const first: ReturnType<typeof clockFit>[] = [];
+  for (let a = 0; a < K && !checked; a++) for (let b = a + 1; b < K; b++) {
+    const fit = clockFit(S[a], S[b], 0);
+    if (fit.exact >= 30 && fit.exactRms < 0.01 && Math.abs(fit.tau) < 0.2) return 'duplicate';
+    if (a === ref) first[b] = fit; // also the first step of b's clock
+  }
 
   // 1. Clocks: each log lined up with the reference.
   const shift = new Float64Array(K);
@@ -249,9 +325,7 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
     if (k === ref) continue;
     let total = 0;
     for (let pass = 0; pass < 2; pass++) {
-      const fit = clockFit(S[ref], S[k], total * 1000);
-      // No clock difference, and the fixes taken at the same instants identical: the same recording.
-      if (pass === 0 && fit.exact >= 30 && fit.exactRms < 0.01 && Math.abs(fit.tau) < 0.2) return null;
+      const fit = (pass === 0 ? first[k] : undefined) ?? clockFit(S[ref], S[k], total * 1000);
       const step = Math.round(fit.tau * 10) / 10;
       if (Math.abs(step) < 0.2 || Math.abs(total + step) > 10) break;
       total = Math.round((total + step) * 10) / 10;
@@ -259,17 +333,16 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
     shift[k] = total;
   }
 
-  // 2. Whole seconds across all the logs: every log's values at each (NaN where it has none).
-  let t0 = Infinity, t1 = -Infinity;
-  for (let k = 0; k < K; k++) { t0 = Math.min(t0, S[k].t[0] - shift[k] * 1000); t1 = Math.max(t1, S[k].t[S[k].n - 1] - shift[k] * 1000); }
-  t0 = Math.ceil(t0 / 1000) * 1000; t1 = Math.floor(t1 / 1000) * 1000;
-  const M = Math.max(0, Math.round((t1 - t0) / 1000) + 1), MK = M * K;
+  // 2. The whole seconds some log covers: every log's values at each (NaN where it has none).
+  const secs = coveredSeconds(S, shift, MAX_LOG_SECONDS / K);
+  if (!secs) return 'tooLong';
+  const M = secs.length, MK = M * K;
   const x = NaN64(MK), y = NaN64(MK), now = new Float64Array(MK), v = new Float64Array(MK);
   const ele = new Float32Array(MK).fill(NaN), crs = new Float32Array(MK).fill(NaN);
   for (let k = 0; k < K; k++) {
     const s = S[k], sh = shift[k] * 1000, cur = new Cursor(s, sh);
     for (let m = 0, j = k; m < M; m++, j += K) {
-      if (!cur.at(t0 + m * 1000)) continue;
+      if (!cur.at(secs[m])) continue;
       x[j] = cur.val(s.x); y[j] = cur.val(s.y); now[j] = cur.val(s.now); v[j] = cur.val(s.v);
       const f = cur.fixAt;
       if (f >= 0) { ele[j] = s.ele[f]; crs[j] = s.course[f]; } else { ele[j] = cur.val(s.ele); crs[j] = s.course[cur.lo]; }
@@ -334,7 +407,7 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
   let apart = false;
   for (let p = 0; p < 9; p++) if (sharedN[p] > 0 && apartN[p] > sharedN[p] / 2) apart = true;
   const t = new Float64Array(n), disagree = new Uint8Array(n), srcLat: Float64Array[] = [], srcLon: Float64Array[] = [];
-  for (let i = 0; i < n; i++) { t[i] = t0 + idx[i] * 1000; disagree[i] = dis[idx[i]]; }
+  for (let i = 0; i < n; i++) { t[i] = secs[idx[i]]; disagree[i] = dis[idx[i]]; }
   for (let k = 0; k < K; k++) {
     const la = new Float64Array(n), lo = new Float64Array(n);
     for (let i = 0; i < n; i++) {
@@ -353,7 +426,8 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
 function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: string): ComboTrack {
   const { K, n, idx, x, y, now, v, ele, crs, left, T, lat0, lon0, kx, ky } = p;
   const lat = new Float64Array(n), lon = new Float64Array(n), oEle = new Float32Array(n), speed = new Float32Array(n), course = new Float32Array(n);
-  const use = new Uint8Array(n * K), eleBreak = new Uint8Array(n);
+  const use: Uint8Array[] = [], eleBreak = new Uint8Array(n);
+  for (let k = 0; k < K; k++) use.push(new Uint8Array(n));
   const shareSum = new Float64Array(K), shareN = new Float64Array(K), w = new Float64Array(K), counted = new Int8Array(K);
   // The one log with any trust, when every other is at 0%: it is never left out, so the track is that log
   // wherever it has a fix (and the others only fill its gaps).
@@ -361,27 +435,32 @@ function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: s
   for (let k = 0; k < K; k++) if (trust[k] > 0) full = full === -1 ? k : -2;
   let prevEleMask = -1;
   for (let i = 0; i < n; i++) {
-    const b = idx[i] * K, u = i * K;
+    const b = idx[i] * K;
     let nc = 0, nTrusted = 0;
     for (let k = 0; k < K; k++) {
       const j = b + k;
       if (x[j] !== x[j]) continue; // Use.Absent
-      if (left[j] && k !== full) { use[u + k] = Use.LeftOut; continue; }
+      if (left[j] && k !== full) { use[k][i] = Use.LeftOut; continue; }
       counted[nc++] = k;
       if (trust[k] > 0) nTrusted++;
     }
-    // A log at 0% trust only fills gaps: it counts where no trusted log does.
+    // A log at 0% trust only fills gaps: it counts where no trusted log does. Weights that come to nothing, or to
+    // no number (an error worked out as infinite): once more, the logs used counting alike.
     let W = 0, sx = 0, sy = 0, We = 0, el = 0, Wv = 0, vv = 0, cs = 0, sn = 0, eleMask = 0;
-    for (let c = 0; c < nc; c++) {
-      const k = counted[c], j = b + k;
-      if (nTrusted && !(trust[k] > 0)) { use[u + k] = Use.Idle; w[k] = 0; continue; }
-      use[u + k] = Use.Used;
-      const ek = T[k] * now[j], err = ek > MIN_ERROR_M ? ek : MIN_ERROR_M;
-      const wk = (nTrusted ? trust[k] : 1) / (err * err);
-      w[k] = wk; W += wk; sx += wk * x[j]; sy += wk * y[j];
-      const ev = ele[j]; if (ev === ev) { We += wk; el += wk * ev; eleMask |= 1 << k; }
-      const vk = v[j]; if (vk === vk) { Wv += wk; vv += wk * vk; }
-      const ck = crs[j]; if (ck === ck) { const r = ck * (Math.PI / 180); cs += wk * Math.cos(r); sn += wk * Math.sin(r); }
+    for (let alike = 0; alike < 2; alike++) {
+      if (alike) W = sx = sy = We = el = Wv = vv = cs = sn = eleMask = 0;
+      for (let c = 0; c < nc; c++) {
+        const k = counted[c], j = b + k;
+        if (nTrusted && !(trust[k] > 0)) { use[k][i] = Use.Idle; w[k] = 0; continue; }
+        use[k][i] = Use.Used;
+        const ek = T[k] * now[j], err = ek > MIN_ERROR_M ? ek : MIN_ERROR_M;
+        const wk = alike ? 1 : (nTrusted ? trust[k] : 1) / (err * err);
+        w[k] = wk; W += wk; sx += wk * x[j]; sy += wk * y[j];
+        const ev = ele[j]; if (ev === ev) { We += wk; el += wk * ev; eleMask |= 1 << k; }
+        const vk = v[j]; if (vk === vk) { Wv += wk; vv += wk * vk; }
+        const ck = crs[j]; if (ck === ck) { const r = ck * (Math.PI / 180); cs += wk * Math.cos(r); sn += wk * Math.sin(r); }
+      }
+      if (W > 0 && W < Infinity) break;
     }
     for (let c = 0; c < nc; c++) { const k = counted[c]; if (w[k] > 0) { shareSum[k] += w[k] / W; shareN[k]++; } }
     lat[i] = lat0 + sy / W / ky; lon[i] = lon0 + sx / W / kx;
@@ -390,8 +469,6 @@ function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: s
     if (prevEleMask >= 0 && eleMask !== prevEleMask) eleBreak[i] = 1;
     prevEleMask = eleMask;
   }
-  const uses: Uint8Array[] = [];
-  for (let k = 0; k < K; k++) { const a = new Uint8Array(n); for (let i = 0; i < n; i++) a[i] = use[i * K + k]; uses.push(a); }
 
   // Columns a combined track has no values for, and those that don't change with trust: made once per
   // combination and shared by every version of it (nothing writes to a track's columns once it's made).
@@ -407,7 +484,7 @@ function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: s
   if (course.some((c) => c === c)) fields.push('course');
   const combo: ComboInfo = {
     sources: tracks.map((track, k) => ({ track, clockS: p.shift[k], trust: trust[k], typicalM: T[k], share: shareN[k] ? shareSum[k] / shareN[k] : 0 })),
-    ref: p.ref, use: uses, srcLat: p.srcLat, srcLon: p.srcLon,
+    ref: p.ref, use, srcLat: p.srcLat, srcLon: p.srcLon,
     disagree: p.disagree, eleOffset: p.eleOffset && { ...p.eleOffset },
   };
   const parsed = { format: 'combined' as const, creator: null, name: null, cols, flags: [], problems: [], notes: [], fields, lines: n, eleBreak };
@@ -418,9 +495,13 @@ function finish(tracks: LoadedTrack[], p: Prepared, trust: Float64Array, name: s
 
 /** Combines 2 or 3 logs. `apart`: two of them are over 100 m apart for more than half the time they share. */
 export function combineTracks(tracks: LoadedTrack[], opts: ComboOptions = {}): ComboOutcome {
+  return combine(tracks, opts, false);
+}
+
+function combine(tracks: LoadedTrack[], opts: ComboOptions, checked: boolean): ComboOutcome {
   const trust = normalTrust(opts.trust, tracks.length);
-  const p = prepare(tracks, mostTrusted(trust));
-  if (!p) return { ok: false, reason: 'duplicate' };
+  const p = prepare(tracks, mostTrusted(trust), checked);
+  if (typeof p === 'string') return { ok: false, reason: p };
   if (p.n === 0) return { ok: false, reason: 'empty' };
   return { ok: true, track: finish(tracks, p, trust, opts.name ?? 'Combined'), apart: p.apart };
 }
@@ -434,7 +515,9 @@ export function recombine(track: ComboTrack, trust: number[]): ComboTrack {
   const t = normalTrust(trust, tracks.length);
   const p = preparedFor.get(track);
   if (p && p.ref === mostTrusted(t)) return finish(tracks, p, t, track.file);
-  const r = combineTracks(tracks, { trust, name: track.file });
+  // Another log keeps its clock: all is worked out again, but for whether two of the logs are one recording,
+  // which doesn't depend on it (and was found not so when they were combined).
+  const r = combine(tracks, { trust, name: track.file }, true);
   return r.ok ? r.track : track;
 }
 
@@ -491,8 +574,9 @@ function typicalErrors(S: Src[], x: Float64Array, y: Float64Array, now: Float64A
     T2[1] = (s01 + s12 - s02) / 2 / ((a[3] + a[5]) / 2);
     T2[2] = (s02 + s12 - s01) / 2 / ((a[6] + a[7]) / 2);
   }
+  // Not finite (no spread to go by, or a log whose accuracy averages 0 there): 1 m.
   const floor = MIN_ERROR_M * MIN_ERROR_M;
-  for (let k = 0; k < K; k++) T2[k] = T2[k] === T2[k] && T2[k] > floor ? T2[k] : T2[k] === T2[k] ? floor : 1;
+  for (let k = 0; k < K; k++) T2[k] = Number.isFinite(T2[k]) ? (T2[k] > floor ? T2[k] : floor) : 1;
   return T2;
 }
 

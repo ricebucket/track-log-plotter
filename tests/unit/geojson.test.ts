@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildLogCursors, buildLogLines, buildMarks, buildPaths, buildRuns, drawnSteps, metersPerPixel, stepsFor, type MapCtx } from '../../src/map/geojson';
+import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildLogCursors, buildLogLines, buildMarks, buildPaths, buildRuns, drawnSteps, metersPerPixel, nearestFix, showsLogs, stepsFor, type MapCtx } from '../../src/map/geojson';
 import { combineTracks, Use } from '../../src/combine/combine';
 import { addTracks } from '../../src/state/logic';
-import { buildScale, stepOf } from '../../src/color/scale';
+import { buildScale, stepOf, valueAt } from '../../src/color/scale';
 import type { LoadedTrack, MeasureKey } from '../../src/model/types';
-import { FAMILIES, LOG_COLORS, SINGLE } from '../../src/color/palettes';
-import { centerView, columns, graphRange, MIN_ZOOM_MS, panView, PLAY_SPEED, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from '../../src/ui/timelineMath';
+import { FAMILIES, LOG_COLORS, palette, SINGLE, UNKNOWN } from '../../src/color/palettes';
+import { centerView, columns, graphRange, logColumns, MIN_ZOOM_MS, panView, PLAY_SPEED, playStep, skipGap, snapInto, snapTime, stepFix, tickStep, ticks, wheelZoom } from '../../src/ui/timelineMath';
 import { scaleBar } from '../../src/ui/scaleBar';
+import { haversine } from '../../src/derive/geo';
+import { isMidnight, offsetMinutes } from '../../src/time/zones';
 import { load } from '../helpers/fixtures';
 
 const a = load('central-park-loop.nmea');
@@ -28,8 +30,9 @@ describe('map features', () => {
     for (const c of colorsA) expect([...FAMILIES[0].light5, '#a3a9ae']).toContain(c);
     const colorsB = new Set(runs.features.filter((f) => f.properties.id === 'B').map((f) => f.properties.c));
     for (const c of colorsB) expect([...FAMILIES[1].light5, '#a3a9ae']).toContain(c);
-    // The selected track draws on top.
-    expect(runs.features.find((f) => f.properties.id === 'A')!.properties.z).toBe(2);
+    // The map draws the selected track on top with layers of its own, so the lines carry no order.
+    expect(runs.features.some((f) => 'z' in f.properties)).toBe(false);
+    expect(buildPaths(items).features.some((f) => 'z' in f.properties)).toBe(false);
   });
 
   it('uses the multi-hue scale for a lone track', () => {
@@ -58,6 +61,8 @@ describe('map features', () => {
     expect(buildFlags(items, c).features.map((f) => f.properties.label)).toEqual(['#1', '#2']);
     const cur = buildCursors(items, { A: 0, B: 0 }, a.cols.t[100], c);
     expect(cur.features.map((f) => f.properties.id)).toEqual(['A', 'B']);
+    // The selected track's dot sorts on top.
+    expect(cur.features.map((f) => f.properties.z)).toEqual([2, 1]);
     expect(buildCursors(items, {}, null, c).features).toEqual([]);
     expect(boundsOf(items)).toEqual([
       Math.min(a.derived.stats.bbox[0], b.derived.stats.bbox[0]), Math.min(a.derived.stats.bbox[1], b.derived.stats.bbox[1]),
@@ -68,6 +73,72 @@ describe('map features', () => {
   it('smooths away one-fix flickers between steps', () => {
     const s = stepsFor(a, 'hdop', buildScale('hdop', [a]));
     for (let i = 1; i < s.length - 1; i++) expect(s[i - 1] === s[i + 1] && s[i] !== s[i - 1]).toBe(false);
+  });
+
+  it('colors the cursor dot as the line is drawn there, one-fix flickers smoothed, as the fix card does', () => {
+    const one = addTracks([], [a]).items;
+    const c = ctx([a], true);
+    const drawn = drawnSteps(a, 'speed', c.scaleFor(a, 'speed'));
+    const colors = palette(one[0].fam, 'speed', false, true);
+    // Fixes whose own speed falls in another step than the line drawn through them: a flicker smoothed away.
+    const flickers = Array.from({ length: a.cols.n }, (_, k) => k).filter((k) => stepOf(c.scaleFor(a, 'speed'), valueAt(a, 'speed', k)) !== drawn[k]);
+    expect(flickers.length).toBeGreaterThan(10);
+    for (const i of flickers.slice(0, 20)) {
+      const dot = buildCursors(one, {}, a.cols.t[i], c).features[0].properties.c;
+      expect(dot).toBe(drawn[i] >= 0 ? colors[Math.min(drawn[i], colors.length - 1)] : UNKNOWN.light);
+    }
+  });
+});
+
+describe('picking a fix on the map', () => {
+  it('finds the fix nearest to a point, as near as great circles would', () => {
+    const c = a.cols;
+    for (let k = 0; k < 300; k++) {
+      const i = (k * 7919) % c.n;
+      // Up to about 40 m off the track, every way.
+      const lat = c.lat[i] + (((k % 9) - 4) * 9) / 111_195, lon = c.lon[i] + ((((k >> 3) % 9) - 4) * 9) / 84_300;
+      let bd = Infinity;
+      for (let j = 0; j < c.n; j++) bd = Math.min(bd, haversine(lat, lon, c.lat[j], c.lon[j]));
+      const j = nearestFix(c, lat, lon);
+      expect(haversine(lat, lon, c.lat[j], c.lon[j])).toBeLessThanOrEqual(bd + 0.05);
+    }
+  });
+
+  it('keeps to the pass the cursor is on where a track goes the same way twice', () => {
+    // Up Fifth Avenue a fix every metre for a kilometre, and back down the same way.
+    const n = 2000;
+    const lat = Float64Array.from({ length: n }, (_, i) => 40.7644 + (i < 1000 ? i : 1999 - i) / 111_195);
+    const lon = new Float64Array(n).fill(-73.973);
+    const cols = { n, lat, lon };
+    const at = 40.7644 + 30 / 111_195;
+    // On its own, the first pass; dragging along the way back, the way back.
+    expect(nearestFix(cols, at, -73.973)).toBe(30);
+    expect(nearestFix(cols, at, -73.973, 1960, 5)).toBe(1969);
+    // A fix on the same pass that is farther than the tolerance loses to the nearest.
+    expect(nearestFix(cols, at, -73.973, 1300, 5)).toBe(30);
+  });
+
+});
+
+describe('stepping from fix to fix', () => {
+  // Only the fix times matter: A has a fix every second, then one a minute later; B has two of its own.
+  const at = (id: string, t: number[]) => ({ id, track: { cols: { t: Float64Array.from(t), n: t.length } } as unknown as LoadedTrack });
+  const tracks = [at('A', [0, 1000, 2000, 60_000]), at('B', [1500, 3000])];
+
+  it("goes to the next or previous fix of any track, across gaps, and stops at the ends", () => {
+    expect(stepFix(1000, 1, tracks, {})).toBe(1500);
+    expect(stepFix(1500, 1, tracks, {})).toBe(2000);
+    expect(stepFix(3000, 1, tracks, {})).toBe(60_000); // the 57 s gap in one step
+    expect(stepFix(60_000, 1, tracks, {})).toBeNull();
+    expect(stepFix(60_000, -1, tracks, {})).toBe(3000);
+    expect(stepFix(0, -1, tracks, {})).toBeNull();
+    expect(stepFix(-5, 1, tracks, {})).toBe(0);
+  });
+
+  it("counts each track's offset on the timeline", () => {
+    // B moved 700 ms later: its fixes at 2200 and 3700 on the timeline.
+    expect(stepFix(2000, 1, tracks, { B: 700 })).toBe(2200);
+    expect(stepFix(3000, -1, tracks, { B: 700 })).toBe(2200);
   });
 });
 
@@ -226,6 +297,82 @@ describe('timeline math', () => {
     expect(tickStep(10 * 3600_000, 300)).toBe(10_800_000);
     const tk = ticks(Date.UTC(2026, 5, 14, 13, 2), Date.UTC(2026, 5, 14, 13, 31), 900, -240);
     expect(new Date(tk[0]).toISOString()).toBe('2026-06-14T13:05:00.000Z');
+    // The zone's offset as a function of time gives the same ticks where it doesn't change.
+    expect(ticks(Date.UTC(2026, 5, 14, 13, 2), Date.UTC(2026, 5, 14, 13, 31), 900, (t) => offsetMinutes(t, 'America/New_York'))).toEqual(tk);
+  });
+
+  it('keeps ticks on round times of the clock across a daylight-saving change', () => {
+    const z = 'America/New_York';
+    const off = (t: number) => offsetMinutes(t, z);
+    const clock = (t: number) => t + off(t) * 60_000;
+    // October 31 to November 4, 2026, midnight to midnight; the clocks go back an hour on November 1.
+    // Ticks every 12 hours, each on noon or midnight: five midnights, also after the change.
+    const tk = ticks(Date.parse('2026-10-31T04:00:00Z'), Date.parse('2026-11-04T05:00:00Z'), 800, off);
+    expect(tk).toHaveLength(9);
+    for (const t of tk) expect(clock(t) % 43_200_000).toBe(0);
+    expect(tk.filter((t) => isMidnight(t, z))).toHaveLength(5);
+    // Hourly ticks over each change stay an hour apart: spring forward has no 2:00, fall back has 1:00 twice.
+    const spring = ticks(Date.parse('2026-03-08T05:00:00Z'), Date.parse('2026-03-08T11:00:00Z'), 800, off);
+    expect(spring.map((t) => new Date(clock(t)).getUTCHours())).toEqual([0, 1, 3, 4, 5, 6, 7]);
+    const fall = ticks(Date.parse('2026-11-01T04:00:00Z'), Date.parse('2026-11-01T10:00:00Z'), 800, off);
+    expect(fall.map((t) => new Date(clock(t)).getUTCHours())).toEqual([0, 1, 1, 2, 3, 4, 5]);
+    for (const list of [spring, fall]) for (let i = 1; i < list.length; i++) expect(list[i] - list[i - 1]).toBe(3_600_000);
+  });
+
+  it('shades the lane when zoomed into a gap, and a gap that runs out of view up to the edge', () => {
+    const tr = load('hudson-overnight.gpx');
+    const c = tr.cols;
+    const night = c.t.findIndex((t, i) => i > 0 && t - c.t[i - 1] > 3_600_000);
+    const s = buildScale('speed', [tr]);
+    // Twenty minutes in the middle of the night: no fix in view, all gap.
+    const mid = (c.t[night - 1] + c.t[night]) / 2;
+    expect(columns(tr, 'speed', s, mid - 600_000, mid + 600_000, 600, 0).every((col) => col?.gap)).toBe(true);
+    // The evening's last fix in the middle of the view: data up to it, the gap from there to the right edge.
+    const edge = columns(tr, 'speed', s, c.t[night - 1] - 300_000, c.t[night - 1] + 300_000, 600, 0);
+    expect(edge.slice(0, 301).every((col) => col !== null && !col.gap)).toBe(true);
+    expect(edge.slice(301).every((col) => col?.gap)).toBe(true);
+    // And the morning's first fix: the gap from the left edge up to it.
+    const morning = columns(tr, 'speed', s, c.t[night] - 300_000, c.t[night] + 300_000, 600, 0);
+    expect(morning.slice(0, 300).every((col) => col?.gap)).toBe(true);
+    expect(morning.slice(300).every((col) => col !== null && !col.gap)).toBe(true);
+  });
+
+  it('fills a zoomed-in lane to both edges from the fixes just outside the view', () => {
+    const b5 = load('central-park-loop-vendor.gpx');
+    const c = b5.cols;
+    // Four fixes in a row 5 s apart.
+    const i = c.t.findIndex((t, k) => k > 40 && c.t[k + 1] - t === 5000 && c.t[k + 2] - t === 10_000 && c.t[k + 3] - t === 15_000);
+    const s = buildScale('speed', [b5]);
+    // Ten seconds from 1 s after fix i: fixes i + 1 and i + 2 in view, 4 s and 9 s in, none at either edge.
+    const cols = columns(b5, 'speed', s, c.t[i] + 1000, c.t[i] + 11_000, 1000, 0);
+    expect(cols.every((col) => col !== null && !col.gap)).toBe(true);
+    // As between any two fixes, each fix shows until the next: fix i up to the left edge, fix i + 2 to the right one.
+    expect(cols[0]!.max).toBe(valueAt(b5, 'speed', i));
+    expect(cols[500]!.max).toBe(valueAt(b5, 'speed', i + 1));
+    expect(cols[999]!.max).toBe(valueAt(b5, 'speed', i + 2));
+    // Zoomed in between two fixes: the earlier one throughout.
+    expect(columns(b5, 'speed', s, c.t[i] + 1000, c.t[i] + 4000, 300, 0).every((col) => col?.max === valueAt(b5, 'speed', i))).toBe(true);
+    // Not past either end of the track.
+    const past = columns(b5, 'speed', s, c.t[c.n - 1] - 2000, c.t[c.n - 1] + 8000, 1000, 0);
+    expect(past.slice(201).every((col) => col === null)).toBe(true);
+  });
+
+  it('brings the cursor onto the nearest fix inside a narrower view', () => {
+    const tr = load('central-park-loop-vendor.gpx'); // a fix every 5 s
+    const c = tr.cols;
+    const one = [{ id: 'A', track: tr }];
+    const from = c.t[40] + 1000, to = c.t[60] - 1000;
+    // Snapped to the fix just outside the view, the cursor moves to the first fix inside.
+    expect(snapInto(c.t[40], one, {}, from, to)).toBe(c.t[41]);
+    expect(snapInto(c.t[60], one, {}, from, to)).toBe(c.t[59]);
+    // Offsets move a track along the timeline.
+    expect(snapInto(c.t[40] + 7000, one, { A: 7000 }, from + 7000, to + 7000)).toBe(c.t[41] + 7000);
+    // No fix inside, as in a gap: the cursor just moves into the view.
+    const night = load('hudson-overnight.gpx');
+    const n = night.cols;
+    const g = n.t.findIndex((t, i) => i > 0 && t - n.t[i - 1] > 3_600_000);
+    const mid = (n.t[g - 1] + n.t[g]) / 2;
+    expect(snapInto(n.t[g - 1], [{ id: 'A', track: night }], {}, mid - 60_000, mid + 60_000)).toBe(mid - 60_000);
   });
 
   it('leaves no holes between sparse fixes, except at gaps', () => {
@@ -283,6 +430,26 @@ describe("a combined track's logs on the map", () => {
     for (let i = 1; i < c.cols.n; i++) if (Number.isNaN(la[i]) && !Number.isNaN(la[i - 1])) gaps++;
     expect(gaps).toBe(2);
     for (const f of phoneLines) for (const [lon, lat] of f.geometry.coordinates) expect(Number.isFinite(lon) && Number.isFinite(lat)).toBe(true);
+  });
+
+  it("fills a log's timeline lane up to the left edge when zoomed in, from the log's fix before the view", () => {
+    // A stretch where the car's log has a fix every second, with no gap.
+    const la = c.combo.srcLat[0], gap = c.derived.gap, t = c.cols.t;
+    const i = t.findIndex((_, k) => k > 50 && Array.from({ length: 14 }, (__, j) => k + j).every((j) => la[j] === la[j] && !gap[j] && (j === k || t[j] - t[j - 1] === 1000)));
+    expect(i).toBeGreaterThan(0);
+    // Ten seconds from half a second after fix i: the first fix in view is 50 columns in.
+    const { has } = logColumns(c, 0, t[i] + 500, t[i] + 10_500, 1000, 0);
+    expect(has.every(Boolean)).toBe(true);
+    // A log that has no fix just before the view starts where its first fix is.
+    const { has: second } = logColumns(c, 1, t[0] - 10_000, t[0] + 10_000, 1000, 0);
+    expect(second.slice(0, 499).some(Boolean)).toBe(false);
+  });
+
+  it('draws the logs\' dots only while a shown combined track shows a log', () => {
+    expect(showsLogs([item([true, false])])).toBe(true);
+    expect(showsLogs([item([false, false])])).toBe(false);
+    expect(showsLogs([item([true, true], false)])).toBe(false);
+    expect(showsLogs(addTracks([], [car, phone]).items)).toBe(false);
   });
 
   it('puts a dot for each shown log at the cursor, hollow and ringed in red where the log was left out', () => {

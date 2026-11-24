@@ -29,6 +29,8 @@ export interface CleanCounts {
   duplicates: number;
   jumps: number;
   jumpLine: number;
+  /** Fixes left out for their position: not a number, off the Earth, or exactly 0, 0 (a placeholder). */
+  noPosition: number;
 }
 
 type F32Key = 'ele' | 'speed' | 'course' | 'hdop' | 'vdop' | 'pdop' | 'sats' | 'geoid' | 'accel';
@@ -66,7 +68,7 @@ export class ColumnBuilder {
   line = new Int32Array(this.cap);
   lineEnd = new Int32Array(this.cap);
   seg = new Uint8Array(this.cap);
-  counts: CleanCounts = { backwards: 0, backwardsLine: 0, duplicates: 0, jumps: 0, jumpLine: 0 };
+  counts: CleanCounts = { backwards: 0, backwardsLine: 0, duplicates: 0, jumps: 0, jumpLine: 0, noPosition: 0 };
   private pendingSeg = false;
 
   private grow() {
@@ -84,8 +86,9 @@ export class ColumnBuilder {
   breakSegment() { if (this.n > 0) this.pendingSeg = true; }
 
   push(f: FixInput): boolean {
-    if (!Number.isFinite(f.t) || !Number.isFinite(f.lat) || !Number.isFinite(f.lon)) return false;
-    if (Math.abs(f.lat) > 90 || Math.abs(f.lon) > 180 || (f.lat === 0 && f.lon === 0)) return false;
+    if (!Number.isFinite(f.t)) return false;
+    // Not finite or off the Earth (NaN fails both comparisons), or the 0, 0 some loggers write without a fix.
+    if (!(Math.abs(f.lat) <= 90 && Math.abs(f.lon) <= 180) || (f.lat === 0 && f.lon === 0)) { this.counts.noPosition++; return false; }
     const n = this.n;
     if (n > 0) {
       const lastT = this.t[n - 1];

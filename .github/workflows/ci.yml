@@ -20,12 +20,14 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:coverage
+      # The timing tests run on their own, without coverage: counting coverage makes this work about 5x slower.
+      - run: npm run test:perf
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
         env:
           CI: 'true'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report

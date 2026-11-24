@@ -6,6 +6,7 @@ import { measuresOf } from '../state/logic';
 import { measureName, measureTitle } from './labels';
 import { Badge } from './Badge';
 import { useDismiss } from './hooks';
+import { measureLong } from './computedText';
 import { IconCalc, IconClose, IconSwap } from './icons';
 
 /**
@@ -63,7 +64,7 @@ export function SettingsSheet() {
                   <span class="opt-name">{measureTitle(k, k === 'hdop' && relative)}</span>
                   {computed(k) && <span class="computed-tag"><IconCalc size={11} />{t('computed.tag')}</span>}
                 </span>
-                <span class="opt-desc">{t(`measure.${k}.long`)}</span>
+                <span class="opt-desc">{measureLong(k)}</span>
                 {k === 'hdop' && relative && <span class="opt-note">{t('measure.hdop.relativeNote')}</span>}
               </th>
               <td><input type="radio" name={`color-${item.id}`} checked={item.color === k} aria-label={t('settings.asColor', { m: measureName(k) })} onChange={() => S.setMeasure(item.id, 'color', k)} /></td>

@@ -56,6 +56,18 @@ describe('formatting', () => {
     expect(fmtNum(NaN, 'en-US')).toBe('–');
   });
 
+  it('never shows a negative zero, and rounds everything else as before', () => {
+    expect(fmtEle(-0.3, 'metric', 'en-US')).toBe('0');
+    expect(fmtSpeed(-0.02, 'metric', 'en-US')).toBe('0.0');
+    expect(fmtNum(-0, 'en-US', 1)).toBe('0.0');
+    expect(fmtNum(-0.049, 'zh-CN', 1)).toBe('0.0');
+    expect(fmtNum(-0.004, 'en-US', 2, 0)).toBe('0');
+    // Halves still round away from zero.
+    expect(fmtNum(-0.05, 'en-US', 1)).toBe('-0.1');
+    expect(fmtNum(-2.5, 'en-US', 0)).toBe('-3');
+    expect(fmtNum(-1234.56, 'en-US', 1)).toBe('-1,234.6');
+  });
+
   it('formats durations, sizes and shares', () => {
     expect(fmtDuration(65)).toBe('1:05');
     expect(fmtDuration(3723)).toBe('1:02:03');
@@ -72,7 +84,11 @@ describe('Google Maps links', () => {
     expect(googleBaseFor('hybrid')).toBe('satellite');
     expect(googleBaseFor('topo')).toBe('terrain');
     expect(googleBaseFor('osm')).toBe('roadmap');
-    expect(googleViewUrl(40.7705, -73.9655, 14.4, 'satellite')).toBe('https://www.google.com/maps/@?api=1&map_action=map&center=40.770500%2C-73.965500&zoom=14&basemap=satellite');
+    // MapLibre's zoom 14.4 (512-pixel tiles) is Google's 15.4 (256-pixel tiles): the same scale on screen.
+    expect(googleViewUrl(40.7705, -73.9655, 14.4, 'satellite')).toBe('https://www.google.com/maps/@?api=1&map_action=map&center=40.770500%2C-73.965500&zoom=15&basemap=satellite');
+    // Within the zooms Google takes.
+    expect(googleViewUrl(40.7705, -73.9655, 20.8, 'roadmap')).toContain('&zoom=21&');
+    expect(googleViewUrl(40.7705, -73.9655, -1, 'roadmap')).toContain('&zoom=0&');
   });
 
   it('opens Street View at the cursor, facing the direction of travel', () => {

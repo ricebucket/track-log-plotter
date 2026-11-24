@@ -42,7 +42,10 @@ export function localName(name: string): string {
   return c < 0 ? name : name.slice(c + 1);
 }
 
-const ATTR = /([^\s=/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+// A name starts the text or follows a space or a quote: a match can't start
+// inside a run of name characters, so a long run without a value (<trkpt
+// aaa…a=x>) is passed over once rather than tried again from each character.
+const ATTR = /(?<![^\s"'])([^\s=/"']+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 /** Shared by every tag without attributes; never modified. */
 const NO_ATTRS: Map<string, string> = new Map();
 
@@ -69,6 +72,14 @@ function tagEnd(src: string, i: number): number {
 }
 
 const isSpace = (c: number) => c === 32 || c === 10 || c === 13 || c === 9;
+
+/**
+ * Whether a character after "<" can start markup: a name (a letter, "_", ":"
+ * or any character past ASCII), "/", "!" or "?". After any other ("Pace <5
+ * min/km") the "<" is text.
+ */
+const startsMarkup = (c: number) =>
+  ((c | 32) >= 97 && (c | 32) <= 122) || c === 95 || c === 58 || c === 47 || c === 33 || c === 63 || c > 127;
 
 /** Slots in the cache of tag names (a power of two). */
 const NAME_SLOTS = 256;
@@ -130,6 +141,7 @@ export function scanXml(src: string, sink: XmlSink): XmlScanResult {
     if (lt > i) text(i, lt);
     i = lt;
     const c1 = src.charCodeAt(i + 1);
+    if (i + 1 < n && !startsMarkup(c1)) { sink.text('<'); i++; continue; }
     if (c1 === 33 /* ! */ || c1 === 63 /* ? */) {
       if (src.startsWith('<!--', i)) {
         const e = src.indexOf('-->', i + 4);

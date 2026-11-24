@@ -1,6 +1,6 @@
 // Turns tracks into GeoJSON for the map layers. Pure functions, so the
 // coloring rules are unit-tested without a WebGL map.
-import type { LoadedTrack, MeasureKey } from '../model/types';
+import type { Columns, LoadedTrack, MeasureKey } from '../model/types';
 import type { TrackItem } from '../state/logic';
 import { nearestIndex } from '../state/logic';
 import { haversine } from '../derive/geo';
@@ -47,7 +47,7 @@ export function drawnSteps(track: LoadedTrack, key: MeasureKey, scale: Scale): I
 }
 
 /** Badge color of a track (its range's badge), used for its pins and fix rings. */
-export function badgeColor(item: TrackItem, _single: boolean): string {
+export function badgeColor(item: TrackItem): string {
   return FAMILIES[item.fam % 3].badge;
 }
 
@@ -89,7 +89,7 @@ export function buildMarks(items: TrackItem[], zoom: number, minPx = 24): FC<Poi
     const lat = (s + n) / 2, lon = (w + e) / 2;
     const sizeM = Math.max(haversine(lat, w, lat, e), haversine(s, lon, n, lon));
     if (sizeM / metersPerPixel(lat, zoom) >= minPx) continue;
-    const c = badgeColor(it, false);
+    const c = badgeColor(it);
     out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: { id: it.id, c, icon: `tlp-mark-${FORMAT_SHAPE[it.track.format]}-${c.slice(1)}` } });
   }
   return { type: 'FeatureCollection', features: out };
@@ -109,7 +109,6 @@ export function buildRuns(items: TrackItem[], ctx: MapCtx): FC<LineString> {
     const hsteps = hsScale ? stepsFor(it.track, it.halo as MeasureKey, hsScale) : null;
     const extra = hsScale ? haloExtra(hsScale.steps) : [];
     const hs = haloStyle(it.fam, ctx.dark, ctx.single);
-    const z = it.id === ctx.selectedId ? 2 : 1;
     let k = -9, h = -9;
     let coords: [number, number][] | null = null;
     const close = () => {
@@ -117,7 +116,7 @@ export function buildRuns(items: TrackItem[], ctx: MapCtx): FC<LineString> {
       out.push({
         type: 'Feature', geometry: { type: 'LineString', coordinates: coords },
         properties: {
-          id: it.id, z,
+          id: it.id,
           c: k >= 0 ? colors[Math.min(k, colors.length - 1)] : ctx.dark ? UNKNOWN.dark : UNKNOWN.light,
           hc: hs.color, ho: h >= 0 ? hs.opacity : 0, hx: h >= 0 ? extra[h] : 0,
         },
@@ -140,17 +139,16 @@ export function buildRuns(items: TrackItem[], ctx: MapCtx): FC<LineString> {
   return fc(out);
 }
 
-/** One line per gap-free stretch, for the casing and the heading arrows. */
-export function buildPaths(items: TrackItem[], ctx: MapCtx): FC<LineString> {
+/** One line per gap-free stretch, for the casing and the heading arrows. (It needs no MapCtx; one is still accepted.) */
+export function buildPaths(items: TrackItem[], _ctx?: MapCtx): FC<LineString> {
   const out: Feature<LineString>[] = [];
   for (const it of items) {
     if (!it.vis) continue;
     const { lat, lon, n } = it.track.cols;
     const gap = it.track.derived.gap;
-    const z = it.id === ctx.selectedId ? 2 : 1;
     let coords: [number, number][] = [];
     const close = () => {
-      if (coords.length >= 2) out.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: { id: it.id, z } });
+      if (coords.length >= 2) out.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: { id: it.id } });
       coords = [];
     };
     for (let i = 0; i < n; i++) {
@@ -180,13 +178,13 @@ export function buildGaps(items: TrackItem[]): FC<LineString> {
   return fc(out);
 }
 
-/** One point per fix with its satellite count, drawn as glyphs when zoomed in. */
-export function buildFixPoints(items: TrackItem[], ctx: MapCtx): FC<Point> {
+/** One point per fix with its satellite count, drawn as glyphs when zoomed in. (It needs no MapCtx; one is still accepted.) */
+export function buildFixPoints(items: TrackItem[], _ctx?: MapCtx): FC<Point> {
   const out: Feature<Point>[] = [];
   for (const it of items) {
     if (!it.vis) continue;
     const { lat, lon, n, sats, fixq } = it.track.cols;
-    const ring = badgeColor(it, ctx.single);
+    const ring = badgeColor(it);
     for (let i = 0; i < n; i++) {
       out.push({
         type: 'Feature', geometry: { type: 'Point', coordinates: [lon[i], lat[i]] },
@@ -197,13 +195,13 @@ export function buildFixPoints(items: TrackItem[], ctx: MapCtx): FC<Point> {
   return fc(out);
 }
 
-/** Button presses, numbered. */
-export function buildFlags(items: TrackItem[], ctx: MapCtx): FC<Point> {
+/** Button presses, numbered. (It needs no MapCtx; one is still accepted.) */
+export function buildFlags(items: TrackItem[], _ctx?: MapCtx): FC<Point> {
   const out: Feature<Point>[] = [];
   for (const it of items) {
     if (!it.vis) continue;
     for (const f of it.track.flags) {
-      out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [f.lon, f.lat] }, properties: { id: it.id, label: `#${f.n}`, c: badgeColor(it, ctx.single) } });
+      out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [f.lon, f.lat] }, properties: { id: it.id, label: `#${f.n}`, c: badgeColor(it) } });
     }
   }
   return fc(out);
@@ -222,7 +220,8 @@ export function buildCursors(items: TrackItem[], offsets: Record<string, number>
     const colors = palette(it.fam, it.color, ctx.dark, ctx.single);
     let col = colors[0];
     if (it.color !== 'none') {
-      const k = stepOf(ctx.scaleFor(it.track, it.color), valueAt(it.track, it.color, i));
+      // The step the line is drawn in here (one-fix flickers smoothed), so the dot matches the line and the fix card.
+      const k = drawnSteps(it.track, it.color, ctx.scaleFor(it.track, it.color))[i];
       col = k >= 0 ? colors[Math.min(k, colors.length - 1)] : ctx.dark ? UNKNOWN.dark : UNKNOWN.light;
     }
     out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lon[i], c.lat[i]] }, properties: { id: it.id, i, c: col, z: it.id === ctx.selectedId ? 2 : 1 } });
@@ -282,6 +281,43 @@ export function buildLogCursors(items: TrackItem[], offsets: Record<string, numb
     }
   }
   return fc(out);
+}
+
+/** Whether a shown combined track has any of its logs shown: only then are the logs' dots at the cursor drawn. */
+export function showsLogs(items: TrackItem[]): boolean {
+  return items.some((it) => it.vis && !!it.logs?.some(Boolean) && isCombined(it.track));
+}
+
+/** Meters in a degree of latitude, on the sphere haversine uses. */
+const DEG_M = (6_371_008.8 * Math.PI) / 180;
+
+/**
+ * The fix nearest to a point. Distances are measured on a flat map centred on
+ * the point (longitude shrunk by the cosine of its latitude): close to the
+ * point, where the nearest fix is, that is as good as great circles, and it
+ * costs a few multiplications a fix instead of a haversine, so dragging along
+ * a 100,000-fix track stays smooth. While dragging, `prev` is the last fix
+ * picked: where the track passes the same place twice, a fix within 400 of it
+ * wins when it is at most `tolM` meters farther, so the cursor stays on the
+ * same pass.
+ */
+export function nearestFix(cols: Pick<Columns, 'n' | 'lat' | 'lon'>, lat: number, lon: number, prev = -1, tolM = 0): number {
+  const { n, lat: la, lon: lo } = cols;
+  const k = Math.cos((lat * Math.PI) / 180);
+  // Squared distance on that flat map, in degrees of latitude.
+  const d2 = (i: number) => {
+    const dy = la[i] - lat;
+    let dx = lo[i] - lon;
+    if (dx > 180) dx -= 360; else if (dx < -180) dx += 360; // the short way across the antimeridian
+    dx *= k;
+    return dx * dx + dy * dy;
+  };
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < n; i++) { const d = d2(i); if (d < bd) { bd = d; best = i; } }
+  if (prev < 0) return best;
+  let near = -1, nd = Infinity;
+  for (let i = Math.max(0, prev - 400); i < Math.min(n, prev + 400); i++) { const d = d2(i); if (d < nd) { nd = d; near = i; } }
+  return near >= 0 && Math.sqrt(nd) * DEG_M <= Math.sqrt(bd) * DEG_M + tolM ? near : best;
 }
 
 /** Bounds of the visible tracks [west, south, east, north], or null. */

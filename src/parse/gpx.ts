@@ -4,20 +4,26 @@ import { scanXml } from './xml';
 import { inferSpeedUnit, UNIT_FACTOR } from './units';
 import { numAt } from './scan';
 
-/** Readable names for extension fields the app doesn't use. */
-const IGNORED_NAMES: Record<string, string> = {
+/**
+ * Readable names for extension fields the app doesn't use. A Map, not an
+ * object: a tag named "constructor" or "__proto__" must not find Object's own.
+ */
+const IGNORED_NAMES = new Map<string, string>(Object.entries({
   hr: 'heartRate', heartrate: 'heartRate', cad: 'cadence', cadence: 'cadence', atemp: 'temperature',
   wtemp: 'temperature', temp: 'temperature', temperature: 'temperature', power: 'power', depth: 'depth',
   distance: 'distance', satinview: 'satsInView', satsinview: 'satsInView', sats_in_view: 'satsInView',
   sat_view: 'satsInView', satview: 'satsInView',
-};
+}));
+
+/** Elements that hold others: a stray close tag never closes one of these. */
+const STRUCTURE = new Set(['gpx', 'metadata', 'trk', 'trkseg', 'trkpt', 'rte', 'rtept', 'wpt', 'extensions']);
 
 const POINT_FIELDS = new Set(['ele', 'time', 'hdop', 'vdop', 'pdop', 'sat', 'fix', 'geoidheight', 'speed', 'spd', 'sog', 'course', 'crs', 'cog', 'heading', 'name', 'sym', 'type', 'desc', 'cmt', 'src', 'link', 'magvar', 'ageofdgpsdata', 'dgpsid', 'extensions', 'text']);
 
 /** A dilution of precision of 0 is a placeholder: real values are never below about 0.5. */
 const dop = (v: string) => { const x = num(v); return x > 0 ? x : NaN; };
-/** Number(v), read in place. */
-const num = (v: string) => numAt(v, 0, v.length);
+/** Number(v), read in place; NaN for a blank value (an empty <ele/> is no height, not 0 m). */
+const num = (v: string | undefined) => (v === undefined ? NaN : numAt(v, 0, v.length, NaN));
 const EXT_CONTAINERS = new Set(['TrackPointExtension', 'TrackPointExtensionv1', 'TrackPointExtensionv2', 'extensions']);
 
 interface Point {
@@ -40,12 +46,14 @@ interface Point {
 
 function newPoint(attrs: Map<string, string>, line: number): Point {
   return {
-    lat: Number(attrs.get('lat')), lon: Number(attrs.get('lon')), line, t: NaN, ele: NaN, hdop: NaN, vdop: NaN,
+    lat: num(attrs.get('lat')), lon: num(attrs.get('lon')), line, t: NaN, ele: NaN, hdop: NaN, vdop: NaN,
     pdop: NaN, sats: NaN, fixq: 0, geoid: NaN, speedKnown: NaN, speedVendor: NaN, course: NaN, name: null,
   };
 }
 
 const HAS_ZONE = /(Z|[+-]\d\d:?\d\d)$/i;
+/** A time whose zone is given in hours alone ("…T09:00:00-04"), which Date.parse doesn't take. */
+const HOURS_ZONE = /T\d\d:\d\d(?::\d\d(?:[.,]\d+)?)?[+-]\d\d$/;
 
 const digit = (s: string, i: number) => { const c = s.charCodeAt(i) - 48; return c >= 0 && c <= 9 ? c : -100_000; };
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -77,8 +85,9 @@ function usualTime(v: string): number {
 
 /** ISO 8601 time → epoch ms. Times without a zone are read as UTC. */
 export function parseIsoTime(s: string): { t: number; zoned: boolean } {
-  const v = s.trim();
+  let v = s.trim();
   if (!v) return { t: NaN, zoned: true };
+  if (HOURS_ZONE.test(v)) v += ':00';
   const zoned = HAS_ZONE.test(v);
   return { t: Date.parse(zoned ? v : v + 'Z'), zoned };
 }
@@ -122,44 +131,60 @@ export function parseGpx(text: string): ParsedTrack {
   let extDepth = 0;
   let garminDepth = 0;
   const isGarmin = (name: string) => name.startsWith('TrackPointExtension');
-  // What a tag name means here, worked out once per distinct name: 1 for an
-  // extension container, 2 for Garmin's TrackPointExtension. The scanner hands
-  // out the same string for the same name, so the lookup is quick.
-  const kinds = new Map<string, number>();
-  const kindOf = (name: string): number => {
-    let k = kinds.get(name);
-    if (k === undefined) { k = (EXT_CONTAINERS.has(name) ? 1 : 0) | (isGarmin(name) ? 2 : 0); kinds.set(name, k); }
-    return k;
+  // Each distinct tag name, looked up once per tag: what it means here (kind 1
+  // for an extension container, 2 for Garmin's TrackPointExtension) and how
+  // many elements of that name are open, so a close tag for one that isn't is
+  // dropped at once. The scanner hands out the same string for the same name,
+  // so the lookup is quick.
+  const tags = new Map<string, { kind: number; open: number }>();
+  const tagOf = (name: string) => {
+    let g = tags.get(name);
+    if (g === undefined) { g = { kind: (EXT_CONTAINERS.has(name) ? 1 : 0) | (isGarmin(name) ? 2 : 0), open: 0 }; tags.set(name, g); }
+    return g;
   };
 
   const result = scanXml(text, {
     open(name, attrs, line) {
       stack.push(name);
       buf = '';
-      const kind = kindOf(name);
-      if (kind & 1) extDepth++;
-      if (kind & 2) garminDepth++;
+      const g = tagOf(name);
+      g.open++;
+      if (g.kind & 1) extDepth++;
+      if (g.kind & 2) garminDepth++;
       if (name === 'gpx' && stack.length === 1) creator = attrs.get('creator')?.trim() || null;
       else if (name === 'trk') b.breakSegment();
       else if (name === 'trkseg') b.breakSegment();
       else if (name === 'trkpt') { pt = newPoint(attrs, line); ptRoute = false; points++; }
       else if (name === 'rte') rb.breakSegment();
       else if (name === 'rtept') { pt = newPoint(attrs, line); ptRoute = true; routePoints++; }
-      else if (name === 'wpt' && stack.length === 2) wpt = newPoint(attrs, line);
+      // A waypoint is a child of <gpx>, or follows one whose close tag was damaged (and so is still open).
+      else if (name === 'wpt' && (stack.length === 2 || stack[stack.length - 2] === 'wpt')) wpt = newPoint(attrs, line);
     },
     text(s) { buf += s; },
     close(name) {
-      const top = stack.pop();
-      if (top !== name) {
-        // Mismatched tag: recover by unwinding to the matching open tag.
-        const at = stack.lastIndexOf(name);
-        if (at >= 0) stack.length = at;
-        extDepth = stack.filter((s) => EXT_CONTAINERS.has(s)).length;
-        garminDepth = stack.filter(isGarmin).length;
+      // Any elements left open inside the one closing close with it. Each element is pushed and popped
+      // once: no rescanning the stack.
+      const g = tagOf(name);
+      if (!g.open) {
+        // A close tag for an element that isn't open. When a plain value is open on top, one of the two
+        // names was garbled ("<c#ourse>120</course>", "<ele>5</el>"): it closes that value, read under
+        // whichever name is a field. Anything else it leaves open ("<ele>5</ele></el>" keeps the point).
+        const top = stack[stack.length - 1];
+        if (top === undefined || STRUCTURE.has(top)) return;
+        const tg = tagOf(top);
+        if (tg.kind) return;
+        stack.pop();
+        tg.open--;
+        if (!POINT_FIELDS.has(name) && POINT_FIELDS.has(top)) name = top;
       } else {
-        const kind = kindOf(name);
-        if (kind & 1) extDepth--;
-        if (kind & 2) garminDepth--;
+        for (;;) {
+          const top = stack.pop()!;
+          const tg = top === name ? g : tagOf(top);
+          tg.open--;
+          if (tg.kind & 1) extDepth--;
+          if (tg.kind & 2) garminDepth--;
+          if (top === name) break;
+        }
       }
       const parent = stack[stack.length - 1];
       const v = buf.trim();
@@ -215,8 +240,8 @@ export function parseGpx(text: string): ParsedTrack {
           else if (inExt) { p.speedVendor = num(v); anyVendorSpeed = true; }
           break;
         default:
-          if (inExt && !POINT_FIELDS.has(name) && !kindOf(name) && v) {
-            ignored.add(IGNORED_NAMES[name.toLowerCase()] ?? name);
+          if (inExt && !POINT_FIELDS.has(name) && !g.kind && v) {
+            ignored.add(IGNORED_NAMES.get(name.toLowerCase()) ?? name);
           }
       }
     },
@@ -239,12 +264,14 @@ export function parseGpx(text: string): ParsedTrack {
     }
   }
 
-  // Vendor speeds come without a unit: infer it from the positions.
+  // Vendor speeds come without a unit: infer it from the positions. When the
+  // positions don't settle it, the note says the unit is a guess (the user can
+  // pick another on the properties page).
   if (!anyKnownSpeed && anyVendorSpeed) {
     const guess = inferSpeedUnit(cols, cols.speed);
     const f = UNIT_FACTOR[guess.unit];
     for (let i = 0; i < cols.n; i++) cols.speed[i] = cols.speed[i] / f;
-    notes.push({ kind: 'speedUnit', unit: guess.unit, inferred: true });
+    notes.push(guess.confident ? { kind: 'speedUnit', unit: guess.unit, inferred: true } : { kind: 'speedUnit', unit: guess.unit, inferred: true, unsure: true });
   } else if (anyKnownSpeed) {
     notes.push({ kind: 'speedUnit', unit: 'ms', inferred: false });
   }
@@ -256,8 +283,9 @@ export function parseGpx(text: string): ParsedTrack {
   if (cols.n === 0) problems.push({ kind: 'noFixes' });
 
   if (noZone) notes.push({ kind: 'noZone' });
-  if (voidCount) notes.push({ kind: 'void', count: voidCount });
-  if (timeless) notes.push({ kind: 'void', count: timeless });
+  const noPosition = voidCount + src.counts.noPosition;
+  if (noPosition) notes.push({ kind: 'void', count: noPosition });
+  if (timeless) notes.push({ kind: 'timeless', count: timeless });
   if (src.counts.duplicates) notes.push({ kind: 'duplicates', count: src.counts.duplicates });
   if (timelessWpt) notes.push({ kind: 'timelessWaypoints', count: timelessWpt });
   if (ignored.size) notes.push({ kind: 'ignored', fields: [...ignored].sort() });
@@ -283,8 +311,8 @@ export function parseGpx(text: string): ParsedTrack {
 /**
  * Loggers known to repeat their last position, once a second, while they have
  * no new one (they keep writing satellites, HDOP and a speed of 0 with it),
- * by the creator their files name: i-gotU's software. Other loggers' repeats
- * are the logger standing still, and stay.
+ * known by the creator their software writes into the file. Other loggers'
+ * repeats are the logger standing still, and stay.
  */
 export function repeatsLastFix(creator: string | null): boolean {
   return creator !== null && /igotu/i.test(creator);

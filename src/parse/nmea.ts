@@ -47,13 +47,6 @@ const BAD_BYTES = /[^\x20-\x7e]/g;
 /** Any byte that can never appear in NMEA but line breaks. */
 const BAD_OR_BREAK = /[^\x20-\x7e\n\r]/;
 
-/** A byte that can never appear in NMEA: BAD_BYTE outside line breaks, or a \r that doesn't end a line. */
-function anyBadByte(text: string): boolean {
-  if (BAD_OR_BREAK.test(text)) return true;
-  for (let p = text.indexOf('\r'); p >= 0; p = text.indexOf('\r', p + 1)) if (p + 1 < text.length && text.charCodeAt(p + 1) !== 10) return true;
-  return false;
-}
-
 /** Value of a hex digit's character code, or -1. */
 function hexDigit(c: number): number {
   if (c >= 48 && c <= 57) return c - 48;
@@ -97,13 +90,13 @@ export function parseNmea(text: string): ParsedTrack {
   let truncated = null as { line: number; chars: number } | null;
 
   // The content ends at the last character that isn't space: the line holding
-  // it is the last line, and the file ended cleanly if a newline follows it.
+  // it is the last line, and the file ended cleanly if a line break follows it.
   const lastNonWs = lastNonSpace(text);
-  const endsWithNewline = text.indexOf('\n', lastNonWs + 1) >= 0;
+  const endsWithNewline = text.indexOf('\n', lastNonWs + 1) >= 0 || text.indexOf('\r', lastNonWs + 1) >= 0;
   let lastContent = -1;
   // Bytes that can never appear in NMEA are stripped line by line; most files
   // have none, and then every line is read in place.
-  const anyBad = anyBadByte(text);
+  const anyBad = BAD_OR_BREAK.test(text);
 
   // The sentence being read: field k is s[FS[k], FE[k]), for k < nf.
   let s = text, nf = 0;
@@ -188,7 +181,8 @@ export function parseNmea(text: string): ParsedTrack {
     const str = s, fsA = FS, feA = FE;
     const first = nextDollar(a);
     if (first < 0 || first >= b) { garbage++; if (!garbageLine) garbageLine = lineNo; return; }
-    const hadGarbage = hadGarbage0 || first > a;
+    // Space before the first $ is an indented line, not garbage.
+    const hadGarbage = hadGarbage0 || (first > a && !blankAt(s, a, first));
     if (hadGarbage) { garbage++; if (!garbageLine) garbageLine = lineNo; }
     // Almost every line holds exactly one sentence; glued ones are split at
     // each $, leaving out empty pieces.
@@ -267,13 +261,17 @@ export function parseNmea(text: string): ParsedTrack {
       if (type === GSV) { sawGsv = true; continue; }
       if (type !== RMC && type !== GGA && type !== GLL && type !== ZDA) continue;
 
-      // A new time starts a new epoch; the time is kept as text only then.
+      // A new time starts a new epoch; the time is kept as text only then. The
+      // same time written another way ("130500.000" after "130500.00") is the
+      // same epoch.
       const tk = type === GLL ? 5 : 1;
       if (!cur || !(tk < nf && FE[tk] - FS[tk] === cur.todKey.length && s.startsWith(cur.todKey, FS[tk]))) {
         const t = tod(tk);
         if (Number.isNaN(t)) continue;
-        if (cur) epochs.push(cur);
-        cur = newEpoch(s.slice(FS[tk], FE[tk]), t, lineNo);
+        if (!cur || t !== cur.tod) {
+          if (cur) epochs.push(cur);
+          cur = newEpoch(s.slice(FS[tk], FE[tk]), t, lineNo);
+        }
       }
       cur.lineEnd = lineNo;
 
@@ -298,8 +296,8 @@ export function parseNmea(text: string): ParsedTrack {
       } else if (type === GLL) {
         if (!cur.hasPos) {
           const lat = coord(1, 2, 2), lon = coord(3, 4, 3);
-          const vOid = 6 < nf && FE[6] - FS[6] === 1 && s.charCodeAt(FS[6]) === 86; // "V"
-          if (Number.isFinite(lat) && Number.isFinite(lon) && !vOid) { cur.lat = lat; cur.lon = lon; cur.hasPos = true; }
+          const voided = 6 < nf && FE[6] - FS[6] === 1 && s.charCodeAt(FS[6]) === 86; // "V"
+          if (Number.isFinite(lat) && Number.isFinite(lon) && !voided) { cur.lat = lat; cur.lon = lon; cur.hasPos = true; }
         }
       } else {
         const d = plain(2), mo = plain(3), y = plain(4);
@@ -308,25 +306,31 @@ export function parseNmea(text: string): ParsedTrack {
     }
   };
 
+  // Lines end at \r\n, \r or \n. The next \r and the next \n are each looked
+  // for again only once a line start passes them, so a file without one of
+  // them (most have no lone \r) is searched for it once.
   const len = text.length;
+  let cr = text.indexOf('\r'), lf = text.indexOf('\n');
   for (let ls = 0, li = 0; ; li++) {
-    let le = text.indexOf('\n', ls);
-    if (le < 0) le = len;
+    if (cr >= 0 && cr < ls) cr = text.indexOf('\r', ls);
+    if (lf >= 0 && lf < ls) lf = text.indexOf('\n', ls);
+    const le = lf < 0 ? (cr < 0 ? len : cr) : cr < 0 || lf < cr ? lf : cr;
     const lastLine = ls <= lastNonWs && lastNonWs < le;
     if (lastLine) lastContent = li;
-    let b = le;
-    if (b > ls && text.charCodeAt(b - 1) === 13) b--; // a \r before the newline
-    if (!blankAt(text, ls, b)) {
-      if (!anyBad) { s = text; line(ls, b, li + 1, b - ls, lastLine, false); }
+    if (!blankAt(text, ls, le)) {
+      if (!anyBad) { s = text; line(ls, le, li + 1, le - ls, lastLine, false); }
       else {
-        const raw = text.slice(ls, b);
+        // Space before the sentence isn't garbage, whatever kind it is.
+        let a = ls;
+        while (a < le && isSpace(text.charCodeAt(a))) a++;
+        const raw = text.slice(a, le);
         const clean = BAD_BYTE.test(raw) ? raw.replace(BAD_BYTES, '') : raw;
         s = clean; dq = -1; sq = -1; // searches start afresh in each cleaned line
-        line(0, clean.length, li + 1, raw.length, lastLine, clean.length !== raw.length);
+        line(0, clean.length, li + 1, le - ls, lastLine, clean.length !== raw.length);
       }
     }
     if (le >= len) break;
-    ls = le + 1;
+    ls = le + (le === cr && text.charCodeAt(le + 1) === 10 ? 2 : 1);
   }
   if (cur) epochs.push(cur);
 
@@ -386,7 +390,8 @@ export function parseNmea(text: string): ParsedTrack {
   if (cols.n === 0) problems.push({ kind: 'noFixes' });
 
   if (sawSpeed) notes.push({ kind: 'speedUnit', unit: 'knots', inferred: false });
-  if (voidCount) notes.push({ kind: 'void', count: voidCount });
+  const noPosition = voidCount + b.counts.noPosition;
+  if (noPosition) notes.push({ kind: 'void', count: noPosition });
   if (b.counts.duplicates) notes.push({ kind: 'duplicates', count: b.counts.duplicates });
   if (days.size > 1) notes.push({ kind: 'midnight' });
   if (sawGsv) notes.push({ kind: 'ignored', fields: ['satsInView'] });

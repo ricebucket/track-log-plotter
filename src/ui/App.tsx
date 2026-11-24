@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { ComponentType } from 'preact';
+import { useComputed } from '@preact/signals';
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { Panel, PanelButton } from './Panel';
@@ -41,8 +42,16 @@ export function App({ Map }: { Map: ComponentType }) {
     window.addEventListener('drop', drop);
     const unpin = () => { if (hint.value?.pinned) hint.value = null; };
     document.addEventListener('pointerdown', unpin);
+    // Escape closes an explanation, pinned or shown on hover or focus, and keeps the key: select mode stays on.
+    const dismiss = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !hint.peek()) return;
+      hint.value = null;
+      e.preventDefault();
+    };
+    document.addEventListener('keydown', dismiss);
     return () => {
       document.removeEventListener('pointerdown', unpin);
+      document.removeEventListener('keydown', dismiss);
       window.removeEventListener('dragenter', enter);
       window.removeEventListener('dragover', over);
       window.removeEventListener('dragleave', leave);
@@ -50,8 +59,12 @@ export function App({ Map }: { Map: ComponentType }) {
     };
   }, []);
 
-  const loaded = S.items.value.length > 0;
+  // Whether any track is loaded, rather than the list itself: a new name or trust share doesn't redraw the whole app.
+  const loaded = useComputed(() => S.items.value.length > 0).value;
   const clockItem = S.clockPicker.value ? S.items.value.find((x) => x.id === S.clockPicker.value) : undefined;
+  // The time zone list's offsets are for the cursor's time as the list opens: read without following
+  // the cursor, which would redraw the app and search the zones again at every move.
+  const zoneAt = S.zoneOpen.value ? S.cursorT.peek() ?? S.selected.value?.track.derived.stats.start ?? 0 : 0;
   const cls = ['app', S.panelMin.value || !loaded ? 'panel-min' : '', S.timelineMin.value || !loaded ? 'timeline-min' : ''].filter(Boolean).join(' ');
   return (
     <div class={cls}>
@@ -64,7 +77,7 @@ export function App({ Map }: { Map: ComponentType }) {
           {S.picker.value && <SettingsSheet />}
           {S.zoneOpen.value && (
             <ZonePicker
-              at={S.cursorT.value ?? S.selected.value?.track.derived.stats.start ?? 0} value={S.zone.value} title={t('zone.pick')} quick={narrow}
+              at={zoneAt} value={S.zone.value} title={t('zone.pick')} quick={narrow}
               onPick={(z) => { S.zone.value = z; }} onClose={() => { S.zoneOpen.value = false; }} trigger="[data-zone-trigger]"
             />
           )}

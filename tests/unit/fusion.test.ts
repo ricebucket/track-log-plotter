@@ -6,6 +6,7 @@ import { parseFusion } from '../../src/parse/fusion';
 import { parseGpx } from '../../src/parse/gpx';
 import { clockShift } from '../../src/time/zones';
 import { fixAt } from '../../src/state/inspect';
+import { problemBody, problemTitle } from '../../src/ui/labels';
 import { load } from '../helpers/fixtures';
 
 const HEAD = '# Format=ColumbusFusion; Version=1.0; Type=GNSS\r\ntag,date,time,lat,lon,alt,speed,heading\r\n';
@@ -147,8 +148,65 @@ describe('Columbus Fusion logs', () => {
     expect(p.cols.n).toBe(2);
     expect(p.problems).toEqual([
       expect.objectContaining({ kind: 'truncated', line: 6 }),
-      expect.objectContaining({ kind: 'garbage', count: 1, line: 4 }),
+      expect.objectContaining({ kind: 'badRows', count: 1, line: 4 }),
     ]);
+  });
+
+  it('calls rows with the wrong number of fields skipped rows, not stray bytes in NMEA', () => {
+    // One field too many with something in it, and two too many.
+    const p = parseFusion(HEAD + 'T,260614,130500,40.7681,-73.9812,25,10,90,7\r\n,,130501,40.7682,-73.9811,25,10,90,,\r\n,,130502,40.7683,-73.9810,25,10,90\r\n');
+    expect(p.cols.n).toBe(1);
+    expect(p.problems).toEqual([{ kind: 'badRows', count: 2, line: 3 }]);
+    expect(problemTitle(p.problems[0])).toBe('2 rows skipped');
+    expect(problemBody(p.problems[0])).toBe('Starting at line 3, rows with the wrong number of fields were skipped.');
+  });
+
+  it('reads rows that end in a comma', () => {
+    const p = parseFusion(HEAD + 'T,260614,130500,40.7681,-73.9812,25.0,36.0,90.0,\r\n,,130501,40.7682,-73.9811,25.1,36.0,91.0, \r\n');
+    expect(p.cols.n).toBe(2);
+    expect(p.problems).toEqual([]);
+    expect(p.cols.course[1]).toBeCloseTo(91, 3);
+    expect(p.flags).toEqual([]);
+  });
+
+  it('reads a DOP of 0 as missing, as in GPX and NMEA', () => {
+    const head = 'INDEX,TAG,DATE,TIME,LATITUDE N/S,LONGITUDE E/W,HEIGHT,SPEED,HEADING,FIX MODE,VALID,PDOP,HDOP,VDOP';
+    const p = parseFusion([head, '1,T,260614,130500,40.7681N,73.9812W,25,10,90,3D,SPS,0.0,0.0,0.0', '2,T,260614,130501,40.7682N,73.9811W,25,10,90,3D,SPS,1.8,0.9,1.5', ''].join('\r\n'));
+    expect(p.cols.n).toBe(2);
+    for (const k of ['pdop', 'hdop', 'vdop'] as const) expect(p.cols[k][0], k).toBeNaN();
+    expect([p.cols.pdop[1], p.cols.hdop[1], p.cols.vdop[1]].map((v) => v.toFixed(1))).toEqual(['1.8', '0.9', '1.5']);
+  });
+
+  it('counts fixes at 0, 0 or off the Earth with the ones without a position', () => {
+    const p = parseFusion(HEAD + 'T,260614,130500,0,0,25,10,90\r\n,,130501,95.5,-73.9811,25,10,90\r\n,,130502,40.7683,-73.9810,25,10,90\r\n,,130503,,,25,10,90\r\n');
+    expect(p.cols.n).toBe(1);
+    expect(p.notes).toContainEqual({ kind: 'void', count: 3 });
+  });
+
+  it('counts the readings after a time without a position toward no fix', () => {
+    // A fix, a second without a position (and stronger readings), then two more fixes: five readings each.
+    const head = '# Format=ColumbusFusion; Version=1.0; Type=GNSS+IMU\r\ntag,date,time,lat,lon,alt,speed,heading,ax,ay,az\r\n';
+    const rows: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const none = i === 1, z = none ? '3.00' : '1.00';
+      rows.push(`${i ? ',' : 'T,260614'},13050${i},${none ? ',' : `40.768${i},-73.9812`},25,10,90,0.00,0.00,${z}`);
+      for (let k = 1; k < 5; k++) rows.push(`,,,,,,,,0.00,0.00,${z}`);
+    }
+    const p = parseFusion(head + rows.join('\r\n') + '\r\n');
+    expect(p.cols.n).toBe(3);
+    expect(Array.from(p.cols.accel)).toEqual([1, 1, 1]);
+    expect(p.notes).toContainEqual({ kind: 'void', count: 1 });
+    expect(p.notes).toContainEqual({ kind: 'motion', rate: 5 });
+    // Every reading is on the timeline in order, those of the second without a position at that second.
+    const m = p.motion!, t0 = Date.UTC(2026, 5, 14, 13, 5, 0);
+    expect(Array.from(m.t)).toEqual(Array.from({ length: 20 }, (_, k) => t0 + k * 200));
+    expect(Array.from(m.g.slice(5, 10))).toEqual([3, 3, 3, 3, 3]);
+  });
+
+  it('leaves the date to the fixes: a time without a position doesn\'t move it on', () => {
+    // Past midnight by its time, but it isn't a fix: the fix after it is still on the same day.
+    const p = parseFusion(HEAD + 'T,260614,150000,40.7681,-73.9812,25,10,90\r\n,,000000,,,25,10,90\r\n,,150001,40.7682,-73.9811,25,10,90\r\n');
+    expect(Array.from(p.cols.t)).toEqual([Date.UTC(2026, 5, 14, 15, 0, 0), Date.UTC(2026, 5, 14, 15, 0, 1)]);
   });
 
   it('goes through the same loading as every other file', () => {

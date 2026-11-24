@@ -28,6 +28,14 @@ export function medianInterval(cols: Columns): number {
 export const SPREAD_SIZE = 512;
 /** A log's accuracy (from HDOP or satellites) is averaged over this many seconds before it weights the log in a combination. */
 export const ACCURACY_SMOOTH_S = 10;
+/**
+ * A fix's expected error counts as at most this many times the log's usual
+ * one. Real HDOPs stay far below that; one absurd value (say 3e38) would
+ * otherwise swamp the running sum that averages them, for the rest of the log.
+ */
+export const MAX_ACCURACY = 1000;
+/** Heights beyond this (m, either way) are taken as this much when smoothed, for the same reason. */
+const MAX_HEIGHT_M = 1e6;
 
 /**
  * Everything worked out from a track's fixes, once, when it loads (in the
@@ -62,8 +70,9 @@ export function derive(p: ParsedTrack): Derived {
     const h = hdop[i], sv = sats[i], ev = ele[i], f = fixq[i];
     if (sv >= 0) withSats++;
     if (h - h === 0) {
-      if (hAll === NONE) { hAll = new Float64Array(n); h6 = new Float64Array(n); }
-      hAll[nh++] = h; if (!(h > 0)) hNonPos++; if (sv >= 6) h6[n6++] = h;
+      if (hAll === NONE) hAll = new Float64Array(n);
+      hAll[nh++] = h; if (!(h > 0)) hNonPos++;
+      if (sv >= 6) { if (h6 === NONE) h6 = new Float64Array(n); h6[n6++] = h; }
     }
     if (sv - sv === 0) { if (sAll === NONE) sAll = new Float64Array(n); sAll[ns++] = sv; if (!(sv > 0)) sNonPos++; }
     if (ev === ev) {
@@ -96,10 +105,11 @@ export function derive(p: ParsedTrack): Derived {
   const hdopQ: [number, number, number] | null = Number.isFinite(q2) ? [q1, q2, q3] : null;
   const medSats = quantilesIn(sAll, ns, [0.5])[0];
   // What a log's accuracy is measured against: the middle of its positive HDOPs (the upper middle of an even
-  // count), else of its positive satellite counts. Selecting the median above has already put that value in place.
+  // count), else of its positive satellite counts. Selecting the median above has already put that value in place
+  // when every value is positive; otherwise it is picked from the same values, which nothing needs any more.
   const hasH = p.fields.includes('hdop'), hasS = p.fields.includes('sats');
-  const hdopBase = hasH ? (hNonPos ? positiveMiddle(hdop) : nh ? hAll[nh >> 1] : NaN) : NaN;
-  const satsBase = !hasH && hasS ? (sNonPos ? positiveMiddle(sats) : ns ? sAll[ns >> 1] : NaN) : NaN;
+  const hdopBase = hasH ? (hNonPos ? positiveMiddle(hAll, nh) : nh ? hAll[nh >> 1] : NaN) : NaN;
+  const satsBase = !hasH && hasS ? (sNonPos ? positiveMiddle(sAll, ns) : ns ? sAll[ns >> 1] : NaN) : NaN;
 
   // ---- Pass 2: distance, gaps, speed, moving time, and each fix's accuracy.
   const dist = new Float64Array(n), gap = new Uint8Array(n), kmh = new Float32Array(n), now = new Float64Array(n);
@@ -142,11 +152,12 @@ export function derive(p: ParsedTrack): Derived {
       }
       speedAt(i - 1);
     }
-    // Expected error against the log's usual one: HDOP over its middle value, else fewer satellites than usual;
-    // a corrected (differential) fix counts double, its error √½ as large.
+    // Expected error against the log's usual one: HDOP over its middle value, else fewer satellites than usual
+    // (at most MAX_ACCURACY times as large); a corrected (differential) fix counts double, its error √½ as large.
     let a = 1;
     if (hasH) { const h = hdop[i]; if (h > 0 && h < Infinity) a = h / hdopBase; }
     else if (hasS) { const sv = sats[i]; if (sv > 0 && sv < Infinity) a = satsBase / sv; }
+    if (a > MAX_ACCURACY) a = MAX_ACCURACY;
     if (fixq[i] === 2) a *= Math.SQRT1_2;
     now[i] = a;
   }
@@ -184,11 +195,11 @@ export function derive(p: ParsedTrack): Derived {
     if (v !== v) continue;
     if (low !== low) { low = high = v; continue; }
     if (v > high) high = v;
-    if (v < low) { low = high = v; continue; }
+    // A fall of CLIMB_HYSTERESIS from the high ends the rise so far, even one that falls below its low.
     if (high - v >= CLIMB_HYSTERESIS) {
       if (high - low >= CLIMB_HYSTERESIS) climb += high - low;
       low = high = v;
-    }
+    } else if (v < low) low = high = v;
   }
   if (high - low >= CLIMB_HYSTERESIS) climb += high - low;
 
@@ -213,12 +224,11 @@ export function derive(p: ParsedTrack): Derived {
   };
 }
 
-/** The middle of the positive finite values (the upper middle of an even count), or NaN. */
-function positiveMiddle(v: ArrayLike<number>): number {
-  const a = new Float64Array(v.length);
-  let m = 0;
-  for (let i = 0; i < v.length; i++) { const x = v[i]; if (x > 0 && x < Infinity) a[m++] = x; }
-  return nth(a, m, m >> 1);
+/** The middle of the positive values of a[0, m), which are all finite (the upper middle of an even count), or NaN. It rearranges a. */
+function positiveMiddle(a: Float64Array, m: number): number {
+  let k = 0;
+  for (let i = 0; i < m; i++) { const x = a[i]; if (x > 0) a[k++] = x; }
+  return nth(a, k, k >> 1);
 }
 
 /** A moving average over a window of seconds around each value, with two pointers. */
@@ -240,30 +250,40 @@ export function movingAverage(t: Float64Array, v: Float64Array, windowS: number)
  * and climb. Elevation colors still use the recorded values.
  */
 export function smoothEle(c: Columns, gap: Uint8Array): Float32Array {
-  const n = c.n;
+  const n = c.n, ele = c.ele;
   const out = new Float32Array(n).fill(NaN);
   const half = ELE_SMOOTH_S * 1000;
+  // The running sum takes each height as at most MAX_HEIGHT_M either way, so one absurd height leaves no trace once out of the window.
+  const h = (e: number) => (e > MAX_HEIGHT_M ? MAX_HEIGHT_M : e < -MAX_HEIGHT_M ? -MAX_HEIGHT_M : e);
   let runStart = 0;
   for (let i = 0; i <= n; i++) {
     if (i < n && !(i > 0 && gap[i])) continue;
     let lo = runStart, hi = runStart, sum = 0, cnt = 0;
     for (let k = runStart; k < i; k++) {
-      while (hi < i && c.t[hi] <= c.t[k] + half) { if (Number.isFinite(c.ele[hi])) { sum += c.ele[hi]; cnt++; } hi++; }
-      while (c.t[lo] < c.t[k] - half) { if (Number.isFinite(c.ele[lo])) { sum -= c.ele[lo]; cnt--; } lo++; }
-      out[k] = cnt && Number.isFinite(c.ele[k]) ? sum / cnt : NaN;
+      while (hi < i && c.t[hi] <= c.t[k] + half) { if (Number.isFinite(ele[hi])) { sum += h(ele[hi]); cnt++; } hi++; }
+      while (c.t[lo] < c.t[k] - half) { if (Number.isFinite(ele[lo])) { sum -= h(ele[lo]); cnt--; } lo++; }
+      out[k] = cnt && Number.isFinite(ele[k]) ? sum / cnt : NaN;
     }
     runStart = i;
   }
   return out;
 }
 
-/** Number of gaps and the longest one in seconds. */
+/**
+ * Number of gaps and the longest one in seconds. A new segment counts only
+ * when time is missing there too: a step longer than the gap threshold.
+ */
 export function gapSummary(c: Columns, gap: Uint8Array): { count: number; longestS: number } {
-  let count = 0, longestS = 0;
+  let count = 0, longestS = 0, gapS = NaN;
   for (let i = 1; i < c.n; i++) {
     if (!gap[i]) continue;
+    const dt = (c.t[i] - c.t[i - 1]) / 1000;
+    if (c.seg[i]) {
+      if (gapS !== gapS) gapS = gapThreshold(medianInterval(c)); // worked out only for a track with segments
+      if (!(dt > gapS)) continue;
+    }
     count++;
-    longestS = Math.max(longestS, (c.t[i] - c.t[i - 1]) / 1000);
+    longestS = Math.max(longestS, dt);
   }
   return { count, longestS };
 }

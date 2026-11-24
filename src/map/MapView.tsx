@@ -6,11 +6,10 @@ import type { GeoJSONSource, Map as MlMap, MapLayerMouseEvent, MapLayerTouchEven
 import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import * as S from '../state/store';
 import { trackUid, type TrackItem } from '../state/logic';
-import { BASEMAPS, TEXT_FONT, ZH_LABEL } from './basemaps';
-import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildLogCursors, buildLogLines, buildMarks, buildPaths, buildRuns } from './geojson';
+import { BASEMAPS, basemapFailed, plainStyle, showsName, styleKey, TEXT_FONT, ZH_LABEL } from './basemaps';
+import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps, buildLogCursors, buildLogLines, buildMarks, buildPaths, buildRuns, metersPerPixel, nearestFix, showsLogs } from './geojson';
 import { CASING, GAP, LEFT_OUT } from '../color/palettes';
 import { traceShape, type BadgeShape } from '../color/shapes';
-import { haversine } from '../derive/geo';
 import { mapApi, mapFailed, tipXY } from './bridge';
 
 export { mapApi, mapFailed, tipXY };
@@ -24,11 +23,21 @@ function plus(base: number, add: number | unknown[]) {
 
 const SOURCES = ['tlp-runs', 'tlp-paths', 'tlp-gaps', 'tlp-logs', 'tlp-fixes', 'tlp-flags', 'tlp-marks', 'tlp-cursors', 'tlp-log-cursors'] as const;
 const EMPTY = { type: 'FeatureCollection', features: [] } as const;
+/** How long a basemap's style may take to arrive before the map gives up on it and draws on a plain background. */
+export const STYLE_WAIT_MS = 8000;
 /** Fix glyphs draw from zoom 17; their data is sent a little before that. */
 const FIX_GLYPH_ZOOM = 17;
 const FIX_DATA_ZOOM = 16.5;
 /** The selected track is drawn again on top of the others, picked by global state. */
 const SELECTED = ['==', ['get', 'id'], ['global-state', 'sel']];
+/**
+ * The layers a click or a drag picks a track from. MapLibre lists what it finds
+ * topmost first, so with the selected track's own layers (drawn on top) in the
+ * list, the selected track wins where tracks overlap.
+ */
+const PICK = ['tlp-line-sel', 'tlp-casing-sel', 'tlp-line', 'tlp-casing'];
+/** A drag starts on a track's casing, which is wider than its line. */
+const DRAG = ['tlp-casing-sel', 'tlp-casing'];
 
 const visKey = (vis: TrackItem[]) => vis.map((x) => `${x.id}:${trackUid(x.track)}:${x.fam}`).join('|');
 
@@ -53,7 +62,7 @@ function arrowImage(): ImageData {
   return arrow;
 }
 
-/** A dot for a tiny track: its badge's shape and color, with a white rim. Made when the map first asks for it. */
+/** A dot for a tiny track: its badge's shape and color, with a white rim. Drawn before the dots' data is sent (see markIcon). */
 function markImage(shape: BadgeShape, color: string): ImageData {
   const s = 56; // 28 px, drawn at twice the size
   const c = document.createElement('canvas');
@@ -110,13 +119,15 @@ function addOwnLayers(map: MlMap) {
   });
 }
 
-/** Vector basemaps label places in Chinese when the app is in Chinese. */
+/**
+ * Vector basemaps label places in Chinese when the app is in Chinese. Only
+ * labels that show a name change: road numbers on shields and house numbers stay.
+ */
 function applyLabels(map: MlMap) {
   if (!BASEMAPS[S.basemap.value].vector || S.lang.value !== 'zh') return;
   for (const l of map.getStyle().layers ?? []) {
     if (l.type !== 'symbol' || l.id.startsWith('tlp-')) continue;
-    const tf = map.getLayoutProperty(l.id, 'text-field');
-    if (tf) map.setLayoutProperty(l.id, 'text-field', ZH_LABEL);
+    if (showsName(map.getLayoutProperty(l.id, 'text-field'))) map.setLayoutProperty(l.id, 'text-field', ZH_LABEL);
   }
 }
 
@@ -129,11 +140,12 @@ type MapLibre = typeof import('maplibre-gl');
 /** Creates the map and keeps it in step with the app. Returns the cleanup. */
 function start(ml: MapLibre, container: HTMLDivElement): () => void {
   ml.setWorkerUrl(mapWorkerUrl);
+  const firstStyle = BASEMAPS[S.basemap.value].style as string | StyleSpecification;
   let map: MlMap;
   try {
     map = new ml.Map({
       container,
-      style: BASEMAPS[S.basemap.value].style as string | StyleSpecification,
+      style: firstStyle,
       center: [-73.9655, 40.7705],
       zoom: 12,
       attributionControl: false,
@@ -159,6 +171,32 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   // animation ends, so they measure positions only on a still map.
   const fitting = (on: boolean) => { if (counting) { if (on) container.dataset.fitting = '1'; else delete container.dataset.fitting; } };
   const disposers: (() => void)[] = [];
+
+  // Whether the style asked for last has loaded (its style.load came), and whether it is the plain background.
+  let styleUp = false;
+  let plain = false;
+  let styleTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * The basemap's style won't load: its server failed or can't be reached, or the
+   * request hangs. Without its style.load the tracks would never be drawn, so the map
+   * takes the plain background instead, and a notice says so (see MapTools).
+   */
+  const fallBack = () => {
+    clearTimeout(styleTimer);
+    if (styleUp || plain) return;
+    plain = true;
+    basemapFailed.value = true;
+    map.setStyle(plainStyle(S.dark.peek()), { diff: false });
+  };
+  /** A style is on its way. One from a server (a URL) gets a few seconds to arrive. */
+  const awaitStyle = (style: string | StyleSpecification) => {
+    clearTimeout(styleTimer);
+    styleUp = false;
+    plain = false;
+    if (typeof style === 'string') styleTimer = setTimeout(fallBack, STYLE_WAIT_MS);
+  };
+  awaitStyle(firstStyle);
+  basemapFailed.value = false;
 
   // Keep fitted tracks clear of whatever covers the map: the side panel (or
   // the bottom sheet on a phone), the timeline and the map buttons.
@@ -216,8 +254,10 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     tipXY.value = { x: p.x, y: p.y };
   };
 
-  // The dot images are made on demand, also after a basemap change clears them.
-  /** The icon of a dot for a track too small to see: its badge shape in its color, drawn the first time it's needed. */
+  /**
+   * The icon of a dot for a track too small to see: its badge shape in its color. The marks
+   * effect draws each one before sending the dots, also after a basemap change clears the icons.
+   */
   const markIcon = (id: string) => {
     const m = /^tlp-mark-(circle|square|hexagon|diamond)-([0-9a-f]{6})$/i.exec(id);
     if (m && !map.hasImage(id)) map.addImage(id, markImage(m[1] as BadgeShape, `#${m[2]}`), { pixelRatio: 2 });
@@ -226,6 +266,8 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   // never has to ask; when it asks for an icon it doesn't have, the dot may never be drawn.
   map.on('styleimagemissing', (e: { id: string }) => markIcon(e.id));
   map.on('style.load', () => {
+    styleUp = true;
+    clearTimeout(styleTimer);
     addOwnLayers(map);
     applyLabels(map);
     for (const k of Object.keys(sent)) delete sent[k];
@@ -242,7 +284,18 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     const c = map.getCenter();
     S.mapView.value = { lat: c.lat, lon: c.lng, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
   });
-  map.on('error', () => { /* a tile failed to load; the map keeps going */ });
+  // A tile that failed to load (its error names its source) is no news: the map keeps going. Any other
+  // error is logged, once. Before the style has loaded, an error means it won't: the map falls back.
+  const logged = new Set<string>();
+  map.on('error', (e) => {
+    if ((e as { sourceId?: unknown }).sourceId) return;
+    const text = String(e.error?.message ?? e.error);
+    if (!logged.has(text)) {
+      logged.add(text);
+      console.warn('Map:', e.error);
+    }
+    if (!styleUp && !map.isStyleLoaded()) fallBack();
+  });
   // How many track lines are drawn, for the browser tests only. Counting
   // queries every drawn feature, so it runs only after the data, view or
   // selection changed.
@@ -265,25 +318,11 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   /**
    * The fix of a track nearest to a point. While dragging, `prev` is the last
    * fix picked: where the track passes the same place twice, a fix close to it
-   * wins when it is about as near, so the cursor stays on the same pass.
+   * wins when it is about as near (within 12 pixels at this zoom), so the
+   * cursor stays on the same pass.
    */
-  const nearestFix = (it: TrackItem, lat: number, lng: number, prev: number): number => {
-    const c = it.track.cols;
-    let best = 0, bd = Infinity;
-    for (let i = 0; i < c.n; i++) {
-      const d = haversine(lat, lng, c.lat[i], c.lon[i]);
-      if (d < bd) { bd = d; best = i; }
-    }
-    if (prev < 0) return best;
-    // 12 pixels at this zoom, in meters (MapLibre tiles are 512 pixels wide).
-    const tol = (12 * 40_075_016.7 * Math.cos((lat * Math.PI) / 180)) / (512 * 2 ** map.getZoom());
-    let near = -1, nd = Infinity;
-    for (let i = Math.max(0, prev - 400); i < Math.min(c.n, prev + 400); i++) {
-      const d = haversine(lat, lng, c.lat[i], c.lon[i]);
-      if (d < nd) { nd = d; near = i; }
-    }
-    return near >= 0 && nd <= bd + tol ? near : best;
-  };
+  const fixNear = (it: TrackItem, ll: { lat: number; lng: number }, prev: number): number =>
+    nearestFix(it.track.cols, ll.lat, ll.lng, prev, 12 * metersPerPixel(ll.lat, map.getZoom()));
   const itemAt = (id: unknown) => (typeof id === 'string' ? S.items.peek().find((x) => x.id === id) : undefined);
 
   // Clicking a track line selects it and moves the cursor to the nearest fix.
@@ -298,11 +337,11 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
       map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: padding(), maxZoom: 16, duration: 500 });
       return;
     }
-    const hit = map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers: ['tlp-line', 'tlp-casing'] });
+    const hit = map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers: PICK });
     const it = itemAt(hit[0]?.properties?.id);
     if (!it) { S.clearCursor(); return; }
     S.select(it.id);
-    S.seek(it.id, it.track.cols.t[nearestFix(it, e.lngLat.lat, e.lngLat.lng, -1)]);
+    S.seek(it.id, it.track.cols.t[fixNear(it, e.lngLat, -1)]);
   });
 
   // Pressing on a track and dragging moves the cursor along it, like the
@@ -318,7 +357,7 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
       scrubFrame = 0;
       const it = itemAt(scrubId);
       if (!it || !scrubAt) return;
-      scrubPrev = nearestFix(it, scrubAt.lat, scrubAt.lng, scrubPrev);
+      scrubPrev = fixNear(it, scrubAt, scrubPrev);
       S.seek(it.id, it.track.cols.t[scrubPrev]);
     });
   };
@@ -339,27 +378,36 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     S.scrubbing.value = false;
     map.getCanvas().style.cursor = '';
   };
-  map.on('mousedown', 'tlp-casing', (e) => { if (e.originalEvent.button === 0) startScrub(e); });
-  map.on('touchstart', 'tlp-casing', (e) => { if (e.points.length === 1) startScrub(e); });
+  map.on('mousedown', DRAG, (e) => { if (e.originalEvent.button === 0) startScrub(e); });
+  map.on('touchstart', DRAG, (e) => { if (e.points.length === 1) startScrub(e); });
   map.on('mousemove', (e) => { if (scrubId) scrubTo(e.lngLat); });
   map.on('touchmove', (e) => { if (scrubId) scrubTo(e.lngLat); });
   map.on('touchend', endScrub);
   map.on('touchcancel', endScrub);
   window.addEventListener('mouseup', endScrub);
   disposers.push(() => { window.removeEventListener('mouseup', endScrub); cancelAnimationFrame(scrubFrame); });
-  // Hover listeners query features on every mouse move, so listen on one layer only.
-  for (const layer of ['tlp-line', 'tlp-mark']) {
-    map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
-    map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
-  }
+  // Hover listeners query features on every mouse move: one pair for the lines and the dots
+  // together, so a move costs half the queries, and going from a line onto a dot keeps the pointer.
+  map.on('mouseenter', ['tlp-line', 'tlp-mark'], () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', ['tlp-line', 'tlp-mark'], () => { map.getCanvas().style.cursor = ''; });
 
-  let lastStyle = S.basemap.peek() + S.lang.peek();
+  // A new basemap loads its style; so does a new language, but only on a vector basemap (whose labels follow it).
+  let lastStyle = styleKey(S.basemap.peek(), S.lang.peek());
+  let lastId = S.basemap.peek();
   disposers.push(effect(() => {
-    const key = S.basemap.value + S.lang.value;
+    const id = S.basemap.value;
+    const key = styleKey(id, S.lang.value);
     if (key === lastStyle) return;
     lastStyle = key;
+    // The plain background has no labels to change: it stays until another basemap is picked.
+    if (plain && id === lastId) return;
+    lastId = id;
     ready.value = false;
-    map.setStyle(BASEMAPS[S.basemap.peek()].style as string | StyleSpecification, { diff: false });
+    // A new style on its way: a notice about the last one goes.
+    basemapFailed.value = false;
+    const style = BASEMAPS[id].style as string | StyleSpecification;
+    awaitStyle(style);
+    map.setStyle(style, { diff: false });
   }));
 
   // Each source has its own effect, reading only what it depends on, so a
@@ -373,8 +421,8 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   disposers.push(effect(() => {
     if (!ready.value) return;
     const vis = S.visible.value;
-    send('tlp-paths', visKey(vis), () => buildPaths(vis, { dark: false, single: false, selectedId: null, scaleFor: S.scaleFor }));
-    send('tlp-flags', visKey(vis), () => buildFlags(vis, { dark: false, single: false, selectedId: null, scaleFor: S.scaleFor }));
+    send('tlp-paths', visKey(vis), () => buildPaths(vis));
+    send('tlp-flags', visKey(vis), () => buildFlags(vis));
   }));
   disposers.push(effect(() => {
     if (!ready.value) return;
@@ -397,7 +445,7 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     if (!ready.value) return;
     // Up to 100,000s of points: only send them when zoomed in enough to draw them.
     const vis = S.visible.value, on = S.showFixes.value && zoomedIn.value;
-    send('tlp-fixes', on ? visKey(vis) : 'off', () => (on ? buildFixPoints(vis, { dark: false, single: false, selectedId: null, scaleFor: S.scaleFor }) : EMPTY));
+    send('tlp-fixes', on ? visKey(vis) : 'off', () => (on ? buildFixPoints(vis) : EMPTY));
   }));
   disposers.push(effect(() => {
     if (!ready.value) return;
@@ -410,9 +458,12 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
   }));
   disposers.push(effect(() => {
     if (!ready.value) return;
+    const vis = S.visible.value, offsets = S.offsets.value, at = S.cursorT.value;
     const ctx = { dark: S.dark.value, single: S.single.value, selectedId: S.selected.value?.id ?? null, scaleFor: S.scaleFor };
-    setData(map, 'tlp-cursors', buildCursors(S.visible.value, S.offsets.value, S.cursorT.value, ctx));
-    setData(map, 'tlp-log-cursors', buildLogCursors(S.visible.value, S.offsets.value, S.cursorT.value));
+    setData(map, 'tlp-cursors', buildCursors(vis, offsets, at, ctx));
+    // The logs' dots follow the cursor only while a combined track shows a log; otherwise they're cleared once.
+    if (showsLogs(vis)) { delete sent['tlp-log-cursors']; setData(map, 'tlp-log-cursors', buildLogCursors(vis, offsets, at)); }
+    else send('tlp-log-cursors', 'none', () => EMPTY);
     placeTip();
   }));
   disposers.push(effect(() => {
@@ -434,6 +485,8 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
 
   return () => {
     ro.disconnect();
+    clearTimeout(styleTimer);
+    basemapFailed.value = false;
     disposers.forEach((d) => d());
     map.remove();
   };

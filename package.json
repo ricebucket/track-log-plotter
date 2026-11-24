@@ -6,7 +6,7 @@
   "type": "module",
   "license": "GPL-3.0-only",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "scripts": {
     "dev": "vite",
@@ -16,10 +16,12 @@
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --exclude tests/unit/performance.test.ts",
+    "test:perf": "vitest run tests/unit/performance.test.ts",
     "test:e2e": "playwright test",
     "fixtures": "node scripts/make-fixtures.mjs",
     "screenshots": "playwright test -c playwright.screenshots.config.ts",
+    "video": "playwright test -c playwright.video.config.ts",
     "check": "npm run lint && npm run typecheck && npm test && npm run build && npm run test:e2e"
   },
   "dependencies": {

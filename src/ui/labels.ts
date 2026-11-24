@@ -1,5 +1,5 @@
 // Text built from data: legend ranges, units and readout values.
-import type { ColorKey, HaloKey, MeasureKey, Note, Problem, Format, LoadedTrack } from '../model/types';
+import type { ColorKey, MeasureKey, Note, Problem, Format, LoadedTrack } from '../model/types';
 import type { Scale } from '../color/scale';
 import { fmtBytes, fmtEle, fmtNum, fmtSpeed } from '../format';
 import { locale, t, units } from '../state/store';
@@ -36,8 +36,14 @@ export function nameTip(item: TrackItem): string {
   return [trackName(item), item.customName !== undefined ? originalName(item.track) : '', trackTagline(item.track)].filter(Boolean).join('\n');
 }
 
-export function measureName(key: ColorKey | HaloKey): string {
+/** A measure's name, or "One color" for a one-color line (no halo has a name of its own: callers say "None"). */
+export function measureName(key: ColorKey): string {
   return t(`measure.${key}`);
+}
+
+/** A label and what it labels, as one text for a hover text or a screen reader: "Distance: …" ("距离：…" in Chinese). */
+export function labeled(label: string, text: string): string {
+  return `${label}${t('label.sep')}${text}`;
 }
 
 /** Legend title: "Speed (km/h)", "HDOP, ranked within this track". */
@@ -89,7 +95,7 @@ export function problemTitle(p: Problem): string {
 export function problemBody(p: Problem): string {
   switch (p.kind) {
     case 'truncated': return t('problem.truncated.body', { line: p.line, chars: p.chars, kept: p.kept });
-    case 'checksum': case 'glued': case 'garbage': case 'backwards': case 'jump':
+    case 'checksum': case 'glued': case 'garbage': case 'badRows': case 'backwards': case 'jump':
       return t(`problem.${p.kind}.body`, { n: p.count, line: p.line });
     case 'unclosed': return t('problem.unclosed.body', { kept: p.kept });
     case 'badXml': return t('problem.badXml.body', { line: p.line, kept: p.kept });
@@ -105,15 +111,31 @@ export function fieldName(f: string): string {
 
 export function noteText(n: Note): string {
   switch (n.kind) {
-    case 'speedUnit': return t(n.inferred ? 'note.speedUnitInferred' : 'note.speedUnit', { unit: t(`unit.${n.unit}`) });
+    case 'speedUnit': {
+      // A unit the file doesn't give: picked by the user, a guess the positions didn't settle, or what they match.
+      const unit = { unit: t(`unit.${n.unit}`) };
+      if (n.inferred && n.chosen) return t('note.speedUnitChosen', unit);
+      if (n.inferred && n.unsure) return t('note.speedUnitGuess', unit);
+      return t(n.inferred ? 'note.speedUnitInferred' : 'note.speedUnit', unit);
+    }
     case 'ignored': return t('note.ignored', { fields: n.fields.map(fieldName).join(t('list.sep')) });
-    case 'void': case 'duplicates': case 'timelessWaypoints': return t(`note.${n.kind}`, { n: n.count });
+    case 'void': case 'timeless': case 'duplicates': case 'timelessWaypoints': return t(`note.${n.kind}`, { n: n.count });
     case 'gaps': return t('note.gaps', { n: n.count, longest: Math.round(n.longestS) });
-    case 'zeroSats': return t('note.zeroSats', { n: n.count, stale: n.stale });
+    case 'zeroSats': return zeroSatsText(n.count, n.stale);
     case 'motion': return t('note.motion', { n: n.rate });
     case 'repeatsDropped': return n.long ? `${t('note.repeatsDropped', { n: n.count })} ${t('note.repeatsLong', { n: n.long })}` : t('note.repeatsDropped', { n: n.count });
     default: return t(`note.${n.kind}`);
   }
+}
+
+/**
+ * Fixes that report 0 satellites, and how many of them repeat the position
+ * before: each count with its own plural ("1 of them repeats", "3 of them repeat").
+ */
+function zeroSatsText(count: number, stale: number): string {
+  if (stale <= 0) return t('note.zeroSats', { n: count });
+  if (stale >= count) return t('note.zeroSatsAllStale', { n: count });
+  return t('note.zeroSatsStale', { count, n: stale });
 }
 
 /** A short distance: metres (feet in imperial units), with a decimal below 10. */

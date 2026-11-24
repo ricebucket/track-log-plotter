@@ -6,6 +6,8 @@
 
 **在线使用：** https://ricebucket.github.io/track-log-plotter/
 
+**演示视频：** [观看](docs/video/demo-zh.mp4)
+
 ![轨迹绘图器：浅色底图上显示中央公园的骑行和罗斯福岛的跑步两条轨迹，左侧是带速度图例和 HDOP 光晕说明的轨迹列表，地图上有定位点信息卡，下方是每条轨迹一条通道的时间轴](docs/screenshots/desktop-zh.png)
 
 ## 功能
@@ -21,7 +23,7 @@
 - **时区。** 本地时间、UTC 或任意时区。时间不带时区的文件（例如 Columbus Fusion 记录）先按 UTC 读取，可以在属性页中设定记录时所在的时区。
 - **English 和简体中文**，在右上角的“选项”菜单中切换，电脑和手机都适用。英文界面使用 12 小时制，中文界面使用 24 小时制。
 
-支持 GPX（轨迹，以及带时间的路线）、NMEA 和 Columbus Fusion（CSV）。
+支持 GPX（轨迹，以及带时间的路线）、NMEA 和 Columbus Fusion（CSV）。暂不支持跨越 180° 经线（反子午线）的轨迹。
 
 ## 隐私
 
@@ -37,7 +39,7 @@
 | 底图 | 提供方 |
 | --- | --- |
 | OpenStreetMap | © OpenStreetMap 贡献者 |
-| 浅色、深色 | OpenFreeMap，© OpenStreetMap 贡献者 |
+| 浅色、深色 | OpenFreeMap，© OpenMapTiles，© OpenStreetMap 贡献者 |
 | 地形 | © OpenTopoMap（CC-BY-SA），© OpenStreetMap 贡献者，SRTM |
 | 卫星影像、影像 + 地名 | Esri World Imagery：Esri、Maxar、Earthstar Geographics 及 GIS 用户社区 |
 
@@ -45,7 +47,7 @@
 
 ## 开发
 
-在自己的电脑上运行（需要 Node.js 20 或更新版本）：
+在自己的电脑上运行（需要较新的 Node.js，最低版本见 package.json 中的 engines）：
 
 ```sh
 npm install

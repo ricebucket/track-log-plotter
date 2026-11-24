@@ -28,7 +28,7 @@ describe('empty state', () => {
     render(<App Map={NoMap} />);
     expect(screen.getByRole('heading', { name: 'Plot your GPS track logs' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Open tracks/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try the sample ride' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try the samples' })).toBeTruthy();
     expect(screen.getByText('GPX')).toBeTruthy();
     expect(screen.getByText('NMEA')).toBeTruthy();
   });
@@ -273,7 +273,7 @@ describe('tracks panel', () => {
   it('shows each map switch as on or off by its border, without a checkbox', () => {
     loadFixtures('central-park-loop.nmea');
     render(<App Map={NoMap} />);
-    const arrows = screen.getByRole('button', { name: 'Heading arrows' });
+    const arrows = screen.getByRole('button', { name: 'Direction arrows' });
     expect(document.querySelector('.toggle-chip .check')).toBeNull();
     const was = arrows.getAttribute('aria-pressed');
     fireEvent.click(arrows);
@@ -370,13 +370,13 @@ describe('tracks panel', () => {
     expect(screen.getByRole('heading', { name: 'Tracks' })).toBeTruthy();
   });
 
-  it('links Street View to the selected point, and only when there is one', () => {
+  it('links Street View to the selected fix, and only when there is one', () => {
     loadFixtures('central-park-loop.nmea');
     render(<App Map={NoMap} />);
     fireEvent.click(screen.getByRole('button', { name: 'Open in Google Maps' }));
     expect(screen.queryByRole('link', { name: /Street View/ })).toBeNull();
     act(() => { S.cursorT.value = S.items.value[0].track.cols.t[100]; });
-    const sv = screen.getByRole('link', { name: /Street View at the selected point/ });
+    const sv = screen.getByRole('link', { name: /Street View at the selected fix/ });
     const c = S.items.value[0].track.cols;
     expect(sv.getAttribute('href')).toContain(`viewpoint=${c.lat[100].toFixed(6)}%2C${c.lon[100].toFixed(6)}`);
     act(() => S.clearCursor());
@@ -524,12 +524,12 @@ describe('tracks panel', () => {
   it('shows the On the map switches as icons, named on hover', () => {
     loadFixtures('central-park-loop.nmea');
     render(<App Map={NoMap} />);
-    const arrows = screen.getByRole('button', { name: 'Heading arrows' });
+    const arrows = screen.getByRole('button', { name: 'Direction arrows' });
     // No visible text: the name is read out and shown on hover.
     expect(arrows.textContent).toBe('');
     expect(arrows.classList.contains('icon-only')).toBe(true);
     fireEvent.mouseEnter(arrows);
-    expect(screen.getByRole('tooltip').textContent).toBe('Heading arrowsArrows along the line show the direction of travel, from zoom 14.');
+    expect(screen.getByRole('tooltip').textContent).toBe('Direction arrowsArrows along the line show the direction of travel, from zoom 14.');
     fireEvent.mouseLeave(arrows);
     expect(screen.queryByRole('tooltip')).toBeNull();
     expect(screen.getByRole('button', { name: 'Gaps' }).getAttribute('aria-pressed')).toBe('true');

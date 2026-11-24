@@ -1,10 +1,11 @@
 import { Fragment } from 'preact';
+import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { MeasureKey } from '../model/types';
 import type { TrackItem } from '../state/logic';
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { tipXY } from '../map/bridge';
-import { fixAt } from '../state/inspect';
+import { fixAt, hasFixNear } from '../state/inspect';
 import { differentDays, fmtClock, fmtDateClock } from '../time/zones';
 import { fmtNum } from '../format';
 import { measureTitle, metresText, valueText, unitOf } from './labels';
@@ -42,11 +43,32 @@ function drawnAt(item: TrackItem, i: number) {
   return { color, halo, line, haloWidth, haloStyle: haloStyle(item.fam, dark, single), casing: dark ? CASING.dark : CASING.light };
 }
 
+/** Room left between the fix card and the timeline (or the window's bottom edge). */
+const CARD_GAP = 10;
+
+/**
+ * Where the fix card's top goes: a little above its fix, but no higher than
+ * the top of the window, and high enough that the card ends above `floor`.
+ */
+export function cardTop(y: number, height: number, floor: number): number {
+  return Math.max(12, Math.min(y - 40, floor - height));
+}
+
 /** The fix inspector: a card on the map at the selected track's cursor. */
 export function Tooltip() {
   const medianHint = useHintId();
   const peakHint = useHintId();
+  const card = useRef<HTMLDivElement>(null);
   const xy = tipXY.value;
+  // Near the bottom of the map the card moves up, clear of the timeline: measured once it is drawn, before it shows.
+  useLayoutEffect(() => {
+    const el = card.current;
+    if (!el || !xy) return;
+    const tl = document.querySelector('.timeline')?.getBoundingClientRect();
+    const box = el.offsetParent?.getBoundingClientRect();
+    const floor = (tl ? tl.top : window.innerHeight) - (box?.top ?? 0) - CARD_GAP;
+    el.style.top = `${cardTop(xy.y, el.offsetHeight, floor)}px`;
+  });
   // The selected track, or inside its gap the shown track that has a fix there.
   const sel = S.cursorItem.value;
   const ct = S.cursorT.value;
@@ -69,19 +91,27 @@ export function Tooltip() {
   // Acceleration: a heading, then (below) every reading of the fix's second,
   // lowest first. Two are highlighted: the strongest, which the map and the
   // timeline color the second by, and the median (with an even count, the
-  // upper of the two middle readings).
-  const rd = f.readings, mid = rd.length >> 1, even = rd.length % 2 === 0, peak = rd.length - 1;
+  // upper of the two middle readings). A second with very many readings lists
+  // only some, spread from the lowest to the strongest, with the median of
+  // them all in the middle and a count of the rest.
+  const rd = f.readings, more = f.moreReadings, total = rd.length + more;
+  const mid = rd.length >> 1, even = total % 2 === 0, peak = rd.length - 1;
   if (rd.length) rows.push({ label: measureTitle('accel'), value: '', hint: explain.accel(), measure: 'accel' });
   else if (Number.isFinite(f.accel)) rows.push({ label: t('measure.accel'), value: valueText('accel', f.accel), hint: explain.accel(), measure: 'accel' });
   // The measures on the color and the halo are highlighted, each marked with
   // how it looks on the map at this fix.
   const look = drawnAt(sel, f.i);
-  const medianText = even ? t('inspect.medianHintEven', { n: rd.length, v: valueText('accel', rd[mid]) }) : t('inspect.medianHint', { n: rd.length, v: valueText('accel', rd[mid]) });
+  const medianText = even ? t('inspect.medianHintEven', { n: total, v: valueText('accel', rd[mid]) }) : t('inspect.medianHint', { n: total, v: valueText('accel', rd[mid]) });
   const medianTip = hintHandlers(medianHint, medianText, t('inspect.medianTitle'));
-  const peakTip = hintHandlers(peakHint, t('inspect.peakHint', { n: rd.length, v: valueText('accel', rd[peak]) }), t('inspect.peakTitle'));
+  const peakTip = hintHandlers(peakHint, t('inspect.peakHint', { n: total, v: valueText('accel', rd[peak]) }), t('inspect.peakTitle'));
+  // All of the second's readings, or (very many of them) the ones listed out of how many.
+  const readingsText = more > 0 ? t('inspect.readingsSome', { shown: rd.length, n: fmtNum(total, loc, 0, 0) }) : t('inspect.readings', { n: total });
 
   const others = S.visible.value.filter((x) => x.id !== sel.id).flatMap((x) => {
-    const g = fixAt(x.track, S.trackTime(x.id, ct));
+    // A track with no fix near this moment (in a gap, or before or after it) says so, rather than showing a fix far away.
+    const at = S.trackTime(x.id, ct);
+    if (!hasFixNear(x.track, at)) return [{ id: x.id, item: x, text: t('inspect.noFix') }];
+    const g = fixAt(x.track, at);
     return g ? [{ id: x.id, item: x, text: [valueText('speed', g.kmh), Number.isFinite(g.hdop) ? `HDOP ${valueText('hdop', g.hdop)}` : null].filter(Boolean).join(' · ') }] : [];
   });
 
@@ -93,7 +123,7 @@ export function Tooltip() {
     : t('inspect.point', { a: f.i + 1, line: f.line });
 
   return (
-    <div class="tooltip" data-x={Math.round(xy.x)} data-y={Math.round(xy.y)} style={{ left: `${left}px`, top: `${Math.max(12, xy.y - 40)}px`, width: `${W}px` }} role="status" aria-live="off">
+    <div class="tooltip" ref={card} data-x={Math.round(xy.x)} data-y={Math.round(xy.y)} style={{ left: `${left}px`, top: `${Math.max(12, xy.y - 40)}px`, width: `${W}px` }} role="status" aria-live="off">
       <div class="tip-head">
         <Badge item={sel} size="small" />
         <span class="mono tip-time">{(differentDays(sel.track.derived.stats.start, sel.track.derived.stats.end, S.zone.value) ? fmtDateClock : fmtClock)(f.t, S.zone.value, loc)}</span>
@@ -125,13 +155,14 @@ export function Tooltip() {
             </div>
             {k === measureTitle('accel') && rd.length > 0 && (
               <div>
-                <dt class="sr-only">{t('inspect.readings', { n: rd.length })}</dt>
-                <dd class="tip-readings" title={t('inspect.readings', { n: rd.length })}>
+                <dt class="sr-only">{readingsText}</dt>
+                <dd class="tip-readings" title={readingsText}>
                   {rd.map((g, j) => (j === peak
                     ? <span key={j} class="is-peak" {...peakTip}>{fmtNum(g, loc, 2, 2)}</span>
                     : j === mid
                       ? <span key={j} class="is-median" {...medianTip}>{fmtNum(g, loc, 2, 2)}</span>
                       : <span key={j}>{fmtNum(g, loc, 2, 2)}</span>))}
+                  {more > 0 && <span class="tip-more">{t('inspect.moreReadings', { n: fmtNum(more, loc, 0, 0) })}</span>}
                 </dd>
               </div>
             )}
@@ -173,7 +204,7 @@ function LogRows({ track, names, i }: { track: ComboTrack; names: readonly strin
           : u === Use.Idle ? t('inspect.logIdle')
           : la !== la ? t('inspect.logNone')
           : t('inspect.logAway', { d });
-        return <li key={k} class={u === Use.LeftOut ? 'is-out' : undefined} data-log={names[k]}><SourceBadge track={track} k={k} name={names[k]} size="tiny" /><span><span class="sr-only">{t('combine.logLabel', { k: names[k] })}: </span>{text}</span></li>;
+        return <li key={k} class={u === Use.LeftOut ? 'is-out' : undefined} data-log={names[k]}><SourceBadge track={track} k={k} name={names[k]} size="tiny" /><span><span class="sr-only">{t('combine.logLabel', { k: names[k] })}{t('label.sep')}</span>{text}</span></li>;
       })}
     </ul>
   );

@@ -1,10 +1,10 @@
-import type { FieldKey } from '../model/types';
+import type { FieldKey, SpeedUnit } from '../model/types';
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { fmtDistance, fmtDuration, fmtEle, fmtNum, fmtPercent, fmtSpeed } from '../format';
 import { differentDays, fmtClock, fmtDate, fmtDateClock, localZoneId, offsetLabel, zoneCity } from '../time/zones';
 import { trackName, type TrackItem } from '../state/logic';
-import { useEffect } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { formatName, noteText, originalName, problemBody, problemTitle, trackTagline, unitOf } from './labels';
 import { Badge } from './Badge';
 import { IconBack, IconChevronRight, IconFlag, IconWarn } from './icons';
@@ -12,6 +12,8 @@ import { Computed } from './Computed';
 import { explain } from './computedText';
 import { isCombined, type ComboTrack } from '../combine/combine';
 import { SourceBadge, sourceNames, sourceTitles } from './Combined';
+import { focusAfterRender, rowButton } from './hooks';
+import { SPEED_UNITS } from '../parse/units';
 
 /**
  * For files whose times have no time zone: which zone they're read in. The
@@ -40,14 +42,56 @@ function ClockZone({ item }: { item: TrackItem }) {
   );
 }
 
+/**
+ * For files whose speeds don't say their unit: which unit they're read in
+ * (the one the positions point to, else m/s). Picking another reads every
+ * speed again in it.
+ */
+function SpeedUnitPick({ id, unit }: { id: string; unit: SpeedUnit }) {
+  return (
+    <section class="details-sec" aria-labelledby="d-speed-unit">
+      <h3 id="d-speed-unit">{t('details.speedUnit')}</h3>
+      <p class="muted small clock-note">{t('details.speedUnitNote')}</p>
+      {/* As wide as its buttons: the section would stretch it across. */}
+      <div class="seg" role="group" aria-labelledby="d-speed-unit">
+        {SPEED_UNITS.map((u) => (
+          <button key={u} type="button" aria-pressed={u === unit ? 'true' : 'false'} onClick={() => S.setSpeedUnit(id, u)}>{t(`unit.${u}`)}</button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 const FIELDS: FieldKey[] = ['time', 'position', 'ele', 'speed', 'course', 'hdop', 'vdop', 'pdop', 'sats', 'fix', 'geoid', 'accel', 'flags'];
+
+/**
+ * The page's top line: Back, which returns the keyboard to the Properties
+ * button of the track's card (or, with the card closed, to its row).
+ */
+function DetailsTop({ id }: { id: string }) {
+  const back = useRef<HTMLButtonElement>(null);
+  // Opening the page takes the keyboard along to it: the button that opened it is gone.
+  useLayoutEffect(() => { back.current?.focus(); }, [id]);
+  const goBack = () => {
+    focusAfterRender(() => document.getElementById(`tlp-props-${id}`) ?? rowButton(id));
+    S.page.value = { kind: 'tracks' };
+  };
+  return (
+    <div class="details-top">
+      <button ref={back} type="button" class="btn-outline small" onClick={goBack}><IconBack />{t('common.back')}</button>
+      <span class="eyebrow">{t('track.details')}</span>
+    </div>
+  );
+}
 
 /** The track's properties page, inside the side panel. */
 export function Details({ id }: { id: string }) {
   const item = S.items.value.find((x) => x.id === id);
-  if (!item) return null;
+  // A track that is gone has no properties to show, but the page still has its way back.
+  if (!item) return <div class="details"><DetailsTop id={id} /></div>;
   const tr = item.track;
   const st = tr.derived.stats;
+  const speedUnit = S.inferredUnit(tr)?.unit;
   const loc = S.locale.value;
   const u = S.units.value;
   const z = S.zone.value;
@@ -75,10 +119,7 @@ export function Details({ id }: { id: string }) {
 
   return (
     <div class="details">
-      <div class="details-top">
-        <button type="button" class="btn-outline small" onClick={() => { S.page.value = { kind: 'tracks' }; }}><IconBack />{t('common.back')}</button>
-        <span class="eyebrow">{t('track.details')}</span>
-      </div>
+      <DetailsTop id={id} />
       <div class="details-title">
         <Badge item={item} size="big" />
         <span class="details-name">
@@ -102,6 +143,7 @@ export function Details({ id }: { id: string }) {
       )}
 
       {tr.clock && <ClockZone item={item} />}
+      {speedUnit && <SpeedUnitPick id={item.id} unit={speedUnit} />}
 
       <section class="details-sec" aria-labelledby="d-summary">
         <h3 id="d-summary">{t('details.summary')}</h3>

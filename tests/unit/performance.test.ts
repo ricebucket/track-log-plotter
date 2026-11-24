@@ -1,7 +1,10 @@
 // Performance: long logs stay quick to read, combine and draw. Each time
 // limit is several times what this work takes on a laptop, so a slow CI
 // machine still passes, while a change that makes the work grow out of hand
-// (say, from linear to quadratic in the number of readings) fails.
+// (say, from linear to quadratic in the number of readings) fails. The limits
+// are for plain runs: counting coverage makes this work about 5x slower, so
+// `npm run test:coverage` leaves this file out and CI runs it on its own
+// (`npm run test:perf`).
 import { describe, expect, it } from 'vitest';
 import { parseText, transferables } from '../../src/parse/index';
 import { parseNmea } from '../../src/parse/nmea';
@@ -9,6 +12,15 @@ import { columns } from '../../src/ui/timelineMath';
 import { buildScale } from '../../src/color/scale';
 import { fixAt } from '../../src/state/inspect';
 import { combineTracks } from '../../src/combine/combine';
+import { nearestFix } from '../../src/map/geojson';
+import { quantilesIn, spread } from '../../src/derive/geo';
+import { derive } from '../../src/derive/derive';
+import { ColumnBuilder } from '../../src/parse/columns';
+import { scanXml } from '../../src/parse/xml';
+import { parseGpx } from '../../src/parse/gpx';
+import { adversary, crowded } from '../helpers/selection-orders';
+import { loop, walk } from '../helpers/walks';
+import { haversine } from '../../src/derive/geo';
 import type { LoadedTrack } from '../../src/model/types';
 import { bigFusionLog, bigGpxLog, bigNmeaLog, nmeaSentence } from '../helpers/big-logs';
 
@@ -111,4 +123,78 @@ describe('a 10-hour log with motion data (36,000 fixes, 360,000 readings)', () =
     console.log(`fix card: ${(per * 1000).toFixed(0)} µs a lookup`);
     expect(per).toBeLessThan(0.5);
   });
+});
+
+describe('the map', () => {
+  it('scans a 100,000-fix track several times faster than with great circles', () => {
+    const n = 100_000;
+    const lat = Float64Array.from({ length: n }, (_, i) => 40.7812 + 0.01 * Math.sin(i / 600));
+    const lon = Float64Array.from({ length: n }, (_, i) => -73.9665 + 0.008 * Math.cos(i / 600));
+    const cols = { n, lat, lon };
+    const warmTime = (fn: () => void) => { fn(); fn(); const t0 = performance.now(); for (let r = 0; r < 20; r++) fn(); return (performance.now() - t0) / 20; };
+    const fast = warmTime(() => nearestFix(cols, 40.781, -73.961));
+    const slow = warmTime(() => { let bd = Infinity; for (let i = 0; i < n; i++) bd = Math.min(bd, haversine(40.781, -73.961, lat[i], lon[i])); });
+    console.log(`nearest fix of 100,000: ${fast.toFixed(2)} ms; with haversine ${slow.toFixed(2)} ms`);
+    expect(fast).toBeLessThan(slow / 2);
+  });
+});
+
+// Input made to be slow, or simply extreme: a file can bring any of it. Each check says what it cost before
+// it was made linear; the results themselves are tested beside the code (selection, parse-hardening, gpx,
+// scan and combine tests).
+describe('input made to be slow stays near linear', () => {
+  it('finds the median of 100,000 values in an order made to defeat selection in milliseconds (it took about 2 s)', () => {
+    const m = 100_000, v = adversary(m, m >> 1);
+    expect(time(() => quantilesIn(v, m, [0.5]))).toBeLessThan(250);
+  });
+
+  it('spreads 65,536 values that share their top 16 bits in such an order in milliseconds (about 1 s)', () => {
+    const m = 65_536, size = 512, v = crowded(adversary(m, Math.round(((size >> 1) * (m - 1)) / (size - 1))));
+    expect(time(() => spread(v, m, size))).toBeLessThan(250);
+  });
+
+  it('works out a 100,000-fix log whose HDOPs come in such an order as quickly as any other (about 2 s)', () => {
+    const n = 100_000, rank = adversary(n, 49_999), b = new ColumnBuilder();
+    for (let i = 0; i < n; i++) b.push({ t: Date.UTC(2026, 5, 14, 8, 0, i), lat: 40.78 + (i % 1000) * 1e-5, lon: -73.965 + Math.floor(i / 1000) * 1e-5, hdop: (rank[i] + 1) / 100, line: i + 1 });
+    const parsed = { format: 'gpx' as const, creator: null, name: null, cols: b.build(), flags: [], problems: [], notes: [], fields: ['time' as const, 'position' as const, 'hdop' as const], lines: n };
+    expect(time(() => derive(parsed))).toBeLessThan(1000);
+  });
+
+  it('spreads a long run of equal values and zeros quickly', () => {
+    const zeros = new Float32Array(400_000);
+    for (let i = 0; i < zeros.length; i += 7) zeros[i] = -0;
+    const threes = new Float64Array(400_000).fill(3);
+    expect(time(() => { spread(zeros, zeros.length, 512); quantilesIn(threes, threes.length, [0.1, 0.25, 0.5, 0.75]); })).toBeLessThan(500);
+  });
+
+  it('reads a tag whose 200,000-character name has no value in one pass (about 20 s)', () => {
+    const text = `<gpx><trkpt ${'a'.repeat(200_000)}=x b="1"></trkpt></gpx>`;
+    expect(time(() => scanXml(text, { open() {}, text() {}, close() {} }))).toBeLessThan(1000);
+  });
+
+  it('reads 50,000 stray or unclosed GPX tags in one pass', () => {
+    const n = 50_000;
+    for (const body of ['<a>'.repeat(n) + '</b>'.repeat(n), '<trk>' + '<a>'.repeat(n) + '</trk>'.repeat(n)]) {
+      expect(time(() => parseGpx(`<gpx version="1.1">${body}</gpx>`))).toBeLessThan(1000);
+    }
+  });
+
+  it('looks for the line breaks of 200,000 blank NMEA lines once each, whatever they are (seconds otherwise)', () => {
+    const rmc = (i: number) => nmeaSentence(`GNRMC,1305${String(i).padStart(2, '0')}.00,A,4046.${String(8572 + i * 30).padStart(5, '0')},N,07358.87242,W,1.0,45.0,140626,,,A,V`);
+    const blank = (br: string) => `${' '.repeat(40)}${br}`.repeat(200_000);
+    for (const text of [rmc(0) + '\n' + blank('\n') + rmc(1) + '\n', rmc(0) + '\n' + blank('\n') + rmc(1) + '\n\r', rmc(0) + '\r' + blank('\r') + rmc(1) + '\r']) {
+      expect(time(() => parseNmea(text))).toBeLessThan(1500);
+    }
+  });
+
+  it('combines logs with a stray fix 60 days away in milliseconds (about 400 ms and 700 MB)', () => {
+    const a = walk({ seed: 41 }), stray = walk({ seed: 42, offsetM: 3, stray: 60 * 86_400 });
+    combineTracks([a, stray]);
+    expect(time(() => combineTracks([a, stray]), 3)).toBeLessThan(100);
+  }, 30_000);
+
+  it("fills in 40,000 left-out speeds in a row in one pass (about 2.5 s)", () => {
+    const a = loop(40_000), zero = loop(40_000, { northM: 3, seed: 2, speed: 0 });
+    expect(time(() => combineTracks([a, zero]))).toBeLessThan(1000);
+  }, 30_000);
 });

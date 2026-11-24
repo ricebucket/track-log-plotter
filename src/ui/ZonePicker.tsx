@@ -24,7 +24,16 @@ export function ZonePicker({ at, value, onPick, onClose, trigger, title, quick =
   const input = useRef<HTMLInputElement>(null);
   const [q, setQ] = useState('');
   useDismiss(ref, onClose, trigger);
-  useEffect(() => { input.current?.focus(); }, []);
+  // The focus moves into the search box as the list opens. When the list closes with the focus inside it
+  // (Escape, its Close button, a zone picked), the focus goes back to the button that opened it.
+  useEffect(() => {
+    const box = ref.current;
+    input.current?.focus();
+    return () => {
+      const focused = document.activeElement;
+      if (!focused || focused === document.body || box?.contains(focused)) document.querySelector<HTMLElement>(trigger)?.focus();
+    };
+  }, []);
   const list = useMemo(() => searchZones(q, at), [q, at]);
   const pick = (z: ZoneSel) => { onPick(z); onClose(); };
   const option = (id: ZoneSel, name: string, sub: string, offset: string) => (

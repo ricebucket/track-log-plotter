@@ -6,6 +6,8 @@ Plot GPS track logs on a map, in your browser. Open GPX, NMEA and Columbus Fusio
 
 **Use it:** https://ricebucket.github.io/track-log-plotter/
 
+**Demo video:** [watch it](docs/video/demo-en.mp4)
+
 ![Track Log Plotter: a ride around Central Park and a run around Roosevelt Island on a light basemap, the track list with a speed legend and an HDOP halo key, a fix card on the map, and the timeline with one lane per track](docs/screenshots/desktop-en.png)
 
 ## What it does
@@ -21,7 +23,7 @@ Plot GPS track logs on a map, in your browser. Open GPX, NMEA and Columbus Fusio
 - **Time zones.** Local time, UTC or any zone. A file whose times have no zone, such as a Columbus Fusion log, is read as UTC until you set the zone it was recorded in, on its properties page.
 - **English and 简体中文**, switched in the Options menu (top right), on desktops and phones. English shows 12-hour times, Chinese 24-hour.
 
-Supports GPX (tracks, and routes that have times), NMEA and Columbus Fusion (CSV).
+Supports GPX (tracks, and routes that have times), NMEA and Columbus Fusion (CSV). Tracks that cross 180° longitude (the antimeridian) aren't supported yet.
 
 ## Privacy
 
@@ -37,7 +39,7 @@ Your settings (language, basemap, units, time zone) are saved in your browser. T
 | Basemap | Provider |
 | --- | --- |
 | OpenStreetMap | © OpenStreetMap contributors |
-| Light, Dark | OpenFreeMap, © OpenStreetMap contributors |
+| Light, Dark | OpenFreeMap, © OpenMapTiles, © OpenStreetMap contributors |
 | Topographic | © OpenTopoMap (CC-BY-SA), © OpenStreetMap contributors, SRTM |
 | Satellite, Hybrid | Esri World Imagery: Esri, Maxar, Earthstar Geographics and the GIS User Community |
 
@@ -45,7 +47,7 @@ The app shows each provider's attribution on the map.
 
 ## Development
 
-To run it on your computer, with Node.js 20 or newer:
+To run it on your computer, with a current Node.js (the minimum is `engines` in package.json):
 
 ```sh
 npm install

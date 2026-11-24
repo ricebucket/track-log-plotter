@@ -18,6 +18,13 @@ export const tip = signal<Tip | null>(null);
 const TIPPED = '[title], [data-tip]';
 
 /**
+ * The label or description takeTitle gave each element for assistive tech, so
+ * a new title replaces it, and an empty one removes it, instead of the old
+ * text staying on ("Click again to remove" after the button stopped asking).
+ */
+const given = new WeakMap<Element, { label?: string; description?: string }>();
+
+/**
  * Moves an element's title into data-tip, keeping it for assistive tech: as its
  * label when it has no other, else as its description.
  */
@@ -26,10 +33,16 @@ export function takeTitle(el: Element) {
   if (title === null) return;
   el.removeAttribute('title');
   el.setAttribute('data-tip', title);
+  // What an earlier title left goes first (unless something else has changed it since).
+  const was = given.get(el);
+  if (was?.label !== undefined && el.getAttribute('aria-label') === was.label) el.removeAttribute('aria-label');
+  if (was?.description !== undefined && el.getAttribute('aria-description') === was.description) el.removeAttribute('aria-description');
+  const now: { label?: string; description?: string } = {};
+  given.set(el, now);
   if (!title) return;
   const named = el.hasAttribute('aria-label') || el.hasAttribute('aria-labelledby') || (el.textContent ?? '').trim() !== '';
-  if (!named) el.setAttribute('aria-label', title);
-  else if (!el.hasAttribute('aria-describedby') && el.getAttribute('aria-label') !== title) el.setAttribute('aria-description', title);
+  if (!named) el.setAttribute('aria-label', now.label = title);
+  else if (!el.hasAttribute('aria-describedby') && el.getAttribute('aria-label') !== title) el.setAttribute('aria-description', now.description = title);
 }
 
 export function TipLayer() {
@@ -75,8 +88,15 @@ export function TipLayer() {
     document.addEventListener('keydown', away, true);
     document.addEventListener('wheel', away, { capture: true, passive: true });
     window.addEventListener('blur', away);
+    // An element whose title was taken gets a new one (or an empty one) when the app changes it: take
+    // that at once, so what assistive tech hears follows it without waiting for the next hover.
+    const retitled = typeof MutationObserver === 'function' ? new MutationObserver((changes) => {
+      for (const c of changes) if (given.has(c.target as Element)) takeTitle(c.target as Element);
+    }) : null;
+    retitled?.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['title'] });
     return () => {
       clearTimeout(timer);
+      retitled?.disconnect();
       document.removeEventListener('pointerover', over, true);
       document.removeEventListener('pointerout', out, true);
       document.removeEventListener('pointerdown', away, true);

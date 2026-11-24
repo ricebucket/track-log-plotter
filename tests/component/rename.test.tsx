@@ -98,6 +98,31 @@ describe('renaming a track in the list', () => {
     expect(nameOf('A').textContent).toBe('水库');
   });
 
+  it("doesn't take the Enter that Safari sends to confirm an input method's word, which says it isn't composing", () => {
+    setup();
+    fireEvent.click(nameOf('A'));
+    type('水库');
+    // Safari: isComposing false, but the input method's key code.
+    fireEvent.keyDown(box()!, { key: 'Enter', keyCode: 229 });
+    expect(box()).not.toBeNull();
+    fireEvent.keyDown(box()!, { key: 'Escape', keyCode: 229 });
+    expect(box()).not.toBeNull();
+    fireEvent.keyDown(box()!, { key: 'Enter', keyCode: 13 });
+    expect(box()).toBeNull();
+    expect(nameOf('A').textContent).toBe('水库');
+  });
+
+  it("selects a track whose name is double-clicked while it isn't selected, without opening the text box", () => {
+    setup();
+    fireEvent.click(nameOf('B'), { detail: 1 });
+    expect(row('B').classList.contains('is-selected')).toBe(true);
+    fireEvent.click(nameOf('B'), { detail: 2 });
+    expect(box()).toBeNull();
+    // A single click on the selected track's name still renames it.
+    fireEvent.click(nameOf('B'), { detail: 1 });
+    expect(box()).not.toBeNull();
+  });
+
   it("takes a blank name as the file's name again", () => {
     setup();
     S.renameTrack('A', 'Reservoir loop');

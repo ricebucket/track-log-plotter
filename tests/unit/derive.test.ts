@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { haversine, bearing, median, quantile } from '../../src/derive/geo';
-import { ACCURACY_SMOOTH_S, derive, gapThreshold, medianInterval, MOVING_KMH, SPREAD_SIZE } from '../../src/derive/derive';
+import { ACCURACY_SMOOTH_S, derive, gapSummary, gapThreshold, MAX_ACCURACY, medianInterval, MOVING_KMH, smoothEle, SPREAD_SIZE } from '../../src/derive/derive';
 import { buildScale, evenEdges, logEdges, niceEdges, RUNNING_KMH, STEPS } from '../../src/color/scale';
 import { hdopIsRelative } from '../../src/derive/hdop';
 import { inferSpeedUnit, UNIT_FACTOR } from '../../src/parse/units';
@@ -183,4 +183,73 @@ describe('what derive works out once, when a track loads', () => {
     expect(s.accuracy[50]).toBeCloseTo(2, 9);
   });
 
+  it('measures accuracy against the middle of the positive HDOPs or satellite counts only', () => {
+    // Ten fixes say HDOP 0 (or 0 satellites): the middle is taken from the other 30, 1.0 to 3.9.
+    const h = derive(fixes(40, (i) => ({ hdop: i < 10 ? 0 : 1 + (i - 10) / 10 }), ['time', 'position', 'hdop']));
+    expect(h.hdopBase).toBeCloseTo(2.5, 9);
+    expect(h.accuracy[39]).toBeCloseTo((3.4 + 3.5 + 3.6 + 3.7 + 3.8 + 3.9) / 6 / 2.5, 5); // the window's last 6 fixes
+    const s = derive(fixes(40, (i) => ({ sats: i < 10 ? 0 : 4 + (i % 7) }), ['time', 'position', 'sats']));
+    expect(s.accuracy[0]).toBe(1); // a fix with 0 satellites counts as usual; the others against the middle count, 7
+    expect(s.accuracy[30]).toBeCloseTo([25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35].reduce((a, i) => a + 7 / (4 + (i % 7)), 0) / 11, 9);
+  });
+
+  it('recovers from one absurd HDOP within the 10 s window, instead of losing every later fix to it', () => {
+    // An HDOP of 3e38 (a broken file) swamped the running sum: once it left the window, the sum was 0.
+    const d = derive(fixes(200, (i) => ({ hdop: i === 50 ? 3e38 : 1 }), ['time', 'position', 'hdop']));
+    expect(d.hdopBase).toBe(1);
+    expect(d.accuracy[50]).toBeCloseTo((10 + MAX_ACCURACY) / 11, 9); // counted, but as MAX_ACCURACY at most
+    for (const i of [20, 40, 60, 100, 199]) expect(d.accuracy[i]).toBe(1);
+  });
+
+  it('keeps large HDOPs as they are: some loggers write ones near 50 for good fixes', () => {
+    const d = derive(fixes(60, (i) => ({ hdop: i < 30 ? 47 : 94 }), ['time', 'position', 'hdop']));
+    expect(d.hdopBase).toBe(94);
+    expect(d.accuracy[10]).toBeCloseTo(0.5, 9);
+    expect(d.accuracy[50]).toBeCloseTo(1, 9);
+  });
+
+  it('smooths heights past one absurd height as if it weren\'t there, once it is out of the window', () => {
+    const p = fixes(120, (i) => ({ ele: i === 40 ? 3e38 : 12 }));
+    const s = smoothEle(p.cols, new Uint8Array(120));
+    for (const i of [0, 20, 60, 80, 119]) expect(s[i]).toBe(12);
+  });
+});
+
+describe('climb', () => {
+  /** The climb of a fix every 30 s heading north, so the ±15 s smoothing leaves each height as it is. */
+  function climb(eles: number[]): number | null {
+    const b = new ColumnBuilder();
+    eles.forEach((ele, i) => b.push({ t: Date.UTC(2026, 5, 14, 13, 0, 30 * i), lat: 40.78 + (i * 60) / 111_195, lon: -73.965, ele, line: i + 1 }));
+    return derive({ format: 'gpx', creator: null, name: null, cols: b.build(), flags: [], problems: [], notes: [], fields: ['time', 'position', 'ele'], lines: eles.length }).stats.climbM;
+  }
+
+  it('counts a rise once the height has fallen 5 m from its top, even where it falls below where the rise began', () => {
+    expect(climb([100, 106, 98])).toBe(6);
+    expect(climb([100, 106, 101, 101])).toBe(6);
+    expect(climb([100, 110, 95, 110, 95, 110, 95])).toBe(40);
+  });
+
+  it('leaves out rises and falls under 5 m', () => {
+    expect(climb([100, 104, 99, 103, 100])).toBe(0);
+    expect(climb([100, 104, 99, 106])).toBe(7);
+  });
+});
+
+describe('the gaps note', () => {
+  it('counts a new segment as a gap only where time is missing too', () => {
+    // The Garmin log starts a new segment one second after the last fix of the first, and has one 46 s gap.
+    const g = load('central-park-loop-garmin.gpx');
+    expect(g.derived.gap.reduce((a, b) => a + b, 0)).toBe(2); // both still break the line
+    expect(gapSummary(g.cols, g.derived.gap)).toEqual({ count: 1, longestS: 46 });
+    expect(g.notes).toContainEqual({ kind: 'gaps', count: 1, longestS: 46 });
+    // Segments back to back, then one a minute later.
+    const b = new ColumnBuilder();
+    for (let i = 0; i < 400; i++) {
+      if (i === 100 || i === 200 || i === 300) b.breakSegment();
+      b.push({ t: Date.UTC(2026, 5, 14, 13, 0, i < 300 ? i : i + 60), lat: 40.78 + i / 111_195, lon: -73.965, line: i + 1 });
+    }
+    const c = b.build();
+    const d = derive({ format: 'gpx', creator: null, name: null, cols: c, flags: [], problems: [], notes: [], fields: ['time', 'position'], lines: 400 });
+    expect(gapSummary(c, d.gap)).toEqual({ count: 1, longestS: 61 });
+  });
 });

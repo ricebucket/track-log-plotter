@@ -49,7 +49,7 @@ test('loads the sample ride and draws the tracks', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|pbf|glyph/i.test(m.text())) errors.push(m.text()); });
-  await page.getByRole('button', { name: 'Try the sample ride' }).click();
+  await page.getByRole('button', { name: 'Try the samples' }).click();
   await expect(page.getByText('2 of 3 shown · 2 loaded')).toBeVisible();
   await expect(page.locator('.maplibregl-canvas')).toBeVisible();
   // The map fills the window (MapLibre's own stylesheet must not shrink it).
@@ -382,6 +382,26 @@ test('closes the fix card with its button and with a click on an empty spot', as
   await expect(card).toHaveCount(0);
 });
 
+test('opens the Options menu above the fix card', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  await mapSettled(page);
+  const lanes = (await page.locator('.tl-lanes').boundingBox())!;
+  await page.mouse.move(lanes.x + 150 + (lanes.width - 150) * 0.5, lanes.y + 20);
+  const card = page.locator('.tooltip');
+  await expect(card).toBeVisible();
+  await page.locator('.bm-button').click();
+  await expect(page.locator('.options-menu')).toBeVisible();
+  await expect(card).toBeVisible();
+  // Wherever the cursor puts the card, the menu covers it. Here the card is moved over the menu by hand, and made
+  // to take the pointer (it lets it through), so a point inside both answers with whichever of them is on top.
+  const onTop = await page.evaluate(() => {
+    const c = document.querySelector<HTMLElement>('.tooltip')!, m = document.querySelector('.options-menu')!.getBoundingClientRect();
+    Object.assign(c.style, { left: `${m.left + 20}px`, top: `${m.top + 20}px`, pointerEvents: 'auto' });
+    return document.elementFromPoint(m.left + 60, m.top + 60)?.closest('.options-menu, .tooltip')?.classList.contains('options-menu') ?? false;
+  });
+  expect(onTop).toBe(true);
+});
+
 test('shows the compass only while the map is turned', async ({ page }) => {
   await open(page, 'central-park-loop.nmea');
   await mapSettled(page);
@@ -634,4 +654,25 @@ test('has no serious accessibility problems in select mode, or on a combined tra
   await page.locator('.track-row[data-track="D"]').getByRole('button', { name: 'Adjust' }).click();
   await expect(page.getByRole('slider', { name: 'Trust in each source' })).toBeVisible();
   expect(await serious()).toEqual([]);
+});
+
+test("draws the tracks on a plain background, with a notice, when the basemap can't load", async ({ page }) => {
+  // The basemap's style can't be fetched (its server is down or blocked).
+  await page.route('**/styles/**', (route) => route.abort());
+  await page.reload();
+  // A damaged file: its own notice goes below the map's.
+  await open(page, 'central-park-loop-truncated.nmea');
+  const notice = page.getByRole('status').filter({ hasText: "The basemap couldn't load" });
+  await expect(notice).toBeVisible();
+  await mapSettled(page);
+  const toast = page.getByRole('status').filter({ hasText: 'loaded with 1 problem' });
+  await expect(toast).toBeVisible();
+  const above = (await notice.boundingBox())!;
+  expect((await toast.boundingBox())!.y).toBeGreaterThanOrEqual(above.y + above.height);
+  // Another basemap: the notice goes, and the tracks stay on the map.
+  await page.getByRole('button', { name: /Options/ }).click();
+  await page.getByRole('button', { name: /^OpenStreetMap/ }).click();
+  await page.getByRole('dialog', { name: 'Options' }).getByRole('button', { name: 'Close' }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(page.locator('.map')).toHaveAttribute('data-lines', /^[1-9]\d*$/);
 });

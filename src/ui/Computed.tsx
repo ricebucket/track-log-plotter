@@ -4,6 +4,7 @@ import { useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { t } from '../state/store';
 import { IconCalc } from './icons';
+import { labeled } from './labels';
 
 export interface Hint { id: number; text: string; x: number; y: number; bottom: number; pinned: boolean; title?: string }
 export const hint = signal<Hint | null>(null);
@@ -39,7 +40,7 @@ export function Computed({ text }: { text: string }) {
   const hide = () => { if (hint.value?.id === id && !hint.value.pinned) hint.value = null; };
   return (
     <button
-      type="button" class="computed-btn" aria-label={`${t('computed.label')}: ${text}`}
+      type="button" class="computed-btn" aria-label={labeled(t('computed.label'), text)}
       onMouseEnter={(e) => show(e.currentTarget as HTMLElement, false)}
       onMouseLeave={hide}
       onPointerDown={(e) => e.stopPropagation()}

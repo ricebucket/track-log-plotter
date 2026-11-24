@@ -6,7 +6,7 @@ How to work on Track Log Plotter, and what to run before every push to GitHub.
 
 ## Setup
 
-You need Node.js 20 or newer.
+You need a current Node.js: the minimum is `engines` in package.json.
 
 - **Everything in this folder:** run `npm install`.
 - **Build, test and lint tools in a parent folder:** Node finds them there. Install only the app's own libraries here with `npm install --omit=dev`, and the tools in the parent folder:
@@ -33,6 +33,7 @@ You need Node.js 20 or newer.
 | `npm run check` | Lint, type check, tests, build and browser tests, in that order |
 | `npm run fixtures` | Regenerates the test fixtures and the sample ride |
 | `npm run screenshots` | Regenerates the README screenshots (see [Screenshots](#screenshots)) |
+| `npm run video` | Records the README demo videos (see [Demo videos](#demo-videos)) |
 
 ## Before every push
 
@@ -98,6 +99,19 @@ When the interface changes visibly:
 
 1. Run `npm run screenshots`. It builds the site and serves it on port 4175. Unlike the browser tests, it loads real basemap tiles and fonts, so it needs a network connection.
 2. Look at the two PNG files before committing them.
+
+## Demo videos
+
+Each README links a demo video from `docs/video/`, in its own language: 1120 × 1680 (upright). It shows only the synthetic fixtures: the Lower Manhattan walk and the Stanford drive.
+
+When what they show changes visibly:
+
+1. Run `npm run video`. It builds the site, serves it on port 4176, then plays the demo once per language and records it. Like the screenshots, it loads real basemap tiles and fonts, so it needs a network connection. Nothing needs installing: Chromium encodes the H.264 itself (WebCodecs), and `tests/video/mp4.ts` writes the MP4 file.
+2. Watch both videos before committing them.
+
+To check the steps without making the videos, run `DEMO_DRY_RUN=<folder> npm run video`. It saves the picture on screen every two seconds in that folder, and lists how long each caption stays up. A video over 60 seconds fails. `DEMO_BITRATE=<bits a second>` sets the encoder's bitrate; by default it's the highest the encoder takes, for the best picture.
+
+The recording draws the pointer, the rings where it clicks, the red boxes and the captions into the page; the app itself has none of them.
 
 ## Deployment
 

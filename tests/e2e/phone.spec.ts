@@ -14,7 +14,7 @@ test('centers the title in its pill on the start screen', async ({ page }) => {
 });
 
 test('points the panel arrows down to hide the bottom sheet and up to bring it back', async ({ page }) => {
-  await page.getByRole('button', { name: 'Try the sample ride' }).click();
+  await page.getByRole('button', { name: 'Try the samples' }).click();
   const hide = page.getByRole('button', { name: 'Minimize the panel' });
   // The bottom-sheet icon: a divider near the bottom and a downward arrow.
   await expect(hide.locator('path')).toHaveAttribute('d', 'M2.5 11h13M7.2 6.2L9 8l1.8-1.8');
@@ -34,7 +34,7 @@ test('opens the Options menu from the basemap button', async ({ page }) => {
 });
 
 test('docks the panel as a bottom sheet and the timeline above it', async ({ page }) => {
-  await page.getByRole('button', { name: 'Try the sample ride' }).click();
+  await page.getByRole('button', { name: 'Try the samples' }).click();
   await expect(page.getByText('2 of 3 shown · 2 loaded')).toBeVisible();
   const vp = page.viewportSize()!;
   const panel = (await page.locator('.panel').boundingBox())!;

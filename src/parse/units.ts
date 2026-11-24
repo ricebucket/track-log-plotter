@@ -4,6 +4,22 @@ import { haversine, quantilesIn } from '../derive/geo';
 /** Factor from m/s to each unit. */
 export const UNIT_FACTOR: Record<SpeedUnit, number> = { ms: 1, kmh: 3.6, knots: 3600 / 1852, mph: 3600 / 1609.344 };
 
+/** Every speed unit, in the order the properties page offers them. */
+export const SPEED_UNITS = Object.keys(UNIT_FACTOR) as SpeedUnit[];
+
+/**
+ * Speeds read from a file's numbers as one unit (stored in m/s, as the reader
+ * stores them), read again as another: the file's numbers back, each divided
+ * by the new unit's factor as the reader divides by the first one's. A new
+ * column; the old one is left as it was.
+ */
+export function rereadSpeeds(speed: Float32Array, from: SpeedUnit, to: SpeedUnit): Float32Array {
+  const a = UNIT_FACTOR[from], b = UNIT_FACTOR[to];
+  const out = new Float32Array(speed.length);
+  for (let i = 0; i < speed.length; i++) out[i] = (speed[i] * a) / b;
+  return out;
+}
+
 export interface UnitGuess {
   unit: SpeedUnit;
   /** Whether the numbers clearly matched one unit. */

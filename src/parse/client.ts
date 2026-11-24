@@ -5,11 +5,28 @@ import { MAX_BYTES, parseText } from './index';
 interface PoolWorker { w: Worker; busy: number }
 const pool: PoolWorker[] = [];
 let nextId = 1;
-const pending = new Map<number, { done: (r: ParseResult) => void; worker: PoolWorker }>();
+const pending = new Map<number, { done: (r: ParseResult) => void; worker: PoolWorker; file: string }>();
 
 function poolSize(): number {
   const cores = typeof navigator !== 'undefined' && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 2;
   return Math.max(1, Math.min(4, cores - 1));
+}
+
+/**
+ * A worker that failed (it crashed, or sent a message that couldn't be read):
+ * each file it was reading counts as unreadable, and it leaves the pool, so
+ * the next file gets a fresh worker.
+ */
+function retire(pw: PoolWorker) {
+  const at = pool.indexOf(pw);
+  if (at < 0) return;
+  pool.splice(at, 1);
+  pw.w.terminate();
+  for (const [id, job] of pending) {
+    if (job.worker !== pw) continue;
+    pending.delete(id);
+    job.done({ ok: false, file: job.file, error: 'unreadable' });
+  }
 }
 
 /** The least busy worker, adding one to the pool while it is below its size. */
@@ -26,6 +43,8 @@ function pickWorker(): PoolWorker | null {
         job.worker.busy--;
         job.done(e.data.res);
       });
+      pw.w.addEventListener('error', () => retire(pw));
+      pw.w.addEventListener('messageerror', () => retire(pw));
       pool.push(pw);
       best = pw;
     } catch {
@@ -45,7 +64,7 @@ export function parseFile(file: File): Promise<ParseResult> {
   const id = nextId++;
   pw.busy++;
   return new Promise((resolve) => {
-    pending.set(id, { done: resolve, worker: pw });
+    pending.set(id, { done: resolve, worker: pw, file: file.name });
     pw.w.postMessage({ id, file });
   });
 }

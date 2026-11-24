@@ -4,12 +4,17 @@ const KMH_TO_MPH = 1 / 1.609344;
 const M_TO_FT = 3.28084;
 
 const nf = new Map<string, Intl.NumberFormat>();
+/**
+ * A number with at most `digits` decimals. A value that rounds to zero is
+ * shown as 0, never "-0": anything closer to zero than half the last digit
+ * (Intl rounds halves away from zero, so -0.05 still shows as "-0.1").
+ */
 export function fmtNum(v: number, locale: string, digits = 1, minDigits = digits): string {
   if (!Number.isFinite(v)) return '–';
   const key = `${locale}|${digits}|${minDigits}`;
   let f = nf.get(key);
   if (!f) { f = new Intl.NumberFormat(locale, { maximumFractionDigits: digits, minimumFractionDigits: minDigits }); nf.set(key, f); }
-  return f.format(v);
+  return f.format(v <= 0 && -v < 0.5 / 10 ** digits ? 0 : v);
 }
 
 /** Multiply km/h by this to get the display unit. */

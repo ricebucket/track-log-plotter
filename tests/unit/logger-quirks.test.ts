@@ -63,6 +63,23 @@ describe('logger quirks', () => {
     expect(Number.isNaN(nm.cols.hdop[0])).toBe(true);
   });
 
+  it('merges NMEA sentences of one second whose times have different decimals', () => {
+    // RMC writes the time to the hundredth of a second; GGA and ZDA write it to the thousandth.
+    const nm = (body: string) => `$${body}*${nmeaChecksum(body)}`;
+    const second = (i: number) => [
+      nm(`GNRMC,13050${i}.00,A,4046.0857${i},N,07358.87242,W,1.0,45.0,140626,,,A,V`),
+      nm(`GNGGA,13050${i}.000,4046.0857${i},N,07358.87242,W,1,09,0.9,25.4,M,-32.6,M,,`),
+      nm(`GNZDA,13050${i}.000,14,06,2026,00,00`),
+    ];
+    const p = parseNmea([0, 1, 2].flatMap(second).join('\n') + '\n');
+    expect(p.cols.n).toBe(3);
+    expect(Array.from(p.cols.ele, (v) => v.toFixed(1))).toEqual(['25.4', '25.4', '25.4']);
+    expect(Array.from(p.cols.sats)).toEqual([9, 9, 9]);
+    expect(Array.from(p.cols.hdop, (v) => v.toFixed(1))).toEqual(['0.9', '0.9', '0.9']);
+    expect(Array.from(p.cols.lineEnd)).toEqual([3, 6, 9]);
+    expect(p.notes.filter((n) => n.kind === 'duplicates' || n.kind === 'void')).toEqual([]);
+  });
+
   it('notes fixes that report 0 satellites, and how many repeat the last position', () => {
     // Fixes 20–29 report no satellites and hold the previous position.
     const n = 60;

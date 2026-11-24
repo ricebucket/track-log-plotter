@@ -1,9 +1,9 @@
 // The timeline: one lane per shown track, a shared cursor, and the readout.
 // Lanes are drawn straight onto a canvas. A chart library such as uPlot isn't
 // used because nearly everything here is custom drawing (colored step bands,
-// gaps, button presses, lanes of different heights). If the timeline ever
-// needs zooming and panning, uPlot is the library worth adding back.
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+// gaps, button presses, lanes of different heights). Zooming (a drag across
+// the lanes, the scroll wheel) and panning are worked out in timelineMath.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Fragment } from 'preact';
 import type { MeasureKey } from '../model/types';
 import type { TrackItem } from '../state/logic';
@@ -11,13 +11,13 @@ import type { FixInfo } from '../state/inspect';
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { axisRange } from '../state/logic';
-import { fixAt } from '../state/inspect';
+import { fixAt, hasFixNear } from '../state/inspect';
 import { LEFT_OUT, LOG_COLORS, palette, UNKNOWN } from '../color/palettes';
-import { isCombined, Use } from '../combine/combine';
+import { isCombined } from '../combine/combine';
 import { SourceBadge, sourceNames } from './Combined';
 import { differentDays, fmtClock, fmtDateClock, fmtShortDate, isMidnight, offsetLabel, offsetMinutes, zoneCity } from '../time/zones';
-import { centerView, columns, graphRange, MIN_ZOOM_MS, panView, playStep, skipGap, snapTime, tickStep, ticks, wheelZoom } from './timelineMath';
-import { measureName, valueText } from './labels';
+import { centerView, columns, graphRange, logColumns, MIN_ZOOM_MS, panView, playStep, skipGap, snapInto, snapTime, stepFix, tickStep, ticks, wheelZoom } from './timelineMath';
+import { labeled, measureName, valueText } from './labels';
 import { Badge } from './Badge';
 import { IconChevronDown, IconClock, IconFit, IconPause, IconPlay, IconTarget, IconTimeline, IconZoomOut, IconZoomReset } from './icons';
 import { mapApi } from '../map/bridge';
@@ -35,17 +35,52 @@ const HALO_GRAPH = 'rgba(16, 24, 32, 0.22)';
 const LABEL_W = { wide: 150, narrow: 100 };
 
 /**
- * One track's lane. `fromStart` is set when the lane is lined up at its start
- * rather than by clock: tracks from different days all start at the same point,
- * the selected one included.
+ * The header's room (px, inside the pane's padding) that its full form needs,
+ * with a little to spare for a wider font: Play, the time and its zone offset,
+ * Fit, the Local, UTC and Other buttons and the minimize button, plus each
+ * button that comes and goes. With less room the header turns compact, as on
+ * a phone: icon buttons, one zone button, no readout (the fix card on the map
+ * has the values). In a window a little wider than a phone's, the panel
+ * leaves the timeline about as narrow as on a phone.
  */
+const HEAD_ROOM = { full: 560, city: 45, date: 80, reset: 125, toPoint: 120 };
+/** Below this much room the compact header closes up as on a phone: smaller gaps and time, no zone offset. */
+const TIGHT_ROOM = 420;
+/** Below this much room the zone button shows just its clock icon (its name is in its label), as on a 320 px phone. */
+const ZONE_NAME_ROOM = 318;
+/** Below this much room the gaps close up further (the compact header's buttons need about 284 px with them). */
+const TIGHTEST_ROOM = 300;
+
 /** A fix's value of a measure, as text, for a lane label. */
 function fixValue(key: MeasureKey, f: FixInfo): string {
   const v = key === 'speed' ? f.kmh : key === 'ele' ? f.ele : key === 'grade' ? f.grade : key === 'hdop' ? f.hdop : key === 'sats' ? f.sats : key === 'fix' ? f.fixq : f.accel;
   return Number.isFinite(v) && !(key === 'fix' && v <= 0) ? valueText(key, v) : '–';
 }
 
-function Lane({ item, t0, t1, tall, fromStart, narrow, labelW, cursor, halo = false }: { item: TrackItem; t0: number; t1: number; tall: boolean; fromStart: boolean; narrow: boolean; labelW: number; cursor: number; halo?: boolean }) {
+/**
+ * The screen's pixels per CSS pixel, kept up to date: it changes with the
+ * browser's zoom, or when the window moves to another screen. The lanes are
+ * drawn for it, so they redraw when it changes rather than turn blurry.
+ */
+function useDpr(): number {
+  const [dpr, setDpr] = useState(() => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1));
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    // A query for the current ratio stops matching when it changes; then a new one watches the new ratio.
+    const m = matchMedia(`(resolution: ${dpr}dppx)`);
+    const update = () => setDpr(window.devicePixelRatio || 1);
+    m.addEventListener?.('change', update);
+    return () => m.removeEventListener?.('change', update);
+  }, [dpr]);
+  return dpr;
+}
+
+/**
+ * One track's lane. `fromStart` is set when the lane is lined up at its start
+ * rather than by clock: tracks from different days all start at the same point,
+ * the selected one included.
+ */
+function Lane({ item, t0, t1, tall, fromStart, narrow, labelW, cursor, dpr, halo = false }: { item: TrackItem; t0: number; t1: number; tall: boolean; fromStart: boolean; narrow: boolean; labelW: number; cursor: number; dpr: number; halo?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [w, setW] = useState(0);
   useEffect(() => {
@@ -73,7 +108,6 @@ function Lane({ item, t0, t1, tall, fromStart, narrow, labelW, cursor, halo = fa
     const el = canvas.current;
     const g = el?.getContext?.('2d');
     if (!el || !g || w === 0) return;
-    const dpr = window.devicePixelRatio || 1;
     el.width = Math.round(w * dpr);
     el.height = Math.round(h * dpr);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -130,11 +164,13 @@ function Lane({ item, t0, t1, tall, fromStart, narrow, labelW, cursor, halo = fa
       const x = ((f.t + offset - t0) / Math.max(1, t1 - t0)) * w;
       if (x >= 0 && x <= w) g.fillRect(Math.round(x) - 0.75, 0, 1.6, h);
     }
-  }, [w, h, item, t0, t1, offset, scale, logY, colors.join(), S.dark.value, S.single.value]);
+  }, [w, h, item, t0, t1, offset, scale, logY, colors.join(), S.dark.value, S.single.value, dpr]);
 
   const shifted = fromStart;
-  // On a phone the header has no readout: the graphs show their value at the cursor instead.
-  const at = narrow && (tall || halo) ? fixAt(item.track, S.trackTime(item.id, cursor)) : null;
+  // On a phone the header has no readout: the graphs show their value at the cursor instead ("–" in a gap).
+  const laneValue = narrow && (tall || halo);
+  const atT = S.trackTime(item.id, cursor);
+  const at = laneValue && hasFixNear(item.track, atT) ? fixAt(item.track, atT) : null;
   return (
     <div class={`lane${halo ? ' halo-lane' : ''}`} data-track={item.id} data-role={halo ? 'halo' : 'color'} style={{ height: `${h}px` }}>
       <div class="lane-label" style={{ width: `${labelW - 10}px` }}>
@@ -142,7 +178,7 @@ function Lane({ item, t0, t1, tall, fromStart, narrow, labelW, cursor, halo = fa
         <span class="lane-text">
           <span class="lane-measure">{measureName(key)}{(key === 'grade' || key === 'accel' || (key === 'speed' && !item.track.derived.speedFromFile) || (key === 'hdop' && scale.relative)) && <Computed text={measureHint(item, key, scale)!} />}</span>
           {/* Each note on its own line, so a narrow label column never cuts one off. */}
-          {at && <span class="lane-value">{fixValue(key, at)}</span>}
+          {laneValue && <span class="lane-value">{at ? fixValue(key, at) : '–'}</span>}
           {!narrow && halo && <span class="lane-note">{t('timeline.haloNote')}</span>}
           {!narrow && shifted && !halo && <span class="lane-note">{t('timeline.fromStart', { date: fmtShortDate(item.track.derived.stats.start, S.zone.value, S.locale.value) })}</span>}
           {!narrow && (tall || halo) && logY && <span class="lane-note">{t('timeline.logScale')}</span>}
@@ -158,7 +194,7 @@ function Lane({ item, t0, t1, tall, fromStart, narrow, labelW, cursor, halo = fa
  * strip in the log's color where it has a fix, and a thin red line through
  * the middle where it was left out for a large error.
  */
-function LogLane({ item, k, t0, t1, narrow, labelW }: { item: TrackItem; k: number; t0: number; t1: number; narrow: boolean; labelW: number }) {
+function LogLane({ item, k, t0, t1, narrow, labelW, dpr }: { item: TrackItem; k: number; t0: number; t1: number; narrow: boolean; labelW: number; dpr: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [w, setW] = useState(0);
   useEffect(() => {
@@ -178,25 +214,13 @@ function LogLane({ item, k, t0, t1, narrow, labelW }: { item: TrackItem; k: numb
     const el = canvas.current;
     const g = el?.getContext?.('2d');
     if (!el || !g || w === 0 || !isCombined(tr)) return;
-    const dpr = window.devicePixelRatio || 1;
     el.width = Math.round(w * dpr);
     el.height = Math.round(h * dpr);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
-    // One pass through the combined points: which pixel columns have the log, and which have it left out.
-    const W = Math.max(1, Math.round(w)), has = new Uint8Array(W), out = new Uint8Array(W);
-    const times = tr.cols.t, la = tr.combo.srcLat[k], use = tr.combo.use[k], gap = tr.derived.gap;
-    const span = Math.max(1, t1 - t0);
-    const colOf = (v: number) => Math.floor(((v + offset - t0) / span) * W);
-    let prev = -1;
-    for (let i = 0; i < tr.cols.n; i++) {
-      if (la[i] !== la[i]) { prev = -1; continue; }
-      const x = colOf(times[i]);
-      // Fill across to the previous fix of this log (fixes a second apart may be pixels apart when zoomed in).
-      const from = prev >= 0 && !gap[i] ? Math.max(0, prev + 1) : x;
-      for (let c = Math.max(0, from); c <= Math.min(W - 1, x); c++) { has[c] = 1; if (use[i] === Use.LeftOut) out[c] = 1; }
-      prev = x;
-    }
+    // Which pixel columns have the log, and which have it left out.
+    const W = Math.max(1, Math.round(w));
+    const { has, out } = logColumns(tr, k, t0, t1, W, offset);
     g.fillStyle = LOG_COLORS[k];
     g.globalAlpha = 0.55;
     const sh = Math.max(3, h - 6);
@@ -204,7 +228,7 @@ function LogLane({ item, k, t0, t1, narrow, labelW }: { item: TrackItem; k: numb
     g.globalAlpha = 1;
     g.fillStyle = LEFT_OUT;
     for (let x = 0; x < W; x++) if (out[x]) g.fillRect(x, h / 2 - 0.9, 1.2, 1.8);
-  }, [w, h, tr, k, t0, t1, offset]);
+  }, [w, h, tr, k, t0, t1, offset, dpr]);
   return (
     <div class="lane log-lane" data-track={item.id} data-log={name} style={{ height: `${h}px` }}>
       <div class="lane-label" style={{ width: `${labelW - 10}px` }}>
@@ -224,7 +248,7 @@ function ZoneButton({ iconOnly }: { iconOnly: boolean }) {
   return (
     <button
       type="button" class="zone-btn" data-zone-trigger aria-haspopup="dialog" aria-expanded={S.zoneOpen.value ? 'true' : 'false'}
-      aria-label={`${t('zone.label')}: ${name}`} title={`${t('zone.label')}: ${name}`} onClick={() => { S.zoneOpen.value = !S.zoneOpen.value; }}
+      aria-label={labeled(t('zone.label'), name)} title={labeled(t('zone.label'), name)} onClick={() => { S.zoneOpen.value = !S.zoneOpen.value; }}
     >
       <IconClock size={14} />{!iconOnly && <span class="zone-btn-name">{name}</span>}<IconChevronDown size={11} />
     </button>
@@ -252,6 +276,21 @@ export function Timeline() {
   // The pane is as tall as its lanes need (a combined track's sources add some): what sits above it, the
   // map's scale and credits and the time zone list, follows its height.
   const pane = useRef<HTMLElement>(null);
+  // The header's own width, which the panel beside the pane narrows: 0 until it is measured.
+  const head = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState(0);
+  // The room at which the full header last didn't fit after all (a wider font than the estimates allow for):
+  // compact at that room or less, until what the header holds changes.
+  const [overflowAt, setOverflowAt] = useState(0);
+  useLayoutEffect(() => {
+    const el = head.current;
+    if (!el) return;
+    setRoom(el.clientWidth);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setRoom(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   useLayoutEffect(() => {
     const el = pane.current, app = el?.closest('.app') as HTMLElement | null;
     if (!el || !app) return;
@@ -263,6 +302,8 @@ export function Timeline() {
     return () => { ro.disconnect(); app.style.removeProperty('--tl-h'); };
   }, []);
   const vis = S.visible.value;
+  // Every track hidden: no time to show.
+  const none = vis.length === 0;
   const sel = S.selected.value;
   const offsets = S.offsets.value;
   const [full0, full1] = axisRange(vis, offsets);
@@ -290,6 +331,7 @@ export function Timeline() {
   const [tickW, setTickW] = useState(800);
   const narrow = useMedia(NARROW);
   const LW = narrow ? LABEL_W.narrow : LABEL_W.wide;
+  const dpr = useDpr();
 
   useEffect(() => {
     const el = lanesRef.current;
@@ -304,7 +346,9 @@ export function Timeline() {
     let raf = 0;
     let last = performance.now();
     const step = (now: number) => {
-      const dt = now - last;
+      // At most a tenth of a second a frame: a hidden tab gets no frames, and on
+      // its return playback goes on from where it was instead of leaping ahead.
+      const dt = Math.max(0, Math.min(now - last, 100));
       last = now;
       // Holds still while the cursor is dragged along a track; skips times
       // when no shown track has data, and loops at the end of the shown range.
@@ -324,7 +368,39 @@ export function Timeline() {
   // another logger kept going.
   const pendingT = useRef<number | null>(null);
   const frame = useRef(0);
-  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  // The scroll wheel can fire faster than frames too, and each new view redraws every lane: the
+  // view changes at most once a frame, each event zooming or panning on from where the last left it.
+  const wheel = useRef<{ base: [number, number] | null; next: [number, number] | null } | null>(null);
+  const wheelFrame = useRef(0);
+  useEffect(() => () => { cancelAnimationFrame(frame.current); cancelAnimationFrame(wheelFrame.current); }, []);
+  const viewSoon = (next: [number, number] | null) => {
+    if (wheel.current) { wheel.current.next = next; return; }
+    wheel.current = { base: S.timelineView.peek(), next };
+    wheelFrame.current = requestAnimationFrame(() => {
+      const w = wheel.current;
+      wheel.current = null;
+      wheelFrame.current = 0;
+      // Left alone if something else (a reset, a drag) changed the view meanwhile.
+      if (w && S.timelineView.peek() === w.base) S.timelineView.value = w.next;
+    });
+  };
+  // The keyboard steps from fix to fix of any shown track (gaps skipped), a minute with Page Up and Down,
+  // and to either end with Home and End; the slider's own steps of one interval stall at gaps.
+  const onScrubKey = (e: KeyboardEvent) => {
+    const shown = S.visible.peek(), offs = S.offsets.peek();
+    let to: number | null = null;
+    switch (e.key) {
+      case 'ArrowRight': case 'ArrowUp': to = stepFix(cursor, 1, shown, offs); break;
+      case 'ArrowLeft': case 'ArrowDown': to = stepFix(cursor, -1, shown, offs); break;
+      case 'PageUp': to = stepFix(cursor + 60_000 - 1, 1, shown, offs); break;
+      case 'PageDown': to = stepFix(cursor - 60_000 + 1, -1, shown, offs); break;
+      case 'Home': to = t0; break;
+      case 'End': to = t1; break;
+      default: return;
+    }
+    e.preventDefault();
+    if (to !== null) moveCursor(Math.min(t1, Math.max(t0, to)));
+  };
   const moveCursor = (time: number, lane?: string | null) => {
     const shown = S.visible.peek();
     const on = lane ? shown.find((x) => x.id === lane) : undefined;
@@ -407,12 +483,12 @@ export function Timeline() {
     const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? r.height : 1;
     const dx = e.deltaX * k, dy = e.deltaY * k;
     const full: [number, number] = [full0, full1];
-    const cur = S.timelineView.peek();
+    const cur = wheel.current ? wheel.current.next : S.timelineView.peek();
     const shown = cur && cur[0] >= full0 && cur[1] <= full1 ? cur : full;
     if (Math.abs(dx) > Math.abs(dy) || e.shiftKey) {
-      if (shown !== full) S.timelineView.value = panView(shown, full, (Math.abs(dx) > Math.abs(dy) ? dx : dy) / Math.max(1, r.width - LW));
+      if (shown !== full) viewSoon(panView(shown, full, (Math.abs(dx) > Math.abs(dy) ? dx : dy) / Math.max(1, r.width - LW)));
     } else {
-      S.timelineView.value = wheelZoom(shown, full, at, dy);
+      viewSoon(wheelZoom(shown, full, at, dy));
     }
   };
   const onUp = (e: PointerEvent) => {
@@ -429,7 +505,15 @@ export function Timeline() {
       return;
     }
     const a = timeAt(Math.min(d.x0, e.clientX), true)!, b = timeAt(Math.max(d.x0, e.clientX), true)!;
-    if (b - a >= MIN_ZOOM_MS) S.timelineView.value = [a, b];
+    if (b - a < MIN_ZOOM_MS) return;
+    S.timelineView.value = [a, b];
+    // The cursor followed the pointer to where the drag began, snapped to a fix that can lie just outside
+    // the part picked: bring it onto the nearest fix inside, so "Show the cursor" isn't offered for it.
+    const was = S.cursorT.peek();
+    if (was !== null && (was < a || was > b)) {
+      pendingT.current = null;
+      S.cursorT.value = snapInto(was, S.visible.peek(), S.offsets.peek(), a, b);
+    }
   };
 
   // The readout shows the track that has a fix at the cursor: the selected one, or another inside its gap.
@@ -439,28 +523,55 @@ export function Timeline() {
     ? [valueText('speed', selFix.kmh), Number.isFinite(selFix.ele) ? valueText('ele', selFix.ele) : null, Number.isFinite(selFix.hdop) ? `HDOP ${valueText('hdop', selFix.hdop)}` : null, Number.isFinite(selFix.sats) ? valueText('sats', selFix.sats) : null].filter(Boolean).join(' · ')
     : '';
   const step = sel ? sel.track.derived.stats.intervalS * 1000 : 1000;
-  const tickList = ticks(t0, t1, tickW, offsetMinutes(t0, z));
-  // Zoomed in to ticks less than a minute apart: they show seconds.
-  const tickSeconds = tickStep(t1 - t0, tickW) < 60_000;
   // Tracks that run past midnight or over several days: the readout shows the
   // date, and a tick at midnight shows the new date instead of 12:00 AM.
   const multiDay = differentDays(t0, t1, z);
+  // The compact header on a phone, or when the full one wouldn't fit: chosen by the header's room, not the window's width.
+  const cityShown = (z !== 'local' && z !== 'utc') || !!S.lastZone.value;
+  const fullNeeds = HEAD_ROOM.full + (cityShown ? HEAD_ROOM.city : 0) + (multiDay ? HEAD_ROOM.date : 0) + (zoomed ? HEAD_ROOM.reset : 0) + (away ? HEAD_ROOM.toPoint : 0);
+  const measured = room > 0;
+  const compact = narrow || (measured && (room < fullNeeds || room <= overflowAt));
+  useLayoutEffect(() => {
+    const el = head.current;
+    if (el && !compact && measured && el.scrollWidth > el.clientWidth + 1) setOverflowAt(room);
+  });
+  useEffect(() => setOverflowAt(0), [cityShown, multiDay, zoomed, away, loc]);
+  const tight = measured && room < TIGHT_ROOM;
+  // The time the readout shows, which the slider reads out too, and its zone's offset then:
+  // a track lined up at its start shows its own date, maybe in another season.
+  const shownT = selFix ? selFix.t : cursor;
+  const timeText = (multiDay ? fmtDateClock : fmtClock)(shownT, z, loc);
+  // Each tick on a round time of the zone's clock at its own time, so a daylight-saving change in
+  // view keeps them round. Worked out when the view changes, not on every move of the cursor.
+  const tickMarks = useMemo(() => {
+    // Zoomed in to ticks less than a minute apart: they show seconds.
+    const seconds = tickStep(t1 - t0, tickW) < 60_000;
+    return ticks(t0, t1, tickW, z === 'utc' ? 0 : (tk: number) => offsetMinutes(tk, z)).map((tk) => {
+      const date = isMidnight(tk, z);
+      return { t: tk, date, text: date ? fmtShortDate(tk, z, loc) : fmtClock(tk, z, loc, seconds) };
+    });
+  }, [t0, t1, tickW, z, loc]);
 
   return (
     <section class="timeline" ref={pane} aria-label={t('timeline.label')}>
-      <div class="tl-head">
-        <button type="button" class="round-btn" aria-label={playing ? t('timeline.pause') : t('timeline.play')} title={playing ? t('timeline.pause') : t('timeline.play')} onClick={() => setPlaying(!playing)}>
+      <div class={`tl-head${tight ? ' is-tight' : ''}${tight && room < TIGHTEST_ROOM ? ' is-tightest' : ''}`} ref={head}>
+        <button type="button" class="round-btn" disabled={none} aria-label={playing ? t('timeline.pause') : t('timeline.play')} title={playing ? t('timeline.pause') : t('timeline.play')} onClick={() => setPlaying(!playing)}>
           {playing ? <IconPause /> : <IconPlay />}
         </button>
         {cur && <Badge item={cur} size="small" />}
-        <span class="tl-time mono" aria-live="polite">{(multiDay ? fmtDateClock : fmtClock)(selFix ? selFix.t : cursor, z, loc)}</span>
-        <span class="muted small tl-offset">{offsetLabel(cursor, z)}</span>
-        {!narrow && <span class="tl-divider" />}
-        {!narrow && <span class="tl-values mono">{readout}</span>}
-        {!narrow && selFix && cur && !cur.track.derived.speedFromFile && <Computed text={explain.speedDerived()} />}
+        {/* Read out as it changes, but not during playback, when it changes all the time. */}
+        {none ? <span class="muted tl-none" role="status">{t('timeline.noTrack')}</span> : (
+          <>
+            <span class="tl-time mono" aria-live={playing ? 'off' : 'polite'}>{timeText}</span>
+            <span class="muted small tl-offset">{offsetLabel(shownT, z)}</span>
+          </>
+        )}
+        {!compact && <span class="tl-divider" />}
+        {!compact && <span class="tl-values mono">{readout}</span>}
+        {!compact && selFix && cur && !cur.track.derived.speedFromFile && <Computed text={explain.speedDerived()} />}
         <span class="grow" />
-        {narrow ? (
-          // One row on a phone: icons, and one time zone button.
+        {compact ? (
+          // Compact, on a phone or in a narrow pane: one row of icons, and one time zone button.
           <>
             {away && (
               <button type="button" class="icon-btn outline" aria-label={t('timeline.toPoint')} title={t('timeline.toPointHint')} onClick={toPoint}>
@@ -476,7 +587,7 @@ export function Timeline() {
             <button type="button" class="icon-btn outline" aria-label={zoomed ? t('map.fitZoomed') : t('map.fit')} title={zoomed ? t('map.fitZoomed') : t('map.fit')} onClick={() => mapApi.fit(zoomed ? [t0, t1] : undefined)}>
               <IconFit size={15} />
             </button>
-            <ZoneButton iconOnly={multiDay} />
+            <ZoneButton iconOnly={multiDay || (measured && room < ZONE_NAME_ROOM)} />
           </>
         ) : (
           <>
@@ -512,27 +623,28 @@ export function Timeline() {
           const fromStart = (offsets[it.id] ?? 0) !== 0 || (it.id === refId && anyShifted);
           return (
             <Fragment key={it.id}>
-              <Lane cursor={cursor} item={it} t0={t0} t1={t1} tall={tall} narrow={narrow} labelW={LW} fromStart={fromStart} />
+              <Lane cursor={cursor} item={it} t0={t0} t1={t1} tall={tall} narrow={narrow} labelW={LW} fromStart={fromStart} dpr={dpr} />
               {tall && S.showHaloGraph.value && it.halo !== 'off' && (
-                <Lane cursor={cursor} item={it} t0={t0} t1={t1} tall={false} narrow={narrow} labelW={LW} fromStart={fromStart} halo />
+                <Lane cursor={cursor} item={it} t0={t0} t1={t1} tall={false} narrow={narrow} labelW={LW} fromStart={fromStart} dpr={dpr} halo />
               )}
               {/* The selected combined track's logs, each with its eye on: a thin lane apiece. */}
-              {tall && it.logs?.map((on, k) => on && <LogLane key={`log-${k}`} item={it} k={k} t0={t0} t1={t1} narrow={narrow} labelW={LW} />)}
+              {tall && it.logs?.map((on, k) => on && <LogLane key={`log-${k}`} item={it} k={k} t0={t0} t1={t1} narrow={narrow} labelW={LW} dpr={dpr} />)}
             </Fragment>
           );
         })}
         {raw >= 0 && raw <= 1 && <div class="tl-cursor" style={{ left: `calc(${LW}px + (100% - ${LW}px) * ${frac})` }} />}
         {band && <div class="tl-band" style={{ left: `${band[0]}px`, width: `${band[1] - band[0]}px` }} aria-hidden="true" />}
-        <input
-          class="sr-only" type="range" aria-label={t('timeline.scrub')} min={t0} max={t1} step={step} value={cursor}
-          onInput={(e) => moveCursor(Number((e.currentTarget as HTMLInputElement).value))}
-        />
+        {!none && (
+          <input
+            class="sr-only" type="range" aria-label={t('timeline.scrub')} aria-valuetext={timeText} min={t0} max={t1} step={step} value={cursor}
+            onInput={(e) => moveCursor(Number((e.currentTarget as HTMLInputElement).value))}
+            onKeyDown={onScrubKey}
+          />
+        )}
       </div>
       <div class="tl-ticks" style={{ marginLeft: `${LW}px` }} aria-hidden="true">
-        {tickList.map((tk) => (
-          isMidnight(tk, z)
-            ? <span key={tk} class="tick-date" style={{ left: `${((tk - t0) / Math.max(1, t1 - t0)) * 100}%` }}>{fmtShortDate(tk, z, loc)}</span>
-            : <span key={tk} style={{ left: `${((tk - t0) / Math.max(1, t1 - t0)) * 100}%` }}>{fmtClock(tk, z, loc, tickSeconds)}</span>
+        {!none && tickMarks.map((tk) => (
+          <span key={tk.t} class={tk.date ? 'tick-date' : undefined} style={{ left: `${((tk.t - t0) / Math.max(1, t1 - t0)) * 100}%` }}>{tk.text}</span>
         ))}
       </div>
     </section>

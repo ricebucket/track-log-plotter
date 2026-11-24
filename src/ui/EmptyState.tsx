@@ -3,10 +3,13 @@ import { t } from '../state/store';
 import { openFilePicker } from './Panel';
 import { FormatShape } from './Badge';
 import { IconFolder, IconLock, IconUpload } from './icons';
+import { useFocusAfterRender } from './hooks';
 
 /** Before any track is open. */
 export function EmptyState() {
   const loading = S.loadingCount.value > 0;
+  // The last track removed from the list: the keyboard goes on to the Open button here.
+  useFocusAfterRender();
   return (
     <>
       <div class="brand-pill">
