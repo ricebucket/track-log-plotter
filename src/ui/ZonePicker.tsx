@@ -13,7 +13,7 @@ interface Props {
   /** CSS selector of the button that opens the list (a press on it toggles the list). */
   trigger: string;
   title: string;
-  /** Offer this computer's zone and UTC at the top of the list. */
+  /** Offer this device's zone and UTC at the top of the list. */
   quick?: boolean;
   className?: string;
 }
@@ -53,8 +53,8 @@ export function ZonePicker({ at, value, onPick, onClose, trigger, title, quick =
         <input ref={input} type="search" value={q} placeholder={t('zone.search')} aria-label={t('zone.search')} onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)} />
       </label>
       <div class="zone-list" role="radiogroup" aria-labelledby="zone-h">
-        {quick && !q && [option('local', t('clock.thisComputer'), '', offsetLabel(at, 'local')), option('utc', 'UTC', '', 'UTC')]}
-        {list.slice(0, 200).map((z) => option(z.id, z.city, z.id, z.offset))}
+        {quick && !q && [option('local', t('clock.thisDevice'), '', offsetLabel(at, 'local')), option('utc', 'UTC', '', 'UTC')]}
+        {list.map((z) => option(z.id, z.city, z.name, z.offset))}
         {list.length === 0 && <span class="muted small">{t('zone.none')}</span>}
       </div>
       <span class="muted small">{t('zone.note')}</span>

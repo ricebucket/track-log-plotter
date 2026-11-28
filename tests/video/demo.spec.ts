@@ -74,7 +74,7 @@ const SAY: Record<Lang, Record<string, string>> = {
     rename: '重命名轨迹',
     properties: '属性：统计数据与文件信息',
     basemap: '底图：从街道地图到卫星影像',
-    more: '同一次行车的三个记录器：隐藏步行轨迹，缩放到轨迹',
+    more: '同一次行车的三个记录器：隐藏步行轨迹，全览轨迹',
     combine: '合并同一次行程的 2 或 3 条记录',
     closeup: '放大来看，每个来源是一条细线',
     onmap: '定位点和方向箭头，可开可关',

@@ -6,9 +6,17 @@
 // derive() (MIN_ERROR_M and Use come from the module), and both run on the
 // Stanford drive and on synthetic walks in Central Park with gaps, held
 // positions, recorded 0s, clock offsets, sparse fixes and stray fixes. Delete
-// this file once the combination is meant to give other results.
+// this file once the combination is meant to give other results. (Since
+// 2026-11-25 the copy takes its clock shifts from the module's clockShift, as
+// the clock search changed then, and has that day's other changes: the second
+// pass of typical errors skips seconds where two logs disagreed, three logs of
+// which two never meet take each from the pairs that do, shares are averaged
+// over every second, and heights are compared between every pair of logs.
+// Since 2026-11-27 it leaves out among the logs that count at each second,
+// for each trust, rather than once among all of them. This file checks the
+// layout of the seconds.)
 import { describe, expect, it } from 'vitest';
-import { combineTracks, MIN_ERROR_M, recombine, Use, type ComboTrack } from '../../src/combine/combine';
+import { clockShift, combineTracks, MIN_ERROR_M, recombine, Use, type ComboTrack } from '../../src/combine/combine';
 import { parseText } from '../../src/parse/index';
 import type { LoadedTrack } from '../../src/model/types';
 import { load } from '../helpers/fixtures';
@@ -117,7 +125,7 @@ const NaN64 = (n: number) => new Float64Array(n).fill(NaN);
 
 interface Prepared {
   ref: number; K: number; n: number;
-  shift: Float64Array; T: Float64Array;
+  shift: Float64Array; clock: Float64Array; T: Float64Array;
   lat0: number; lon0: number; kx: number; ky: number;
   /** Position in metres east and north of lat0/lon0 (NaN where the log has none), accuracy factor, speed, height, course. */
   x: Float64Array; y: Float64Array; now: Float64Array; v: Float64Array; ele: Float32Array; crs: Float32Array;
@@ -140,20 +148,15 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
   const kx = 111_320 * Math.cos((lat0 * Math.PI) / 180), ky = 110_540;
   const S = tracks.map((t) => toSrc(t, lat0, lon0));
 
-  // 1. Clocks: each log lined up with the reference.
-  const shift = new Float64Array(K);
+  // 1. Clocks: each log lined up with the reference, by the module's own search (NaN: not lined up, kept).
+  const shift = new Float64Array(K), clock = new Float64Array(K);
   for (let k = 0; k < K; k++) {
     if (k === ref) continue;
-    let total = 0;
-    for (let pass = 0; pass < 2; pass++) {
-      const fit = clockFit(S[ref], S[k], total * 1000);
-      // No clock difference, and the fixes taken at the same instants identical: the same recording.
-      if (pass === 0 && fit.exact >= 30 && fit.exactRms < 0.01 && Math.abs(fit.tau) < 0.2) return null;
-      const step = Math.round(fit.tau * 10) / 10;
-      if (Math.abs(step) < 0.2 || Math.abs(total + step) > 10) break;
-      total = Math.round((total + step) * 10) / 10;
-    }
-    shift[k] = total;
+    const fit = clockFit(S[ref], S[k], 0);
+    // No clock difference, and the fixes taken at the same instants identical: the same recording.
+    if (fit.exact >= 30 && fit.exactRms < 0.01 && Math.abs(fit.tau) < 0.2) return null;
+    clock[k] = clockShift(S[ref], S[k]);
+    shift[k] = clock[k] === clock[k] ? clock[k] : 0;
   }
 
   // 2. Whole seconds across all the logs: every log's values at each (NaN where it has none).
@@ -177,7 +180,7 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
   const left = new Uint8Array(MK), dis = new Uint8Array(M);
   const e = new Float64Array(K), here = new Int8Array(K), T = new Float64Array(K);
   for (let pass = 0; pass < 2; pass++) {
-    const T2 = typicalErrors(S, x, y, now, left, K, M, pass === 0);
+    const T2 = typicalErrors(S, x, y, now, left, dis, K, M, pass === 0);
     left.fill(0);
     dis.fill(0);
     for (let k = 0; k < K; k++) T[k] = Math.sqrt(T2[k]);
@@ -241,28 +244,58 @@ function prepare(tracks: LoadedTrack[], ref: number): Prepared | null {
     srcLat.push(la); srcLon.push(lo);
   }
   return {
-    ref, K, n, shift, T, lat0, lon0, kx, ky, x, y, now, v, ele, crs, left,
+    ref, K, n, shift, clock, T, lat0, lon0, kx, ky, x, y, now, v, ele, crs, left,
     idx: idx.slice(0, n), t, srcLat, srcLon, disagree, apart, eleOffset: elevationOffset(ele, K, ref, M),
   };
 }
 
 function finish(p: Prepared, trust: Float64Array) {
-  const { K, n, idx, x, y, now, v, ele, crs, left, T, lat0, lon0, kx, ky } = p;
+  const { K, n, idx, x, y, now, v, ele, crs, T, lat0, lon0, kx, ky } = p;
   const lat = new Float64Array(n), lon = new Float64Array(n), oEle = new Float32Array(n), speed = new Float32Array(n), course = new Float32Array(n);
   const use = new Uint8Array(n * K), eleBreak = new Uint8Array(n);
-  const shareSum = new Float64Array(K), shareN = new Float64Array(K), w = new Float64Array(K), counted = new Int8Array(K);
-  // The one log with any trust, when every other is at 0%: it is never left out, so the track is that log
-  // wherever it has a fix (and the others only fill its gaps).
-  let full = -1;
-  for (let k = 0; k < K; k++) if (trust[k] > 0) full = full === -1 ? k : -2;
+  const shareSum = new Float64Array(K), w = new Float64Array(K), counted = new Int8Array(K);
+  // (2026-11-27) Leaving out among the logs that count: those trusted above 0%, or where none of them has a fix,
+  // the others. Before, prepare left out among all the logs (it still does, for the typical errors), and the one
+  // log with any trust was never left out.
+  // Two trusted logs with a third at 0% go by their spread split evenly.
+  const e = new Float64Array(K), here = new Int8Array(K), disagree = new Uint8Array(n), Td = Float64Array.from(T);
+  const tr = [0, 1, 2].filter((k) => k < K && trust[k] > 0);
+  if (K === 3 && tr.length === 2) Td[tr[0]] = Td[tr[1]] = Math.sqrt((T[tr[0]] * T[tr[0]] + T[tr[1]] * T[tr[1]]) / 2);
   let prevEleMask = -1;
   for (let i = 0; i < n; i++) {
     const b = idx[i] * K, u = i * K;
+    let anyTrusted = false, nh = 0, out = -1;
+    for (let k = 0; k < K; k++) if (x[b + k] === x[b + k] && trust[k] > 0) anyTrusted = true;
+    for (let k = 0; k < K; k++) {
+      const j = b + k;
+      if (x[j] !== x[j] || (anyTrusted && !(trust[k] > 0))) continue;
+      here[nh++] = k;
+      const ek = Td[k] * now[j];
+      e[k] = ek > MIN_ERROR_M ? ek : MIN_ERROR_M;
+    }
+    if (nh === 2) {
+      const i1 = here[0], j1 = here[1];
+      const dx = x[b + i1] - x[b + j1], dy = y[b + i1] - y[b + j1];
+      if (dx * dx + dy * dy > 9 * (e[i1] * e[i1] + e[j1] * e[j1])) {
+        const hi = e[i1] >= e[j1] ? i1 : j1, lo = hi === i1 ? j1 : i1;
+        if (e[hi] > 1.2 * e[lo]) out = hi; else disagree[i] = 1;
+      }
+    } else if (nh === 3) {
+      let bestZ2 = 9;
+      for (let c = 0; c < 3; c++) {
+        const i1 = here[c], p1 = here[(c + 1) % 3], q = here[(c + 2) % 3];
+        const wp = 1 / (e[p1] * e[p1]), wq = 1 / (e[q] * e[q]), W = wp + wq;
+        const ax = (wp * x[b + p1] + wq * x[b + q]) / W, ay = (wp * y[b + p1] + wq * y[b + q]) / W;
+        const dx = x[b + i1] - ax, dy = y[b + i1] - ay;
+        const z2 = (dx * dx + dy * dy) / (e[i1] * e[i1] + 1 / W);
+        if (z2 > bestZ2) { bestZ2 = z2; out = i1; }
+      }
+    }
     let nc = 0, nTrusted = 0;
     for (let k = 0; k < K; k++) {
       const j = b + k;
       if (x[j] !== x[j]) continue; // Use.Absent
-      if (left[j] && k !== full) { use[u + k] = Use.LeftOut; continue; }
+      if (k === out) { use[u + k] = Use.LeftOut; continue; }
       counted[nc++] = k;
       if (trust[k] > 0) nTrusted++;
     }
@@ -279,7 +312,7 @@ function finish(p: Prepared, trust: Float64Array) {
       const vk = v[j]; if (vk === vk) { Wv += wk; vv += wk * vk; }
       const ck = crs[j]; if (ck === ck) { const r = ck * (Math.PI / 180); cs += wk * Math.cos(r); sn += wk * Math.sin(r); }
     }
-    for (let c = 0; c < nc; c++) { const k = counted[c]; if (w[k] > 0) { shareSum[k] += w[k] / W; shareN[k]++; } }
+    for (let c = 0; c < nc; c++) { const k = counted[c]; if (w[k] > 0) shareSum[k] += w[k] / W; }
     lat[i] = lat0 + sy / W / ky; lon[i] = lon0 + sx / W / kx;
     oEle[i] = We ? el / We : NaN; speed[i] = Wv ? vv / Wv : NaN;
     course[i] = cs || sn ? ((Math.atan2(sn, cs) * 180) / Math.PI + 360) % 360 : NaN;
@@ -289,8 +322,8 @@ function finish(p: Prepared, trust: Float64Array) {
   const uses: Uint8Array[] = [];
   for (let k = 0; k < K; k++) { const a = new Uint8Array(n); for (let i = 0; i < n; i++) a[i] = use[i * K + k]; uses.push(a); }
   return {
-    t: p.t, lat, lon, ele: oEle, speed, course, eleBreak, use: uses, srcLat: p.srcLat, srcLon: p.srcLon, disagree: p.disagree, eleOffset: p.eleOffset,
-    clockS: Array.from(p.shift), typicalM: Array.from(T), share: Array.from(shareSum, (s, k) => (shareN[k] ? s / shareN[k] : 0)), apart: p.apart,
+    t: p.t, lat, lon, ele: oEle, speed, course, eleBreak, use: uses, srcLat: p.srcLat, srcLon: p.srcLon, disagree, eleOffset: p.eleOffset,
+    clockS: Array.from(p.clock), typicalM: Array.from(T), share: Array.from(shareSum, (s) => (n ? s / n : 0)), apart: p.apart,
   };
 }
 
@@ -317,18 +350,19 @@ function tallyMedian(values: Float64Array, count: number, maxV: number): number 
  * all three down; two are taken as equally accurate unless both report
  * standard HDOP. The first pass uses medians, so jumps don't inflate it.
  */
-function typicalErrors(S: Src[], x: Float64Array, y: Float64Array, now: Float64Array, left: Uint8Array, K: number, M: number, robust: boolean): Float64Array {
-  const s = new Float64Array(9), a = new Float64Array(9).fill(1);
+function typicalErrors(S: Src[], x: Float64Array, y: Float64Array, now: Float64Array, left: Uint8Array, dis: Uint8Array, K: number, M: number, robust: boolean): Float64Array {
+  const s = new Float64Array(9), a = new Float64Array(9).fill(1), np = new Float64Array(9);
   const d = new Float64Array(M);
   for (let i = 0; i < K; i++) for (let j = i + 1; j < K; j++) {
     let n = 0, sum = 0, si = 0, sj = 0, maxD = 0;
-    for (let bi = i, bj = j, end = M * K; bi < end; bi += K, bj += K) {
-      if (left[bi] || left[bj]) continue;
+    for (let m = 0, bi = i, bj = j; m < M; m++, bi += K, bj += K) {
+      if (left[bi] || left[bj] || dis[m]) continue;
       const dx = x[bi] - x[bj], dy = y[bi] - y[bj], dd = dx * dx + dy * dy;
       if (dd !== dd) continue;
       const dist = Math.sqrt(dd);
       d[n++] = dist; sum += dd; si += now[bi] * now[bi]; sj += now[bj] * now[bj]; if (dist > maxD) maxD = dist;
     }
+    np[i * 3 + j] = n;
     if (!n) continue;
     const med = robust ? tallyMedian(d, n, maxD < 1000 ? maxD : 1000) : 0;
     s[i * 3 + j] = s[j * 3 + i] = robust ? (med * med) / Math.LN2 : sum / n;
@@ -340,27 +374,34 @@ function typicalErrors(S: Src[], x: Float64Array, y: Float64Array, now: Float64A
       const k2 = s[1] / (S[0].medH ** 2 * a[1] + S[1].medH ** 2 * a[3]);
       T2[0] = k2 * S[0].medH ** 2; T2[1] = k2 * S[1].medH ** 2;
     } else { T2[0] = s[1] / 2 / a[1]; T2[1] = s[1] / 2 / a[3]; }
-  } else {
+  } else if (np[1] >= 30 && np[2] >= 30 && np[5] >= 30) {
     const s01 = s[1], s02 = s[2], s12 = s[5];
     T2[0] = (s01 + s02 - s12) / 2 / ((a[1] + a[2]) / 2);
     T2[1] = (s01 + s12 - s02) / 2 / ((a[3] + a[5]) / 2);
     T2[2] = (s02 + s12 - s01) / 2 / ((a[6] + a[7]) / 2);
+  } else {
+    for (let k = 0; k < 3; k++) {
+      let sum = 0, c = 0;
+      for (let j = 0; j < 3; j++) { const p = k < j ? k * 3 + j : j * 3 + k; if (j !== k && np[p] >= 30) { sum += s[p] / 2 / a[k * 3 + j]; c++; } }
+      T2[k] = c ? sum / c : NaN;
+    }
   }
   const floor = MIN_ERROR_M * MIN_ERROR_M;
   for (let k = 0; k < K; k++) T2[k] = T2[k] === T2[k] && T2[k] > floor ? T2[k] : T2[k] === T2[k] ? floor : 1;
   return T2;
 }
 
-/** The most common height difference between each log and the reference, in 1 m steps from -300 to +300 m. */
+/** The most common height difference between each pair of logs (those with the reference first), in 1 m steps from -300 to +300 m. */
 function elevationOffset(ele: Float32Array, K: number, ref: number, M: number): EleOffset {
   let best: EleOffset = null;
-  const h = new Uint32Array(601);
-  for (let k = 0; k < K; k++) {
-    if (k === ref) continue;
+  const h = new Uint32Array(601), pairs: [number, number][] = [];
+  for (let k = 0; k < K; k++) if (k !== ref) pairs.push([ref, k]);
+  if (K === 3) pairs.push(ref === 0 ? [1, 2] : ref === 1 ? [0, 2] : [0, 1]);
+  for (const [from, k] of pairs) {
     h.fill(0);
     let n = 0;
     for (let m = 0, b = 0; m < M; m++, b += K) {
-      const dz = ele[b + k] - ele[b + ref];
+      const dz = ele[b + k] - ele[b + from];
       if (!(dz >= -300 && dz <= 300)) continue; // a log without a height here (NaN) fails too
       h[Math.round(dz) + 300]++; n++;
     }
@@ -368,7 +409,7 @@ function elevationOffset(ele: Float32Array, K: number, ref: number, M: number): 
     let top = 0;
     for (let b = 1; b < 601; b++) if (h[b] > h[top]) top = b;
     const m = top - 300;
-    if ((m >= 5 || m <= -5) && (!best || Math.abs(m) > Math.abs(best.m))) best = { from: ref, to: k, m };
+    if ((m >= 5 || m <= -5) && (!best || Math.abs(m) > Math.abs(best.m))) best = { from, to: k, m };
   }
   return best;
 }

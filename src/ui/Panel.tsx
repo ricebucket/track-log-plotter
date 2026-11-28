@@ -8,7 +8,8 @@ import { CASING, GAP } from '../color/palettes';
 import { hint, hintHandlers, useHintId } from './Computed';
 import { TrackRow } from './TrackRow';
 import { Details } from './Details';
-import { IconCheck, IconChevronDown, IconCombine, IconExternal, IconEye, IconEyeOff, IconLayers, IconMap, IconPanelHide, IconPanelShow, IconPegman, IconPlus, IconSelect, IconSheetHide, IconSheetShow, IconTrash } from './icons';
+import { IconCheck, IconChevronDown, IconCombine, IconExternal, IconEye, IconEyeOff, IconLayers, IconMap, IconPanelShow, IconPegman, IconPlus, IconSelect, IconSheetShow, IconTrash } from './icons';
+import { PanelHide, PanelHideOnPhone } from './PanelHide';
 import { focusAfterRender, NARROW, openButton, rowButton, useDismiss, useFocusAfterRender, useMedia } from './hooks';
 
 export function openFilePicker() {
@@ -99,11 +100,14 @@ function GoogleMenu({ trigger, close }: { trigger: { current: HTMLButtonElement 
   const hid = useHintId();
   // The My Maps how-to may be showing when the menu closes under the pointer.
   useEffect(() => () => { if (hint.value?.id === hid) hint.value = null; }, [hid]);
-  // Escape from inside the menu puts the focus back on its button.
+  // When the menu closes with the focus inside (Escape, a link followed), the focus goes back to its button. Not on
+  // the Escape that only closes the My Maps how-to over it.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && ref.current?.contains(e.target as Node)) trigger.current?.focus(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    const el = ref.current;
+    return () => {
+      const at = document.activeElement;
+      if (!at || at === document.body || el?.contains(at)) trigger.current?.focus();
+    };
   }, [trigger]);
   const v = S.mapView.value;
   const sel = S.selected.value;
@@ -161,6 +165,7 @@ function TracksPage() {
                 <span class={`tick-box${allTicked ? ' is-on' : someTicked ? ' is-mixed' : ''}`} aria-hidden="true">{allTicked && <IconCheck size={13} />}</span>{t('select.all')}
               </button>
               <button type="button" class="btn-dark small" onClick={() => S.endSelect()}>{t('select.done')}</button>
+              <PanelHideOnPhone />
             </>
           ) : (
             <>
@@ -178,6 +183,7 @@ function TracksPage() {
               <button type="button" id="tlp-add" class="btn-dark small" onClick={openFilePicker} disabled={all.length >= LOAD_LIMIT} title={all.length >= LOAD_LIMIT ? t('tracks.full') : undefined}>
                 <IconPlus />{t('tracks.add')}
               </button>
+              <PanelHideOnPhone />
             </>
           )}
         </div>
@@ -253,7 +259,7 @@ function SelectBar() {
 }
 
 export function Panel() {
-  // On phones the panel is a bottom sheet, so its collapse arrow points down.
+  // On phones the panel is a bottom sheet with no title bar: the room goes to the list (Minimize is in each page's top row).
   const sheet = useMedia(NARROW);
   const page = S.page.value;
   const body = useRef<HTMLDivElement>(null);
@@ -262,12 +268,12 @@ export function Panel() {
   useEffect(() => { if (body.current) body.current.scrollTop = 0; }, [pageKey]);
   return (
     <aside class="panel" aria-label={t('panel.label')}>
-      <header class="panel-head">
-        <h1 class="app-title">{t('app.name')}</h1>
-        <button type="button" class="icon-btn on-dark" aria-expanded="true" aria-label={t('panel.hide')} title={t('panel.hide')} onClick={() => { S.panelMin.value = true; S.picker.value = null; }}>
-          {sheet ? <IconSheetHide /> : <IconPanelHide />}
-        </button>
-      </header>
+      {sheet ? <h1 class="sr-only">{t('app.name')}</h1> : (
+        <header class="panel-head">
+          <h1 class="app-title">{t('app.name')}</h1>
+          <PanelHide onDark />
+        </header>
+      )}
       <div class="panel-body" ref={body}>
         {page.kind === 'details' ? <Details id={page.id} /> : <TracksPage />}
       </div>

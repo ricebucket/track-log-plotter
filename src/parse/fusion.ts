@@ -20,7 +20,7 @@
 //   C marks a point the user saved and V a voice note, both shown as button
 //   presses.
 import type { FieldKey, FixQuality, Flag, Note, ParsedTrack, Problem } from '../model/types';
-import { ColumnBuilder, present } from './columns';
+import { ColumnBuilder, isPosition, present } from './columns';
 import { blankAt, isSpace, lastNonSpace, numAt } from './scan';
 
 /** A field's number, or NaN when it is blank. */
@@ -209,6 +209,8 @@ export function parseFusion(text: string): ParsedTrack {
   let yr = 0, mo = 0, dy = 0, haveYmd = false;
   let dayShift = 0, lastTod = -1;
   let noDate = false, badRows = 0, badRowsLine = 0, voidCount = 0;
+  /** A row had a position but no usable time. */
+  let untimed = false;
   let truncated: { line: number; chars: number } | null = null;
   if (cut.length < N) cut = new Int32Array(N);
   // Field k of the current line is src[FS[k], FE[k]).
@@ -304,9 +306,13 @@ export function parseFusion(text: string): ParsedTrack {
           const past = !dated && lastTod >= 0 && tod < lastTod - 43200 ? 1 : 0;
           rows.push(haveYmd ? Date.UTC(yr, mo - 1, dy + dayShift + past, hh, mi, ss, ms) : Date.UTC(1970, 0, 1, hh, mi, ss, ms), r.n, -1);
           voidCount++;
-        } else voidCount++;
+        } else {
+          voidCount++;
+          if (isPosition(lat, lon)) untimed = true;
+        }
       } else if (Number.isFinite(lat) || Number.isFinite(lon)) {
         voidCount++;
+        if (isPosition(lat, lon)) untimed = true;
       }
       // An accelerometer reading belongs to the timed row above it: a fix, or a time without a position.
       if (motion && rows.n) {
@@ -345,7 +351,7 @@ export function parseFusion(text: string): ParsedTrack {
   if (badRows) problems.push({ kind: 'badRows', count: badRows, line: badRowsLine });
   if (b.counts.backwards) problems.push({ kind: 'backwards', count: b.counts.backwards, line: b.counts.backwardsLine });
   if (b.counts.jumps) problems.push({ kind: 'jump', count: b.counts.jumps, line: b.counts.jumpLine });
-  if (cols.n === 0) problems.push({ kind: 'noFixes' });
+  if (cols.n === 0) problems.push(untimed ? { kind: 'noFixes', timeless: true } : { kind: 'noFixes' });
 
   if (present(cols, 'speed')) notes.push({ kind: 'speedUnit', unit: 'kmh', inferred: false });
   notes.push({ kind: 'noZone' });

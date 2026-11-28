@@ -1,19 +1,30 @@
 import type { FieldKey, FixQuality, Note, ParsedTrack, Problem } from '../model/types';
-import { ColumnBuilder, present } from './columns';
+import { ColumnBuilder, grown, isPosition, present } from './columns';
 import { blankAt, isSpace, lastNonSpace, numAt } from './scan';
 
 const KNOT = 1852 / 3600; // m/s
 
+/**
+ * An epoch's date before a sentence gives one. Not NaN: a ZDA date out of
+ * Date's range is NaN, and is read as the date it is (its fixes are dropped).
+ */
+const NO_DATE = -Infinity;
+
+/** The epoch being read: what the sentences of one time say. */
 interface Epoch {
   tod: number;
   todKey: string;
-  date: number | null;
+  /** Days since 1970-01-01, or NO_DATE while the epoch has none. */
+  date: number;
   lat: number;
   lon: number;
   hasPos: boolean;
-  rmcStatus: string | null;
-  ggaQ: number | null;
-  mode: string | null;
+  /** RMC calls the fix void (status V). */
+  rmcVoid: boolean;
+  /** GGA fix quality, or NaN. */
+  ggaQ: number;
+  /** RMC mode letter as a character code, or -1. */
+  mode: number;
   ele: number;
   geoid: number;
   hdop: number;
@@ -27,12 +38,12 @@ interface Epoch {
   lineEnd: number;
 }
 
-function newEpoch(todKey: string, tod: number, line: number): Epoch {
-  return {
-    tod, todKey, date: null, lat: NaN, lon: NaN, hasPos: false, rmcStatus: null, ggaQ: null, mode: null,
-    ele: NaN, geoid: NaN, hdop: NaN, hdopGsa: NaN, vdop: NaN, pdop: NaN, sats: NaN, speed: NaN, course: NaN,
-    line, lineEnd: line,
-  };
+/** Empties `e` for a new time, so one object serves every epoch. */
+function startEpoch(e: Epoch, todKey: string, tod: number, line: number): Epoch {
+  e.tod = tod; e.todKey = todKey; e.date = NO_DATE; e.lat = NaN; e.lon = NaN; e.hasPos = false; e.rmcVoid = false;
+  e.ggaQ = NaN; e.mode = -1; e.ele = NaN; e.geoid = NaN; e.hdop = NaN; e.hdopGsa = NaN; e.vdop = NaN; e.pdop = NaN;
+  e.sats = NaN; e.speed = NaN; e.course = NaN; e.line = line; e.lineEnd = line;
+  return e;
 }
 
 /** XOR of the characters between "$" and "*", as two hex digits. */
@@ -42,10 +53,14 @@ export function nmeaChecksum(body: string): string {
   return x.toString(16).toUpperCase().padStart(2, '0');
 }
 
-const BAD_BYTE = /[^\x20-\x7e]/;
-const BAD_BYTES = /[^\x20-\x7e]/g;
-/** Any byte that can never appear in NMEA but line breaks. */
-const BAD_OR_BREAK = /[^\x20-\x7e\n\r]/;
+/** Bytes that can never appear in NMEA: anything but printable ASCII. */
+const STRAY = /[^\x20-\x7e]/g;
+
+/** Whether s[a, b) holds a byte that can never appear in NMEA. */
+function strayIn(s: string, a: number, b: number): boolean {
+  for (let k = a; k < b; k++) { const c = s.charCodeAt(k); if (c < 32 || c > 126) return true; }
+  return false;
+}
 
 /** Value of a hex digit's character code, or -1. */
 function hexDigit(c: number): number {
@@ -61,24 +76,81 @@ const GSA = code3('GSA'), VTG = code3('VTG'), GSV = code3('GSV'), RMC = code3('R
 /** Fields past this are never read. */
 const MAX_FIELDS = 32;
 
-function ggaQuality(q: number | null): FixQuality | -1 {
-  if (q === null || Number.isNaN(q)) return 0;
+/** A position that wasn't measured: estimated (dead reckoning), entered by hand or simulated. Not a GPS fix. */
+const UNMEASURED = 3;
+
+/** A GGA fix quality as the app keeps it: -1 no fix, 0 not given, 1 GPS, 2 corrected, or UNMEASURED. */
+function ggaQuality(q: number): number {
+  if (Number.isNaN(q)) return 0;
   if (q === 0) return -1;
   if (q === 2 || q === 4 || q === 5) return 2;
+  if (q === 6 || q === 7 || q === 8) return UNMEASURED;
   return 1;
 }
 
-function modeQuality(m: string | null): FixQuality | -1 {
-  if (!m) return 0;
-  if (m === 'N') return -1;
-  if (m === 'D' || m === 'R' || m === 'F' || m === 'P') return 2;
+/** The same for an RMC mode letter, given as its character code (-1 when there is none). */
+function modeQuality(m: number): number {
+  if (m < 0) return 0;
+  if (m === 78) return -1; // N
+  if (m === 68 || m === 82 || m === 70 || m === 80) return 2; // D R F P
+  if (m === 69 || m === 77 || m === 83) return UNMEASURED; // E M S
   return 1;
+}
+
+/**
+ * Every epoch read, as columns: a long log keeps no object per epoch (on a
+ * 100 MB log, collecting those took up to half the read time). The values
+ * are kept as read, as doubles, until they go into the track's columns.
+ */
+class Epochs {
+  n = 0;
+  tod = new Float64Array(1024);
+  /** Days since 1970-01-01; NO_DATE until known. */
+  date = new Float64Array(1024);
+  lat = new Float64Array(1024);
+  lon = new Float64Array(1024);
+  ele = new Float64Array(1024);
+  geoid = new Float64Array(1024);
+  /** GGA's HDOP, else GSA's. */
+  hdop = new Float64Array(1024);
+  vdop = new Float64Array(1024);
+  pdop = new Float64Array(1024);
+  sats = new Float64Array(1024);
+  speed = new Float64Array(1024);
+  course = new Float64Array(1024);
+  /** Fix quality; -1 for an epoch that is no fix. */
+  q = new Int8Array(1024);
+  line = new Int32Array(1024);
+  lineEnd = new Int32Array(1024);
+
+  private grow() {
+    const cap = this.tod.length * 2;
+    this.tod = grown(this.tod, cap); this.date = grown(this.date, cap); this.lat = grown(this.lat, cap); this.lon = grown(this.lon, cap);
+    this.ele = grown(this.ele, cap); this.geoid = grown(this.geoid, cap); this.hdop = grown(this.hdop, cap); this.vdop = grown(this.vdop, cap);
+    this.pdop = grown(this.pdop, cap); this.sats = grown(this.sats, cap); this.speed = grown(this.speed, cap); this.course = grown(this.course, cap);
+    this.q = grown(this.q, cap); this.line = grown(this.line, cap); this.lineEnd = grown(this.lineEnd, cap);
+  }
+
+  push(e: Epoch) {
+    if (this.n === this.tod.length) this.grow();
+    const i = this.n++;
+    this.tod[i] = e.tod; this.date[i] = e.date; this.lat[i] = e.lat; this.lon[i] = e.lon;
+    this.ele[i] = e.ele; this.geoid[i] = e.geoid; this.hdop[i] = Number.isFinite(e.hdop) ? e.hdop : e.hdopGsa; this.vdop[i] = e.vdop;
+    this.pdop[i] = e.pdop; this.sats[i] = e.sats; this.speed[i] = e.speed; this.course[i] = e.course;
+    // A void epoch, or one without a position, is no fix. A position that wasn't measured is one of unknown quality,
+    // whatever the other sentences say; otherwise GGA's quality counts first, then RMC's mode.
+    const gq = ggaQuality(e.ggaQ), mq = modeQuality(e.mode);
+    this.q[i] = gq === -1 || mq === -1 || e.rmcVoid || !e.hasPos ? -1 : gq === UNMEASURED || mq === UNMEASURED ? 0 : gq > 0 ? gq : mq;
+    this.line[i] = e.line; this.lineEnd[i] = e.lineEnd;
+  }
 }
 
 export function parseNmea(text: string): ParsedTrack {
   const problems: Problem[] = [];
   const notes: Note[] = [];
-  const epochs: Epoch[] = [];
+  const epochs = new Epochs();
+  // The epoch being read, null before the first time: always the same object, emptied for each new time.
+  const ep = startEpoch({} as Epoch, '', NaN, 0);
   let cur: Epoch | null = null;
 
   let checksumBad = 0, checksumLine = 0;
@@ -86,6 +158,8 @@ export function parseNmea(text: string): ParsedTrack {
   let garbage = 0, garbageLine = 0;
   let withSum = 0, withoutSum = 0;
   let sawGsv = false, sawSpeed = false;
+  /** A sentence gave a position but no time it can be placed at (all that a planned route has). */
+  let untimed = false;
   // Set inside line() below, which TypeScript's narrowing doesn't follow.
   let truncated = null as { line: number; chars: number } | null;
 
@@ -94,9 +168,6 @@ export function parseNmea(text: string): ParsedTrack {
   const lastNonWs = lastNonSpace(text);
   const endsWithNewline = text.indexOf('\n', lastNonWs + 1) >= 0 || text.indexOf('\r', lastNonWs + 1) >= 0;
   let lastContent = -1;
-  // Bytes that can never appear in NMEA are stripped line by line; most files
-  // have none, and then every line is read in place.
-  const anyBad = BAD_OR_BREAK.test(text);
 
   // The sentence being read: field k is s[FS[k], FE[k]), for k < nf.
   let s = text, nf = 0;
@@ -118,19 +189,19 @@ export function parseNmea(text: string): ParsedTrack {
     if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(sec) || h > 23 || m > 59 || sec >= 61) return NaN;
     return h * 3600 + m * 60 + sec;
   };
-  /** "ddmmyy" → days since 1970-01-01, or null; the same date as last time is worked out once. */
-  let dateKey = '', dateDays: number | null = null;
-  const date = (k: number): number | null => {
-    if (k >= nf || FE[k] - FS[k] !== 6) return null;
+  /** "ddmmyy" → days since 1970-01-01, or NO_DATE; the same date as last time is worked out once. */
+  let dateKey = '', dateDays = NO_DATE;
+  const date = (k: number): number => {
+    if (k >= nf || FE[k] - FS[k] !== 6) return NO_DATE;
     const a = FS[k];
     if (s.startsWith(dateKey, a) && dateKey.length === 6) return dateDays;
     dateKey = s.slice(a, a + 6);
     dateDays = daysAt(a);
     return dateDays;
   };
-  const daysAt = (a: number): number | null => {
+  const daysAt = (a: number): number => {
     const d = numAt(s, a, a + 2), mo = numAt(s, a + 2, a + 4), yy = numAt(s, a + 4, a + 6);
-    if (!(d >= 1 && d <= 31 && mo >= 1 && mo <= 12 && yy >= 0)) return null;
+    if (!(d >= 1 && d <= 31 && mo >= 1 && mo <= 12 && yy >= 0)) return NO_DATE;
     const y = yy < 80 ? 2000 + yy : 1900 + yy;
     return Date.UTC(y, mo - 1, d) / 86400000;
   };
@@ -151,8 +222,17 @@ export function parseNmea(text: string): ParsedTrack {
     if (h === 78 || h === 69) return out; // N E
     return NaN;
   };
+  /** Field k is the single letter `c` (a character code). */
+  const letter = (k: number, c: number) => k < nf && FE[k] - FS[k] === 1 && s.charCodeAt(FS[k]) === c;
   /** Field k as Number() reads it (NaN when absent, 0 when blank). */
   const plain = (k: number) => (k < nf ? numAt(s, FS[k], FE[k]) : NaN);
+  /** For a sentence without a usable time: whether it gives a position all the same. */
+  const timelessPosition = (type: number): boolean => {
+    if (type === RMC) return !letter(2, 86) && isPosition(coord(3, 4, 2), coord(5, 6, 3)); // not void (V)
+    if (type === GGA) return num(6) !== 0 && isPosition(coord(2, 3, 2), coord(4, 5, 3)); // quality 0: no fix
+    if (type === GLL) return !letter(6, 86) && isPosition(coord(1, 2, 2), coord(3, 4, 3));
+    return false;
+  };
 
   // The next $ and * at or after a point. Searches only move forward through
   // `s`, so each answer is kept until the search passes it: the whole file is
@@ -177,19 +257,29 @@ export function parseNmea(text: string): ParsedTrack {
     }
     PS[np] = a; PE[np] = b; np++;
   };
-  const line = (a: number, b: number, lineNo: number, rawLen: number, lastLine: boolean, hadGarbage0: boolean) => {
+  /**
+   * Reads the sentences of the line s[a, b). A stray byte (one that can never
+   * appear in NMEA) after the first $ changes what the line says, so such a
+   * line is read again with those bytes taken out: line() reads nothing of it
+   * and returns false. Stray bytes are looked for on the passes that visit each
+   * character anyway (the checksum's, and the one trimming space off the end);
+   * `clean` says the line has none.
+   */
+  const line = (a: number, b: number, lineNo: number, rawLen: number, lastLine: boolean, hadGarbage0: boolean, clean: boolean): boolean => {
     const str = s, fsA = FS, feA = FE;
     const first = nextDollar(a);
-    if (first < 0 || first >= b) { garbage++; if (!garbageLine) garbageLine = lineNo; return; }
-    // Space before the first $ is an indented line, not garbage.
-    const hadGarbage = hadGarbage0 || (first > a && !blankAt(s, a, first));
-    if (hadGarbage) { garbage++; if (!garbageLine) garbageLine = lineNo; }
+    if (first < 0 || first >= b) { garbage++; if (!garbageLine) garbageLine = lineNo; return true; }
+    // Space before the first $ is an indented line, not garbage. Anything
+    // else there is garbage, a stray byte or not, and changes no sentence.
+    const hadGarbage = hadGarbage0 || (first > a && !blankAt(str, a, first));
     // Almost every line holds exactly one sentence; glued ones are split at
-    // each $, leaving out empty pieces.
+    // each $, leaving out empty pieces. Each is read before the next, so a
+    // glued line is looked through for stray bytes first.
     np = 0;
     const second = nextDollar(first + 1);
     if (second < 0 || second >= b) addPart(first + 1, b);
     else {
+      if (!clean && strayIn(str, first, b)) return false;
       let p = first;
       while (p < b) {
         let q = nextDollar(p + 1);
@@ -203,40 +293,52 @@ export function parseNmea(text: string): ParsedTrack {
     for (let pi = 0; pi < np; pi++) {
       const ba = PS[pi];
       let bb = PE[pi];
-      if (bb > ba && str.charCodeAt(bb - 1) <= 32) while (bb > ba && isSpace(str.charCodeAt(bb - 1))) bb--;
+      // `bad` turns negative at a stray byte (a code below 32 or above 126).
+      let n = 0, fs = ba, bad = 0;
+      // Space at the end is no part of the sentence; any kind but a plain space is a stray byte.
+      if (bb > ba && str.charCodeAt(bb - 1) <= 32) {
+        while (bb > ba && isSpace(str.charCodeAt(bb - 1))) { if (str.charCodeAt(bb - 1) !== 32) bad = -1; bb--; }
+      }
       let star = -1; // the last * in the sentence
       for (let q = nextStar(ba); q >= 0 && q < bb; q = nextStar(q + 1)) star = q;
       const isLastSentence = lastLine && pi === np - 1;
       const hi = star >= 0 && bb === star + 3 ? hexDigit(str.charCodeAt(star + 1)) : -1;
       const lo = hi >= 0 ? hexDigit(str.charCodeAt(star + 2)) : -1;
-      // Fields are found on the same pass that checks the checksum.
-      let n = 0, fs = ba;
+      // Fields are found, and stray bytes looked for, on the same pass that checks the checksum.
       if (lo >= 0) {
-        withSum++;
         let x = 0;
         for (let k = ba; k < star; k++) {
           const c = str.charCodeAt(k);
           x ^= c;
+          bad |= (126 - c) | (c - 32);
           if (c === 44) { if (n < MAX_FIELDS) { fsA[n] = fs; feA[n] = k; } n++; fs = k + 1; }
         }
+        if (bad < 0 && !clean) return false;
+        withSum++;
         if (x !== hi * 16 + lo) {
           if (!hadGarbage) { checksumBad++; if (!checksumLine) checksumLine = lineNo; }
           continue;
         }
         bb = star;
       } else {
+        const end = star >= 0 ? star : bb;
+        for (let k = ba; k < end; k++) {
+          const c = str.charCodeAt(k);
+          bad |= (126 - c) | (c - 32);
+          if (c === 44) { if (n < MAX_FIELDS) { fsA[n] = fs; feA[n] = k; } n++; fs = k + 1; }
+        }
+        if (!clean && (bad < 0 || (star >= 0 && strayIn(str, star, bb)))) return false;
         if (isLastSentence && !endsWithNewline) { truncated = { line: lineNo, chars: rawLen }; continue; }
         if (withSum > withoutSum) { checksumBad++; if (!checksumLine) checksumLine = lineNo; continue; }
         withoutSum++;
-        if (star >= 0) bb = star;
-        for (let k = ba; k < bb; k++) if (str.charCodeAt(k) === 44) { if (n < MAX_FIELDS) { fsA[n] = fs; feA[n] = k; } n++; fs = k + 1; }
+        bb = end;
       }
       if (n < MAX_FIELDS) { fsA[n] = fs; feA[n] = bb; }
       nf = n + 1 < MAX_FIELDS ? n + 1 : MAX_FIELDS;
 
       const idLen = FE[0] - FS[0];
-      if (idLen < 5 || s.charCodeAt(FS[0]) === 80 /* P */) continue;
-      const type = idLen === 5 ? (s.charCodeAt(FS[0] + 2) << 16) | (s.charCodeAt(FS[0] + 3) << 8) | s.charCodeAt(FS[0] + 4) : -1;
+      if (idLen < 5 || str.charCodeAt(FS[0]) === 80 /* P */) continue;
+      const type = idLen === 5 ? (str.charCodeAt(FS[0] + 2) << 16) | (str.charCodeAt(FS[0] + 3) << 8) | str.charCodeAt(FS[0] + 4) : -1;
 
       if (type === GSA) {
         if (cur) {
@@ -265,30 +367,29 @@ export function parseNmea(text: string): ParsedTrack {
       // same time written another way ("130500.000" after "130500.00") is the
       // same epoch.
       const tk = type === GLL ? 5 : 1;
-      if (!cur || !(tk < nf && FE[tk] - FS[tk] === cur.todKey.length && s.startsWith(cur.todKey, FS[tk]))) {
+      if (!cur || !(tk < nf && FE[tk] - FS[tk] === cur.todKey.length && str.startsWith(cur.todKey, FS[tk]))) {
         const t = tod(tk);
-        if (Number.isNaN(t)) continue;
+        if (Number.isNaN(t)) { if (!untimed) untimed = timelessPosition(type); continue; }
         if (!cur || t !== cur.tod) {
           if (cur) epochs.push(cur);
-          cur = newEpoch(s.slice(FS[tk], FE[tk]), t, lineNo);
+          cur = startEpoch(ep, str.slice(FS[tk], FE[tk]), t, lineNo);
         }
       }
       cur.lineEnd = lineNo;
 
       if (type === RMC) {
-        cur.rmcStatus = has(2) ? s.slice(FS[2], FE[2]) : null;
+        cur.rmcVoid = letter(2, 86); // V
         const lat = coord(3, 4, 2), lon = coord(5, 6, 3);
         if (Number.isFinite(lat) && Number.isFinite(lon)) { cur.lat = lat; cur.lon = lon; cur.hasPos = true; }
         const sog = num(7);
         if (Number.isFinite(sog)) { cur.speed = sog * KNOT; sawSpeed = true; }
         cur.course = num(8);
         cur.date = date(9);
-        if (has(12)) cur.mode = s.charAt(FS[12]);
+        if (has(12)) cur.mode = str.charCodeAt(FS[12]);
       } else if (type === GGA) {
         const lat = coord(2, 3, 2), lon = coord(4, 5, 3);
         if (Number.isFinite(lat) && Number.isFinite(lon)) { cur.lat = lat; cur.lon = lon; cur.hasPos = true; }
-        const q = num(6);
-        cur.ggaQ = Number.isNaN(q) ? null : q;
+        cur.ggaQ = num(6);
         cur.sats = num(7);
         cur.hdop = dop(8);
         cur.ele = num(9);
@@ -296,14 +397,15 @@ export function parseNmea(text: string): ParsedTrack {
       } else if (type === GLL) {
         if (!cur.hasPos) {
           const lat = coord(1, 2, 2), lon = coord(3, 4, 3);
-          const voided = 6 < nf && FE[6] - FS[6] === 1 && s.charCodeAt(FS[6]) === 86; // "V"
-          if (Number.isFinite(lat) && Number.isFinite(lon) && !voided) { cur.lat = lat; cur.lon = lon; cur.hasPos = true; }
+          if (Number.isFinite(lat) && Number.isFinite(lon) && !letter(6, 86)) { cur.lat = lat; cur.lon = lon; cur.hasPos = true; } // not void (V)
         }
       } else {
         const d = plain(2), mo = plain(3), y = plain(4);
         if (d >= 1 && mo >= 1 && y > 1900) cur.date = Date.UTC(y, mo - 1, d) / 86400000;
       }
     }
+    if (hadGarbage) { garbage++; if (!garbageLine) garbageLine = lineNo; }
+    return true;
   };
 
   // Lines end at \r\n, \r or \n. The next \r and the next \n are each looked
@@ -317,66 +419,70 @@ export function parseNmea(text: string): ParsedTrack {
     const le = lf < 0 ? (cr < 0 ? len : cr) : cr < 0 || lf < cr ? lf : cr;
     const lastLine = ls <= lastNonWs && lastNonWs < le;
     if (lastLine) lastContent = li;
-    if (!blankAt(text, ls, le)) {
-      if (!anyBad) { s = text; line(ls, le, li + 1, le - ls, lastLine, false); }
-      else {
-        // Space before the sentence isn't garbage, whatever kind it is.
-        let a = ls;
-        while (a < le && isSpace(text.charCodeAt(a))) a++;
-        const raw = text.slice(a, le);
-        const clean = BAD_BYTE.test(raw) ? raw.replace(BAD_BYTES, '') : raw;
-        s = clean; dq = -1; sq = -1; // searches start afresh in each cleaned line
-        line(0, clean.length, li + 1, le - ls, lastLine, clean.length !== raw.length);
-      }
+    if (!blankAt(text, ls, le) && !line(ls, le, li + 1, le - ls, lastLine, false, false)) {
+      // A stray byte: the line is read again with its stray bytes taken out
+      // (space before the sentence isn't one, whatever kind), and counts as
+      // garbage.
+      let a = ls;
+      while (a < le && isSpace(text.charCodeAt(a))) a++;
+      const raw = text.slice(a, le), cleaned = raw.replace(STRAY, '');
+      s = cleaned; dq = -1; sq = -1; // searches start afresh in the cleaned line, and again after it
+      line(0, cleaned.length, li + 1, le - ls, lastLine, cleaned.length !== raw.length, true);
+      s = text; dq = -1; sq = -1;
     }
     if (le >= len) break;
     ls = le + (le === cr && text.charCodeAt(le + 1) === 10 ? 2 : 1);
   }
   if (cur) epochs.push(cur);
 
-  // Fill in dates: forward from each known date (rolling over at midnight),
-  // then backward for epochs logged before the first date.
-  let anyDate = false;
-  let lastDate: number | null = null, lastTod = 0;
-  for (const e of epochs) {
-    if (e.date !== null) { lastDate = e.date; anyDate = true; }
-    else if (lastDate !== null) { if (e.tod < lastTod - 43200) lastDate += 1; e.date = lastDate; }
-    lastTod = e.tod;
+  // Fill in dates: forward from the first known date (rolling over at
+  // midnight, and taking each new date as it comes), then backward for the
+  // epochs logged before it.
+  const en = epochs.n, D = epochs.date, T = epochs.tod;
+  let first = -1;
+  let lastDate = NO_DATE, lastTod = 0;
+  for (let i = 0; i < en; i++) {
+    const d = D[i];
+    if (d !== NO_DATE) { lastDate = d; if (first < 0) first = i; }
+    else if (first >= 0) { if (T[i] < lastTod - 43200) lastDate += 1; D[i] = lastDate; }
+    lastTod = T[i];
   }
-  let nextDate: number | null = null, nextTod = 0;
-  for (let i = epochs.length - 1; i >= 0; i--) {
-    const e = epochs[i];
-    if (e.date !== null) { nextDate = e.date; nextTod = e.tod; continue; }
-    if (nextDate !== null) { if (e.tod > nextTod + 43200) nextDate -= 1; e.date = nextDate; nextTod = e.tod; }
+  if (first > 0) {
+    let nextDate = D[first], nextTod = T[first];
+    for (let i = first - 1; i >= 0; i--) {
+      if (T[i] > nextTod + 43200) nextDate -= 1;
+      D[i] = nextDate;
+      nextTod = T[i];
+    }
   }
-  if (!anyDate) {
+  if (first < 0) {
     // No dates anywhere: count days from zero, rolling over at midnight, so a
     // log that runs past midnight keeps going forward instead of jumping back.
-    let day = 0, prev = epochs[0]?.tod ?? 0;
-    for (const e of epochs) {
-      if (e.tod < prev - 43200) day += 1;
-      e.date = day;
-      prev = e.tod;
+    let day = 0, prev = en ? T[0] : 0;
+    for (let i = 0; i < en; i++) {
+      if (T[i] < prev - 43200) day += 1;
+      D[i] = day;
+      prev = T[i];
     }
     notes.push({ kind: 'noDate' });
   }
 
   const b = new ColumnBuilder();
   let voidCount = 0;
-  const days = new Set<number>();
-  for (const e of epochs) {
-    const gq = ggaQuality(e.ggaQ);
-    const mq = modeQuality(e.mode);
-    const invalid = gq === -1 || mq === -1 || e.rmcStatus === 'V' || !e.hasPos;
-    if (invalid) { voidCount++; continue; }
-    const fixq: FixQuality = gq > 0 ? (gq as FixQuality) : mq > 0 ? (mq as FixQuality) : 0;
-    const day = e.date ?? 0;
-    days.add(Math.floor(day + e.tod / 86400));
+  // The UTC day of the first fix, and whether any other fix is on another (NaN, from a ZDA date out of range,
+  // counting as one day of its own).
+  let day0 = 0, anyDay = false, manyDays = false;
+  const E = epochs;
+  for (let i = 0; i < en; i++) {
+    const q = E.q[i];
+    if (q < 0) { voidCount++; continue; }
+    const day = D[i], t = T[i];
+    const dayNo = Math.floor(day + t / 86400);
+    if (!anyDay) { day0 = dayNo; anyDay = true; } else if (!(dayNo === day0 || (dayNo !== dayNo && day0 !== day0))) manyDays = true;
     b.push({
-      t: (day * 86400 + e.tod) * 1000,
-      lat: e.lat, lon: e.lon, ele: e.ele, geoid: e.geoid,
-      hdop: Number.isFinite(e.hdop) ? e.hdop : e.hdopGsa, vdop: e.vdop, pdop: e.pdop,
-      sats: e.sats, speed: e.speed, course: e.course, fixq, line: e.line, lineEnd: e.lineEnd,
+      t: (day * 86400 + t) * 1000,
+      lat: E.lat[i], lon: E.lon[i], ele: E.ele[i], geoid: E.geoid[i], hdop: E.hdop[i], vdop: E.vdop[i], pdop: E.pdop[i],
+      sats: E.sats[i], speed: E.speed[i], course: E.course[i], fixq: q as FixQuality, line: E.line[i], lineEnd: E.lineEnd[i],
     });
   }
   const cols = b.build();
@@ -387,13 +493,13 @@ export function parseNmea(text: string): ParsedTrack {
   if (garbage) problems.push({ kind: 'garbage', count: garbage, line: garbageLine });
   if (b.counts.backwards) problems.push({ kind: 'backwards', count: b.counts.backwards, line: b.counts.backwardsLine });
   if (b.counts.jumps) problems.push({ kind: 'jump', count: b.counts.jumps, line: b.counts.jumpLine });
-  if (cols.n === 0) problems.push({ kind: 'noFixes' });
+  if (cols.n === 0) problems.push(untimed ? { kind: 'noFixes', timeless: true } : { kind: 'noFixes' });
 
   if (sawSpeed) notes.push({ kind: 'speedUnit', unit: 'knots', inferred: false });
   const noPosition = voidCount + b.counts.noPosition;
   if (noPosition) notes.push({ kind: 'void', count: noPosition });
   if (b.counts.duplicates) notes.push({ kind: 'duplicates', count: b.counts.duplicates });
-  if (days.size > 1) notes.push({ kind: 'midnight' });
+  if (manyDays) notes.push({ kind: 'midnight' });
   if (sawGsv) notes.push({ kind: 'ignored', fields: ['satsInView'] });
 
   const fields: FieldKey[] = ['time', 'position'];

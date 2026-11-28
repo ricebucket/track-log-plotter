@@ -66,7 +66,8 @@ export type Problem =
   | { kind: 'jump'; count: number; line: number }
   | { kind: 'unclosed'; kept: number }
   | { kind: 'badXml'; line: number; kept: number }
-  | { kind: 'noFixes' };
+  /** `timeless`: the file gives positions, but without times (as a planned route does). */
+  | { kind: 'noFixes'; timeless?: true };
 
 export type SpeedUnit = 'ms' | 'kmh' | 'knots' | 'mph';
 
@@ -207,7 +208,10 @@ export interface LoadedTrack extends ParsedTrack {
   derived: Derived;
 }
 
-/** What the parsing worker posts back. */
+/**
+ * What the parsing worker posts back. A file without fixes is 'noTimes' when
+ * it gives positions but no times (a planned route, say), else 'empty'.
+ */
 export type ParseResult =
   | { ok: true; track: LoadedTrack }
-  | { ok: false; file: string; error: 'unknownFormat' | 'empty' | 'tooBig' | 'unreadable' };
+  | { ok: false; file: string; error: 'unknownFormat' | 'empty' | 'noTimes' | 'tooBig' | 'unreadable' };

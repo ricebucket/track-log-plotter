@@ -1,7 +1,7 @@
 // Text built from data: legend ranges, units and readout values.
 import type { ColorKey, MeasureKey, Note, Problem, Format, LoadedTrack } from '../model/types';
 import type { Scale } from '../color/scale';
-import { fmtBytes, fmtEle, fmtNum, fmtSpeed } from '../format';
+import { fmtBytes, fmtDuration, fmtEle, fmtNum, fmtSpeed } from '../format';
 import { locale, t, units } from '../state/store';
 import { trackName, type TrackItem } from '../state/logic';
 import { isCombined } from '../combine/combine';
@@ -88,17 +88,27 @@ export function valueText(key: MeasureKey, v: number): string {
   }
 }
 
+/**
+ * A count for a message, grouped as the language writes numbers ("12,345").
+ * translate() still picks the plural form from it: below 1,000 it reads back
+ * as the count itself, and a grouped number reads as no number at all, which
+ * gets the "other" form: the right one for counts that large in English and Chinese.
+ */
+function grouped(n: number): string {
+  return fmtNum(n, locale.value, 0, 0);
+}
+
 export function problemTitle(p: Problem): string {
-  return t(`problem.${p.kind}.title`, p.kind === 'noFixes' ? undefined : { n: 'count' in p ? p.count : 0 });
+  return t(`problem.${p.kind}.title`, p.kind === 'noFixes' ? undefined : { n: grouped('count' in p ? p.count : 0) });
 }
 
 export function problemBody(p: Problem): string {
   switch (p.kind) {
-    case 'truncated': return t('problem.truncated.body', { line: p.line, chars: p.chars, kept: p.kept });
+    case 'truncated': return t('problem.truncated.body', { line: p.line, chars: grouped(p.chars), kept: grouped(p.kept) });
     case 'checksum': case 'glued': case 'garbage': case 'badRows': case 'backwards': case 'jump':
-      return t(`problem.${p.kind}.body`, { n: p.count, line: p.line });
-    case 'unclosed': return t('problem.unclosed.body', { kept: p.kept });
-    case 'badXml': return t('problem.badXml.body', { line: p.line, kept: p.kept });
+      return t(`problem.${p.kind}.body`, { n: grouped(p.count), line: p.line });
+    case 'unclosed': return t('problem.unclosed.body', { kept: grouped(p.kept) });
+    case 'badXml': return t('problem.badXml.body', { line: p.line, kept: grouped(p.kept) });
     case 'noFixes': return t('problem.noFixes.body');
   }
 }
@@ -119,11 +129,15 @@ export function noteText(n: Note): string {
       return t(n.inferred ? 'note.speedUnitInferred' : 'note.speedUnit', unit);
     }
     case 'ignored': return t('note.ignored', { fields: n.fields.map(fieldName).join(t('list.sep')) });
-    case 'void': case 'timeless': case 'duplicates': case 'timelessWaypoints': return t(`note.${n.kind}`, { n: n.count });
-    case 'gaps': return t('note.gaps', { n: n.count, longest: Math.round(n.longestS) });
+    case 'void': case 'timeless': case 'duplicates': case 'timelessWaypoints': return t(`note.${n.kind}`, { n: grouped(n.count) });
+    // The longest gap as the Duration row writes a time: "12:00:10".
+    case 'gaps': return t('note.gaps', { n: grouped(n.count), longest: fmtDuration(n.longestS) });
     case 'zeroSats': return zeroSatsText(n.count, n.stale);
     case 'motion': return t('note.motion', { n: n.rate });
-    case 'repeatsDropped': return n.long ? `${t('note.repeatsDropped', { n: n.count })} ${t('note.repeatsLong', { n: n.long })}` : t('note.repeatsDropped', { n: n.count });
+    case 'repeatsDropped': {
+      const dropped = t('note.repeatsDropped', { n: grouped(n.count) });
+      return n.long ? `${dropped} ${t('note.repeatsLong', { n: grouped(n.long) })}` : dropped;
+    }
     default: return t(`note.${n.kind}`);
   }
 }
@@ -133,9 +147,9 @@ export function noteText(n: Note): string {
  * before: each count with its own plural ("1 of them repeats", "3 of them repeat").
  */
 function zeroSatsText(count: number, stale: number): string {
-  if (stale <= 0) return t('note.zeroSats', { n: count });
-  if (stale >= count) return t('note.zeroSatsAllStale', { n: count });
-  return t('note.zeroSatsStale', { count, n: stale });
+  if (stale <= 0) return t('note.zeroSats', { n: grouped(count) });
+  if (stale >= count) return t('note.zeroSatsAllStale', { n: grouped(count) });
+  return t('note.zeroSatsStale', { count: grouped(count), n: grouped(stale) });
 }
 
 /** A short distance: metres (feet in imperial units), with a decimal below 10. */

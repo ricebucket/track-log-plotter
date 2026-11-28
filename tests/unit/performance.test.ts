@@ -6,6 +6,7 @@
 // `npm run test:coverage` leaves this file out and CI runs it on its own
 // (`npm run test:perf`).
 import { describe, expect, it } from 'vitest';
+import { PerformanceObserver } from 'node:perf_hooks';
 import { parseText, transferables } from '../../src/parse/index';
 import { parseNmea } from '../../src/parse/nmea';
 import { columns } from '../../src/ui/timelineMath';
@@ -36,6 +37,27 @@ const read = (text: string, name: string): LoadedTrack => {
   return r.track;
 };
 
+/**
+ * An NMEA log looping around Central Park from 08:00 on June 14th: RMC, GGA
+ * and GSA each second, its dates going on past midnight (bigNmeaLog stops at
+ * midnight). 300,000 seconds is about 60 MB.
+ */
+function daysOfNmea(seconds: number): string {
+  const pad = (v: number) => String(v).padStart(2, '0');
+  const out: string[] = [];
+  for (let i = 0; i < seconds; i++) {
+    const at = 8 * 3600 + i, tod = at % 86400, day = 14 + Math.floor(at / 86400);
+    const hms = `${pad(Math.floor(tod / 3600))}${pad(Math.floor(tod / 60) % 60)}${pad(tod % 60)}.00`;
+    const lat = 40.7812 + 0.01 * Math.sin(i / 600), lon = 73.9665 - 0.008 * Math.cos(i / 600);
+    const la = `${Math.floor(lat)}${((lat % 1) * 60).toFixed(5).padStart(8, '0')}`;
+    const lo = `0${Math.floor(lon)}${((lon % 1) * 60).toFixed(5).padStart(8, '0')}`;
+    out.push(nmeaSentence(`GPRMC,${hms},A,${la},N,${lo},W,5.20,${(i % 360).toFixed(1)},${pad(day)}0626,13.1,W,A`));
+    out.push(nmeaSentence(`GPGGA,${hms},${la},N,${lo},W,1,09,0.9,21.5,M,-34.2,M,,`));
+    out.push(nmeaSentence('GPGSA,A,3,2,5,6,9,12,13,15,17,19,,,,1.6,0.9,1.3'));
+  }
+  return out.join('\r\n') + '\r\n';
+}
+
 describe('big GPX and NMEA logs', () => {
   it('reads 50,000 GPX points (14 MB) well under a few seconds', () => {
     const text = bigGpxLog(50_000);
@@ -54,6 +76,23 @@ describe('big GPX and NMEA logs', () => {
     expect(tr!.cols.n).toBe(36_000);
     expect(ms).toBeLessThan(2500);
   }, 30_000);
+
+  it('reads an NMEA log of 300,000 fixes (60 MB) without spending its time collecting garbage', async () => {
+    // Each second goes into columns as it ends. Keeping an object for every second until the end of the file
+    // had garbage collection take a fifth of the read time here, and 40% of it on 117 MB (now 2%).
+    const text = daysOfNmea(300_000);
+    parseNmea(text); // the first read also collects what writing the log left behind
+    let gcMs = 0;
+    const gc = new PerformanceObserver((list) => { for (const e of list.getEntries()) gcMs += e.duration; });
+    gc.observe({ entryTypes: ['gc'] });
+    let n = 0;
+    const ms = time(() => { n = parseNmea(text).cols.n; });
+    await new Promise((r) => setTimeout(r, 50)); // collections are reported after they end
+    gc.disconnect();
+    console.log(`NMEA: ${ms.toFixed(0)} ms for ${(text.length / 1e6).toFixed(0)} MB, ${gcMs.toFixed(0)} ms of it collecting garbage`);
+    expect(n).toBe(300_000);
+    expect(gcMs / ms).toBeLessThan(0.1);
+  }, 60_000);
 
   it('reads an NMEA log in one pass however far apart its $ and * marks are', () => {
     // Each search for the next $ or * picks up where the last one stopped. A
@@ -192,6 +231,13 @@ describe('input made to be slow stays near linear', () => {
     combineTracks([a, stray]);
     expect(time(() => combineTracks([a, stray]), 3)).toBeLessThan(100);
   }, 30_000);
+
+  it('refuses two logs too long to combine before searching their clocks (about 100 ms; searched first, about 300)', () => {
+    // 20 days at a fix a second each: over the 1.5 million seconds two logs may cover between them.
+    const n = 20 * 86_400, a = loop(n), b = loop(n, { northM: 3, seed: 2 });
+    expect(combineTracks([a, b])).toEqual({ ok: false, reason: 'tooLong' });
+    expect(time(() => combineTracks([a, b]))).toBeLessThan(1000);
+  }, 60_000);
 
   it("fills in 40,000 left-out speeds in a row in one pass (about 2.5 s)", () => {
     const a = loop(40_000), zero = loop(40_000, { northM: 3, seed: 2, speed: 0 });

@@ -255,6 +255,10 @@ button:disabled { cursor: default; opacity: 0.5; }
 .tl-head.is-tight.is-tightest { gap: 4px; }
 .tl-head.is-tight .tl-offset { display: none; }
 .tl-head.is-tight .tl-time { font-size: 14px; }
+/* A compact header still short of room without the date, the track's badge and the zone's name: closer still, and the
+   time, the one thing left that can give way, ends in an ellipsis rather than push Minimize off the pane. */
+.tl-head.is-short { gap: 4px; }
+.tl-head.is-short .tl-time { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* The zone button gives way first when room runs out: its name ends in an ellipsis rather than push the header out of the pane. */
 .zone-btn { flex: 0 1 auto; min-width: 46px; height: 32px; max-width: 112px; padding: 0 6px 0 7px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line-2); border-radius: 9px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; }
 .zone-btn svg { flex: none; }
@@ -412,8 +416,6 @@ button:disabled { cursor: default; opacity: 0.5; }
 .empty-card p { margin: 0; font-size: 15px; line-height: 23px; color: var(--ink-3); }
 .empty-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .drop-hint { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 78px; padding: 0 12px; border: 1.5px dashed rgba(16, 24, 32, 0.3); border-radius: 12px; color: var(--muted); font-size: 13.5px; text-align: center; }
-.supports { display: flex; align-items: center; gap: 10px; }
-.pill { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 13px; background: rgba(16, 24, 32, 0.05); border: 1px solid var(--line); font-size: 12px; font-weight: 700; color: var(--ink-3); }
 .privacy { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .drop-overlay { position: absolute; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(16, 24, 32, 0.35); pointer-events: none; }
 .drop-overlay > div { display: flex; align-items: center; gap: 12px; padding: 22px 28px; border-radius: 16px; background: var(--card); font-size: 16px; font-weight: 700; box-shadow: var(--shadow-pop); }
@@ -425,8 +427,11 @@ button:disabled { cursor: default; opacity: 0.5; }
 @media (max-width: 720px) {
   :root { --sheet-h: 46vh; --edge-l: max(8px, env(safe-area-inset-left)); --edge-r: max(8px, env(safe-area-inset-right)); --edge-b: max(8px, env(safe-area-inset-bottom)); }
   .app { --pane-left: var(--edge-l); }
-  /* The bottom sheet runs to the bottom edge; what it holds keeps clear of the home indicator. */
-  .panel { left: 0; right: 0; top: auto; bottom: 0; width: auto; height: var(--sheet-h); border-radius: 18px 18px 0 0; padding-bottom: env(safe-area-inset-bottom); }
+  /* The bottom sheet runs to the bottom edge; what it holds keeps clear of the home indicator. It is fixed itself, not
+     only inside the fixed app: Safari on an iPhone paints the strip around its bottom address bar in the color of the
+     fixed element at the bottom edge, so the strip continues the sheet rather than showing the page's gray between the
+     sheet and the address bar. */
+  .panel { position: fixed; left: 0; right: 0; top: auto; bottom: 0; width: auto; height: var(--sheet-h); border-radius: 18px 18px 0 0; padding-bottom: env(safe-area-inset-bottom); }
   .panel-head { padding: 8px 10px 8px 14px; }
   .timeline { left: var(--edge-l); right: var(--edge-r); bottom: calc(var(--sheet-h) + 8px); height: auto; max-height: 42vh; padding: 8px 10px; gap: 5px; }
   .panel-min .timeline { bottom: var(--edge-b); }
@@ -436,8 +441,10 @@ button:disabled { cursor: default; opacity: 0.5; }
   .tl-values { order: 10; flex: 1 0 100%; font-size: 11.5px; }
   .timeline .seg.small button { height: 28px; padding: 0 7px; }
   .timeline { min-height: 0; }
-  /* On a phone the pane is capped: its lanes scroll inside it rather than spill out. */
-  .tl-lanes { flex: 0 1 auto; min-height: 0; overflow-y: auto; gap: 4px; }
+  /* On a phone the pane is capped: its lanes scroll inside it rather than spill out. A finger on the labels (or
+     between the lanes) scrolls them; on a graph it moves the cursor. */
+  .tl-lanes { flex: 0 1 auto; min-height: 0; overflow-y: auto; gap: 4px; touch-action: pan-y; }
+  .lane-canvas { touch-action: none; }
   .lane-measure { font-size: 11px; }
   .panel-pill { left: var(--edge-l); top: auto; bottom: var(--edge-b); }
   .timeline-pill { left: calc(var(--edge-l) + 52px); bottom: var(--edge-b); }
@@ -453,18 +460,29 @@ button:disabled { cursor: default; opacity: 0.5; }
   .bm-button-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .bm-opts { margin-left: 0; padding: 0 4px 0 8px; }
   .options-menu { right: 0; top: 60px; width: min(384px, calc(100vw - 16px)); }
-  .map-footer { left: var(--edge-l); right: calc(var(--edge-r) + 60px); top: 8px; bottom: auto; align-items: flex-start; }
+  /* Beside the Options button (96px wide on a phone), with a gap: long credits wrap rather than run under it. */
+  .map-footer { left: var(--edge-l); right: calc(var(--edge-r) + 104px); top: 8px; bottom: auto; align-items: flex-start; }
   .timeline-min .map-footer { left: var(--edge-l); bottom: auto; }
+  /* The start screen's title takes the top left: the credits go to the foot of the map, which is free then. */
+  .app:has(.brand-pill) .map-footer { top: auto; bottom: var(--edge-b); right: var(--edge-r); align-items: flex-end; }
   .scale { display: none; }
   .attribution { font-size: 10px; text-align: left; }
   .tooltip { display: none; }
   .map-notices, .toasts { left: var(--edge-l); right: var(--edge-r); top: 64px; }
+  /* Below the Options button the map buttons' column shows Fit (timeline minimized) or the compass: the notices keep clear of it. */
+  .map-tools:has(.has-fit) ~ .map-notices, .map-tools:has(.has-compass) ~ .map-notices,
+  .map-tools:has(.has-fit) ~ .toasts, .map-tools:has(.has-compass) ~ .toasts { right: calc(var(--edge-r) + 52px); }
   .brand-pill { left: var(--edge-l); top: 8px; height: 44px; gap: 10px; padding: 0 14px; }
   .brand-pill .app-title { font-size: 15px; }
   .empty-card { padding: 22px; gap: 16px; }
   .empty-card h1 { font-size: 22px; line-height: 28px; }
   .zone-picker { position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; max-height: 72vh; border-radius: 18px 18px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
   .toast { font-size: 12.5px; line-height: 18px; padding: 9px 6px 9px 11px; }
+}
+
+/* A 320 px phone: with Minimize in it, the list's top row runs out of room, so its "Tracks" label goes (still read out). */
+@media (max-width: 340px) {
+  #tracks-h { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 }
 
 /* ---------- computed values ---------- */

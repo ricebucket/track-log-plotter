@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseGpx, parseIsoTime } from '../../src/parse/gpx';
 import { parseText } from '../../src/parse/index';
 import { noteText } from '../../src/ui/labels';
+import { translate } from '../../src/i18n/i18n';
 import { fixture } from '../helpers/fixtures';
 import { vendorGpx } from '../helpers/vendor-speed';
 
@@ -267,6 +268,28 @@ describe('reading odd or damaged GPX', () => {
     expect(p.notes.filter((n) => n.kind === 'timeless' || n.kind === 'void')).toEqual([{ kind: 'void', count: 1 }, { kind: 'timeless', count: 2 }]);
     expect(noteText({ kind: 'timeless', count: 2 })).toBe('2 fixes without a time were skipped.');
     expect(noteText({ kind: 'timeless', count: 1 })).toBe('1 fix without a time was skipped.');
+  });
+
+  it('notes fixes with the same time as the fix before, wherever they are', () => {
+    // The second fix at 13:05:01 is somewhere else, but at the same time: it is skipped, and the note says why.
+    const p = parseGpx(trk(pt(0) + pt(1) + pt(1).replace('lat="40.78010"', 'lat="40.78090"') + pt(2)));
+    expect(p.cols.n).toBe(3);
+    expect(p.notes).toContainEqual({ kind: 'duplicates', count: 1 });
+    expect(noteText({ kind: 'duplicates', count: 1 })).toBe('1 fix with the same time as the fix before was skipped.');
+    expect(noteText({ kind: 'duplicates', count: 3 })).toBe('3 fixes with the same time as the fix before were skipped.');
+    expect(translate('zh', 'note.duplicates', { n: 3 })).toBe('跳过了 3 个与前一个定位点时间相同的定位点。');
+  });
+
+  it('says a file with positions but no times may be a planned route, rather than that it has no fixes', () => {
+    const route = gpx('<rte><name>Loop</name><rtept lat="40.7681" lon="-73.9812"/><rtept lat="40.7690" lon="-73.9800"/></rte>');
+    expect(parseText(route, 'plan.gpx')).toEqual({ ok: false, file: 'plan.gpx', error: 'noTimes' });
+    expect(parseText(trk('<trkpt lat="40.7681" lon="-73.9812"/><trkpt lat="40.7690" lon="-73.9800"><ele>3</ele></trkpt>'), 'a.gpx'))
+      .toEqual({ ok: false, file: 'a.gpx', error: 'noTimes' });
+    expect(translate('en', 'toast.error.noTimes', { file: 'plan.gpx' })).toBe('plan.gpx has positions but no times: it may be a planned route, not a recorded track.');
+    expect(translate('zh', 'toast.error.noTimes', { file: 'plan.gpx' })).toBe('plan.gpx 有位置但没有时间：它可能是规划的路线，而不是记录的轨迹。');
+    // No positions at all, or times without them, is no fixes.
+    expect(parseText(gpx('<metadata><name>Nothing</name></metadata>'), 'b.gpx')).toEqual({ ok: false, file: 'b.gpx', error: 'empty' });
+    expect(parseText(trk('<trkpt lat="" lon=""><time>2026-06-14T13:05:00Z</time></trkpt><trkpt lat="0" lon="0"/>'), 'c.gpx')).toEqual({ ok: false, file: 'c.gpx', error: 'empty' });
   });
 
   it('reads a time zone given in hours alone', () => {

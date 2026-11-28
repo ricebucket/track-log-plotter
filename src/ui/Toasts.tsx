@@ -1,12 +1,10 @@
 import * as S from '../state/store';
 import { t } from '../state/store';
 import { mapFailed } from '../map/bridge';
+import { APART_M } from '../combine/combine';
 import { IconClose, IconWarn } from './icons';
 import { metresText } from './labels';
 import { focusAfterRender, rowButton } from './hooks';
-
-/** How far apart two logs are, most of the time they share, for Combine to ask whether they are one trip (see combine.ts). */
-const APART_M = 100;
 
 /** Notices after loading: damaged files, files that couldn't be read, the load limit. */
 export function Toasts() {
@@ -48,7 +46,7 @@ export function Toasts() {
 function ComboToast({ notice: n }: { notice: S.ComboNotice }) {
   const dismiss = () => { S.comboNotice.value = null; };
   const text = n.kind === 'zone' ? t('combine.zone', { file: S.nameFor(n.id, n.file) })
-    : n.kind === 'duplicate' ? t('combine.duplicate')
+    : n.kind === 'duplicate' ? (n.pair ? t('combine.duplicateOf', { a: n.pair[0], b: n.pair[1] }) : t('combine.duplicate'))
     : n.kind === 'apart' ? t('combine.apart', { distance: metresText(APART_M) })
     : n.kind === 'full' ? t('combine.full')
     : n.kind === 'tooLong' ? t('combine.tooLong')
@@ -64,7 +62,7 @@ function ComboToast({ notice: n }: { notice: S.ComboNotice }) {
   };
   const combineAnyway = () => {
     // The notice goes as the track is added: the keyboard moves on to its row.
-    const id = S.confirmApart();
+    const id = n.kind === 'zone' ? S.confirmZone() : S.confirmApart();
     if (id) focusAfterRender(() => rowButton(id));
   };
   return (
@@ -72,7 +70,7 @@ function ComboToast({ notice: n }: { notice: S.ComboNotice }) {
       <IconWarn size={16} />
       <span>{text}</span>
       {zoneTrack && <button type="button" class="btn-amber" onClick={showZone}>{t('toast.showDetails')}</button>}
-      {n.kind === 'apart' && <button type="button" class="btn-amber" onClick={combineAnyway}>{t('combine.anyway')}</button>}
+      {(n.kind === 'apart' || (n.kind === 'zone' && n.ids)) && <button type="button" class="btn-amber" onClick={combineAnyway}>{t('combine.anyway')}</button>}
       <button type="button" class="icon-btn" aria-label={t('common.dismiss')} title={t('common.dismiss')} onClick={dismiss}><IconClose size={14} /></button>
     </div>
   );

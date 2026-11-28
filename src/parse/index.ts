@@ -27,6 +27,17 @@ export function detectFormat(text: string, file: string): Format | null {
   return null;
 }
 
+/**
+ * A file's text. A file that starts with a UTF-16 byte-order mark (FF FE or
+ * FE FF, as Windows tools may save a log) is decoded as UTF-16; every other
+ * file as UTF-8.
+ */
+export async function readText(file: Blob): Promise<string> {
+  const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+  const utf16 = head[0] === 0xff && head[1] === 0xfe ? 'utf-16le' : head[0] === 0xfe && head[1] === 0xff ? 'utf-16be' : null;
+  return utf16 ? new TextDecoder(utf16).decode(await file.arrayBuffer()) : file.text();
+}
+
 export function parseText(text: string, file: string, sizeBytes = text.length): ParseResult {
   if (sizeBytes > MAX_BYTES) return { ok: false, file, error: 'tooBig' };
   const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
@@ -34,7 +45,8 @@ export function parseText(text: string, file: string, sizeBytes = text.length): 
   const format = detectFormat(src, file);
   if (!format) return { ok: false, file, error: 'unknownFormat' };
   const parsed = format === 'gpx' ? parseGpx(src) : format === 'fusion' ? parseFusion(src) : parseNmea(src);
-  if (parsed.cols.n === 0) return { ok: false, file, error: 'empty' };
+  // No fixes: say why when the file gives positions without times (a planned route, say).
+  if (parsed.cols.n === 0) return { ok: false, file, error: parsed.problems.some((p) => p.kind === 'noFixes' && p.timeless) ? 'noTimes' : 'empty' };
   checkPlaceholders(parsed);
   const derived = derive(parsed);
   if (derived.hdopRelative) parsed.notes.push({ kind: 'hdopRelative' });

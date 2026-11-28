@@ -70,6 +70,22 @@ describe('map features', () => {
     ]);
   });
 
+  it("draws a track's dot hollow at its nearest fix in a gap, where the fix card says it has no fix near", () => {
+    // The dot stayed solid at the gap's edge, then jumped to the other edge halfway through.
+    const night = load('hudson-overnight.gpx'), t = night.cols.t;
+    const shown = addTracks([], [night]).items, c = ctx([night], true);
+    let g = 0;
+    for (let i = 1; i < night.cols.n - 1; i++) if (t[i + 1] - t[i] > t[g + 1] - t[g]) g = i;
+    expect(t[g + 1] - t[g]).toBeGreaterThan(3_600_000);
+    const dot = (at: number) => buildCursors(shown, {}, at, c).features[0];
+    expect(dot(t[g] + 2000).properties).toMatchObject({ i: g, h: 0 });
+    for (const [at, i] of [[t[g] + 600_000, g], [t[g + 1] - 600_000, g + 1]]) {
+      const d = dot(at);
+      expect(d.properties).toMatchObject({ i, h: 1 });
+      expect(d.geometry.coordinates).toEqual([night.cols.lon[i], night.cols.lat[i]]);
+    }
+  });
+
   it('smooths away one-fix flickers between steps', () => {
     const s = stepsFor(a, 'hdop', buildScale('hdop', [a]));
     for (let i = 1; i < s.length - 1; i++) expect(s[i - 1] === s[i + 1] && s[i] !== s[i - 1]).toBe(false);
@@ -426,8 +442,14 @@ describe("a combined track's logs on the map", () => {
     // Every point of every line is a real position of the phone, and the phone's gaps split it into pieces.
     // Its 35 s and 70 s gaps stay blank; the 8 s one is bridged, as fixes up to 10 s apart are interpolated.
     expect(phoneLines.length).toBeGreaterThan(2);
+    // (Its line may end a second early: with its clock moved by a fraction of a second, its last fix falls between
+    // two of the combined track's seconds. That's its end, not a gap: only a blank it comes back from counts.)
     let gaps = 0;
-    for (let i = 1; i < c.cols.n; i++) if (Number.isNaN(la[i]) && !Number.isNaN(la[i - 1])) gaps++;
+    for (let i = 1; i < c.cols.n; i++) if (Number.isNaN(la[i]) && !Number.isNaN(la[i - 1])) {
+      let j = i;
+      while (j < c.cols.n && Number.isNaN(la[j])) j++;
+      if (j < c.cols.n) gaps++;
+    }
     expect(gaps).toBe(2);
     for (const f of phoneLines) for (const [lon, lat] of f.geometry.coordinates) expect(Number.isFinite(lon) && Number.isFinite(lat)).toBe(true);
   });

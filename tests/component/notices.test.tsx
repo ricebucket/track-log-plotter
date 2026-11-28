@@ -21,7 +21,8 @@ function zoneNotice(...more: string[]) {
   fireEvent.click(rowBox('A'));
   fireEvent.click(rowBox('B'));
   fireEvent.click(within(bar()).getByRole('button', { name: 'Combine' }));
-  expect(S.comboNotice.value).toEqual({ kind: 'zone', id: 'B', file: 'stanford-drive-logger.csv' });
+  // The logs share no time as they are: nothing to combine anyway.
+  expect(S.comboNotice.value).toEqual({ kind: 'zone', id: 'B', file: 'stanford-drive-logger.csv', ids: null });
   expect(zoneToast()).not.toBeNull();
 }
 
@@ -55,12 +56,12 @@ describe("Combine's time zone notice", () => {
     S.addLoaded([load('stanford-drive-car.nmea'), load('roosevelt-island-run.gpx')]);
     render(<App Map={NoMap} />);
     // A notice about a B that has gone, its letter now another file's (as a notice left behind would be).
-    act(() => { S.comboNotice.value = { kind: 'zone', id: 'B', file: 'stanford-drive-logger.csv' }; });
+    act(() => { S.comboNotice.value = { kind: 'zone', id: 'B', file: 'stanford-drive-logger.csv', ids: null }; });
     expect(within(zoneToast()!).queryByRole('button', { name: 'Show properties' })).toBeNull();
-    act(() => { S.comboNotice.value = { kind: 'zone', id: 'C', file: 'stanford-drive-logger.csv' }; });
+    act(() => { S.comboNotice.value = { kind: 'zone', id: 'C', file: 'stanford-drive-logger.csv', ids: null }; });
     expect(within(zoneToast()!).queryByRole('button', { name: 'Show properties' })).toBeNull();
     // The track it names: the button opens its properties.
-    act(() => { S.comboNotice.value = { kind: 'zone', id: 'B', file: 'roosevelt-island-run.gpx' }; });
+    act(() => { S.comboNotice.value = { kind: 'zone', id: 'B', file: 'roosevelt-island-run.gpx', ids: null }; });
     fireEvent.click(within(zoneToast()!).getByRole('button', { name: 'Show properties' }));
     expect(S.page.value).toEqual({ kind: 'details', id: 'B' });
   });

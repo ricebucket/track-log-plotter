@@ -88,6 +88,40 @@ describe('Escape and the explanations', () => {
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
+  it('closes an explanation over a menu first, and the menu with the next Escape', () => {
+    // The My Maps how-to shows while its menu item has the focus: one Escape closed it and the whole menu at once.
+    S.addLoaded([load('central-park-loop.nmea')]);
+    render(<App Map={NoMap} />);
+    const button = screen.getByRole('button', { name: 'Open in Google Maps' });
+    fireEvent.click(button);
+    const myMaps = screen.getByRole('link', { name: /Google My Maps/ });
+    myMaps.focus();
+    fireEvent.focus(myMaps);
+    expect(screen.getByRole('tooltip').textContent).toContain('My Maps');
+    escape(myMaps);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(screen.getByRole('link', { name: /Google My Maps/ })).toBe(myMaps);
+    expect(document.activeElement).toBe(myMaps);
+    escape(myMaps);
+    expect(screen.queryByRole('link', { name: /Google My Maps/ })).toBeNull();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('closes the newest of two open popovers first', () => {
+    // Opened from the keyboard, a track's color sheet and the Options menu can both be open: one Escape closed both.
+    S.addLoaded([load('central-park-loop.nmea')]);
+    render(<App Map={NoMap} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Color/ }));
+    expect(screen.getByRole('dialog', { name: 'Color, halo and timeline' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Options/ }));
+    expect(screen.getByRole('dialog', { name: 'Options' })).toBeTruthy();
+    escape();
+    expect(screen.queryByRole('dialog', { name: 'Options' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Color, halo and timeline' })).toBeTruthy();
+    escape();
+    expect(screen.queryByRole('dialog', { name: 'Color, halo and timeline' })).toBeNull();
+  });
+
   it('keeps select mode while an Escape closes an explanation', () => {
     S.addLoaded([load('central-park-loop.nmea')]);
     render(<App Map={NoMap} />);

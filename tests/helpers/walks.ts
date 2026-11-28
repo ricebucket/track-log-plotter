@@ -8,10 +8,10 @@ import type { LoadedTrack, ParsedTrack } from '../../src/model/types';
 /** Metres per degree of latitude, near New York. */
 export const KY = 110_540;
 
-export interface Walk { offsetM?: number; shiftS?: number; seconds?: number; gap?: [number, number]; hold?: [number, number]; holds?: (i: number) => boolean; holdSpeed?: number; zero?: (i: number) => boolean; creator?: string; hdop?: (i: number) => number; seed?: number; drop?: number[]; speed?: boolean; ele?: number; step?: number; stray?: number }
+export interface Walk { offsetM?: number; shiftS?: number; noise?: number; seconds?: number; gap?: [number, number]; hold?: [number, number]; holds?: (i: number) => boolean; holdSpeed?: number; zero?: (i: number) => boolean; creator?: string; hdop?: (i: number) => number; seed?: number; drop?: number[]; speed?: boolean; ele?: number; step?: number; stray?: number }
 /**
  * A walk at 1.5 m/s, a fix a second, as GPX: east for 150 s, then north (a clock
- * offset only shows where the way turns). `offsetM` puts it that far north;
+ * offset only shows where the way turns), each fix up to `noise` m off (0.8). `offsetM` puts it that far north;
  * `step` keeps a fix every that many seconds; `stray` adds a lone fix that many
  * seconds before the start.
  */
@@ -25,8 +25,9 @@ export function walk(o: Walk = {}): LoadedTrack {
   for (let i = 0; i < (o.seconds ?? 300); i++) {
     // Noise is drawn for every second, so skipping a fix doesn't change the others.
     const east = Math.min(i, 150) * 1.5, north = Math.max(0, i - 150) * 1.5;
-    let lat = 40.7712 + ((o.offsetM ?? 0) + north + rnd() * 0.8) / KY;
-    let lon = -73.9742 + (east + rnd() * 0.8) / (KY * Math.cos((40.7712 * Math.PI) / 180));
+    const noise = o.noise ?? 0.8;
+    let lat = 40.7712 + ((o.offsetM ?? 0) + north + rnd() * noise) / KY;
+    let lon = -73.9742 + (east + rnd() * noise) / (KY * Math.cos((40.7712 * Math.PI) / 180));
     // A logger holding its position: it repeats its last fix (and, some, a speed of 0) until it has a new one.
     const holding = (o.hold && i > o.hold[0] && i < o.hold[1]) || o.holds?.(i);
     if (holding) { lat = lastLat; lon = lastLon; }
@@ -41,6 +42,29 @@ export function walk(o: Walk = {}): LoadedTrack {
   const r = parseText(gpx, `walk-${o.offsetM ?? 0}-${o.seed ?? 1}.gpx`);
   if (!r.ok) throw new Error(r.error);
   return r.track;
+}
+
+/**
+ * A log built straight into columns from a function of the second: `pos(i)` gives metres east and north of a
+ * corner of Central Park, a fix every second from 9:00 UTC on 14 June 2026 (`leadS` later: a clock that fast),
+ * those `keep` keeps. `pos` is called for every second, so leaving fixes out doesn't change the others.
+ */
+export function logAt(n: number, pos: (i: number) => [number, number], o: { leadS?: number; file?: string; keep?: (i: number) => boolean } = {}): LoadedTrack {
+  const b = new ColumnBuilder(), kx = KY * Math.cos((40.7712 * Math.PI) / 180), t0 = Date.UTC(2026, 5, 14, 9, 0, 0) + (o.leadS ?? 0) * 1000;
+  for (let i = 0; i < n; i++) {
+    const [east, north] = pos(i);
+    if (o.keep && !o.keep(i)) continue;
+    b.push({ t: t0 + i * 1000, lat: 40.7712 + north / KY, lon: -73.9742 + east / kx, line: i + 1 });
+  }
+  const p: ParsedTrack = { format: 'gpx', creator: null, name: null, cols: b.build(), flags: [], problems: [], notes: [], fields: ['time', 'position'], lines: n };
+  return { ...p, file: o.file ?? 'log.gpx', sizeBytes: 0, derived: derive(p) };
+}
+
+/** Noise about 1 m across (a sum of uniforms, near normal with sd 1), the same for a seed every run. */
+export function noiseFrom(seed: number): () => number {
+  let s = seed;
+  const u = () => ((s = (s * 16807) % 2147483647) / 2147483647 - 0.5) * 2;
+  return () => (u() + u() + u() + u()) * 0.866;
 }
 
 /**

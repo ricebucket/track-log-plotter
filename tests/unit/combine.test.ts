@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { checkCombine, combineTracks, isCombined, MAX_LOG_SECONDS, recombine, Use, type ComboTrack } from '../../src/combine/combine';
 import type { LoadedTrack } from '../../src/model/types';
 import { load } from '../helpers/fixtures';
-import { KY, loop, walk } from '../helpers/walks';
+import { KY, logAt, loop, noiseFrom, walk } from '../helpers/walks';
 
 const car = load('stanford-drive-car.nmea');
 const phone = load('stanford-drive-phone.gpx');
@@ -38,7 +38,7 @@ describe('combining logs: the instant checks', () => {
   it('takes 2 or 3 logs, never a combined track, and refuses the same recording twice', () => {
     expect(checkCombine([car])).toEqual({ ok: false, reason: 'count' });
     expect(checkCombine([car, phone, logger, walk()])).toEqual({ ok: false, reason: 'count' });
-    expect(checkCombine([car, car])).toEqual({ ok: false, reason: 'duplicate' });
+    expect(checkCombine([car, car])).toEqual({ ok: false, reason: 'duplicate', a: 0, b: 1 });
     const c = combined([car, phone]);
     expect(checkCombine([c, logger])).toEqual({ ok: false, reason: 'combined' });
     expect(checkCombine([car, phone])).toEqual({ ok: true });
@@ -47,7 +47,19 @@ describe('combining logs: the instant checks', () => {
 
   it('asks to check the time zone of a log whose file has none, when the logs barely share time', () => {
     // The logger's CSV is on local time, so read as UTC it lies 7 h early.
-    expect(checkCombine([car, loggerCsv])).toEqual({ ok: false, reason: 'zone', log: 1 });
+    expect(checkCombine([car, loggerCsv])).toEqual({ ok: false, reason: 'zone', log: 1, overlap: false });
+  });
+
+  it("combines anyway once asked to check a time zone, unless the logs share no time at all: there's nothing to combine then", () => {
+    // The zone notice was a dead end: logs sharing a little time, the zone right, and Combine asked again each time.
+    const a = walk({ seed: 2, seconds: 600 }), csvLike = { ...walk({ seed: 3, offsetM: 3, seconds: 600, shiftS: 500 }), clock: 'utc' as const };
+    expect(checkCombine([a, csvLike])).toEqual({ ok: false, reason: 'zone', log: 1, overlap: true });
+    expect(checkCombine([a, csvLike], true)).toEqual({ ok: true });
+    expect(checkCombine([car, loggerCsv], true)).toEqual({ ok: false, reason: 'noOverlap' });
+  });
+
+  it('names the two logs that are one recording, among three', () => {
+    expect(checkCombine([phone, car, car])).toEqual({ ok: false, reason: 'duplicate', a: 1, b: 2 });
   });
 
   it('refuses logs that share no time at all when no time zone can be set', () => {
@@ -65,7 +77,9 @@ describe('combining logs: the instant checks', () => {
 describe('combining logs that span a long time', () => {
   it('lays out only the seconds the logs cover: a stray fix 60 days before adds one second, not 60 days of them', () => {
     const a = walk({ seed: 41 }), b = walk({ seed: 42, offsetM: 3 }), stray = walk({ seed: 42, offsetM: 3, stray: 60 * 86_400 });
-    const plain = combined([a, b]), far = combined([a, stray]);
+    // The stray's log is trusted more, so it keeps its clock and its lone fix its second. (A log whose clock moves
+    // by a fraction of a second places a lone fix on no second at all: it has no other fix to run to.)
+    const plain = combined([a, b], [0.4, 0.6]), far = combined([a, stray], [0.4, 0.6]);
     expect(far.cols.n).toBe(plain.cols.n + 1);
     expect(far.cols.t[0]).toBe(a.cols.t[0] - 60 * 86_400_000);
     for (const k of ['t', 'lat', 'lon', 'speed'] as const) expect(Array.from(far.cols[k].subarray(1))).toEqual(Array.from(plain.cols[k]));
@@ -102,11 +116,19 @@ describe('combining logs: the Stanford drive', () => {
     expect(isCombined(three)).toBe(true);
   });
 
-  it('finds the phone clock 3 s fast, the car keeping its own', () => {
+  it('finds the same clock difference whichever log keeps its clock, but for its sign', () => {
+    // Both logs are compared alike: the car keeping its clock, the phone is 3 s fast; the phone keeping its own, the
+    // car is as much slow.
+    const carKeeps = combined([car, phone]).combo.sources[1].clockS, phoneKeeps = combined([phone, car]).combo.sources[1].clockS;
+    expect(Math.abs(carKeeps + phoneKeeps)).toBeLessThan(0.01);
+  });
+
+  it('finds the phone clock about 3 s fast, the car keeping its own', () => {
     const [c, p, l] = three.combo.sources;
     expect(three.combo.ref).toBe(0);
     expect(c.clockS).toBe(0);
-    expect(p.clockS).toBeCloseTo(3, 5);
+    // The phone's GPS errors move the answer by about a tenth of a second either way.
+    expect(Math.abs(p.clockS - 3)).toBeLessThan(0.15);
     expect(Math.abs(l.clockS)).toBeLessThan(0.2);
   });
 
@@ -160,6 +182,15 @@ describe('combining logs: the Stanford drive', () => {
     expect(three.fields).toContain('ele');
   });
 
+  it("finds the phone's height offset whichever log keeps its clock, even the logger, which has no heights", () => {
+    // Only the pairs with the log keeping its clock were compared: with the logger trusted most, none was found.
+    for (const trust of [[0.2, 0.6, 0.2], [0.2, 0.2, 0.6]]) {
+      const off = recombine(three, trust).combo.eleOffset!;
+      expect(Math.abs(Math.abs(off.m) - 32.4), JSON.stringify(trust)).toBeLessThan(4);
+      expect([off.from, off.to].sort()).toEqual([0, 1]);
+    }
+  });
+
   it('breaks grade and climb where the logs giving the height change, so the 32 m between car and phone never shows as a slope', () => {
     const breaks = three.eleBreak!;
     expect(breaks.reduce((a, b) => a + b, 0)).toBeGreaterThan(3); // the phone's gaps and jump
@@ -202,6 +233,87 @@ describe('combining logs: the Stanford drive', () => {
       expect(again.combo.sources.map((s) => s.share)).toEqual(fresh.combo.sources.map((s) => s.share));
       expect(Array.from(again.eleBreak!)).toEqual(Array.from(fresh.eleBreak!));
     }
+  });
+});
+
+describe('typical errors and shares', () => {
+  // A walk around blocks at 1.4 m/s, turning every 60 s, by loggers each about 1 m out (seconds from 9:00).
+  const path = (i: number): [number, number] => {
+    const D = [[1, 0], [0, 1], [-1, 0], [0, 1]], leg = Math.floor(i / 60);
+    let e = 0, n = 0;
+    for (let k = 0; k < leg; k++) { e += D[k % 4][0] * 84; n += D[k % 4][1] * 84; }
+    return [e + D[leg % 4][0] * 1.4 * (i - leg * 60), n + D[leg % 4][1] * 1.4 * (i - leg * 60)];
+  };
+  const log = (seed: number, o: { keep?: (i: number) => boolean; jump?: [number, number] } = {}) => {
+    const r = noiseFrom(seed);
+    return logAt(600, (i) => { const [e, n] = path(i); return [e + r() + (o.jump && i >= o.jump[0] && i < o.jump[1] ? 40 : 0), n + r()]; }, { keep: o.keep });
+  };
+  const at = (c: ComboTrack, s: number) => c.cols.t.indexOf(Date.UTC(2026, 5, 14, 9, 0, s));
+  const off = (c: ComboTrack, s: number) => { const i = at(c, s), [e, n] = path(s); return metres(c.cols.lat[i], c.cols.lon[i], 40.7712 + n / KY, -73.9742 + e / (KY * Math.cos((40.7712 * Math.PI) / 180))); };
+
+  it("doesn't let one log's jump make both of two equally good logs look bad", () => {
+    // Neither can be left out (they're equally good), so their 20 s 40 m apart counted in the second pass: 7.4 m each.
+    const c = combined([log(11), log(23, { jump: [100, 120] })]);
+    for (const s of c.combo.sources) expect(s.typicalM).toBeLessThan(2);
+  });
+
+  it("doesn't take two of three logs that never meet to agree perfectly: the good log isn't left out for them", () => {
+    // Source 2 has no fixes 250-550 s and jumps 40 m at 100-120 s; source 3 runs only 300-500 s. Their spread came
+    // out 0, so sources 2 and 3 looked perfect (0.5 m) and source 1 bad (1.8 m): at 110 s it was left out, the
+    // track 41 m off the way.
+    const c = combined([log(11), log(23, { keep: (i) => i < 250 || i >= 550, jump: [100, 120] }), log(37, { keep: (i) => i >= 300 && i < 500 })]);
+    for (const s of c.combo.sources) {
+      expect(s.typicalM).toBeGreaterThan(0.9);
+      expect(s.typicalM).toBeLessThan(2);
+    }
+    expect(c.combo.use[0][at(c, 110)]).toBe(Use.Used);
+    // No worse than sources 1 and 2 alone, which can't tell which of them jumped and split the difference.
+    expect(off(c, 110)).toBeLessThan(off(combined([log(11), log(23, { keep: (i) => i < 250 || i >= 550, jump: [100, 120] })]), 110) + 1);
+  });
+
+  it("doesn't let a source at 0% decide which trusted source is left out", () => {
+    // Sources 1 and 2 at 50%, source 3 at 0%; source 2 jumps 40 m at 100-120 s. Source 3 sided with source 1, so
+    // source 2 was left out there: the track was 20 m from where the two trusted sources alone put it. Nor may
+    // source 3 decide through the typical errors it helps work out: by those, source 1 (1.40 m) looked worse than
+    // source 2 (1.14 m), enough to leave source 1 out, and the track followed the jump (41 m off the way).
+    const c = combined([log(11), log(23, { jump: [100, 120] }), log(37)], [0.5, 0.5, 0]);
+    const alone = combined([log(11), log(23, { jump: [100, 120] })]);
+    for (const s of [100, 110, 119]) {
+      const i = at(c, s);
+      expect(c.combo.use.map((u) => u[i])).toEqual([Use.Used, Use.Used, Use.Idle]);
+      expect(c.combo.disagree[i]).toBe(1);
+      expect(Math.abs(off(c, s) - off(alone, s))).toBeLessThan(5);
+    }
+    // The typical errors shown still come from all three.
+    expect(c.combo.sources.map((s) => s.typicalM.toFixed(2))).toEqual(['1.40', '1.14', '1.29']);
+    // With every source trusted, source 3 takes part: source 2 is left out in its jump.
+    expect(combined([log(11), log(23, { jump: [100, 120] }), log(37)]).combo.use[1][at(c, 110)]).toBe(Use.LeftOut);
+  });
+
+  it("doesn't use a source at 0% while a trusted source has a fix: it can't get that one left out", () => {
+    // Source 1 (50%, noisier) jumps 40 m at 300-320 s while source 2 (50%) has no fixes; source 3 is at 0%.
+    // Source 1 was left out for disagreeing with source 3, which was then the only source used.
+    const r = noiseFrom(5);
+    const noisy = logAt(600, (s) => { const [e, n] = path(s); return [e + 2.5 * r() + (s >= 300 && s < 320 ? 40 : 0), n + 2.5 * r()]; });
+    const c = combined([noisy, log(23, { keep: (s) => s < 250 || s >= 350 }), log(37)], [0.5, 0.5, 0]);
+    expect(c.combo.sources[0].typicalM).toBeGreaterThan(1.2 * c.combo.sources[2].typicalM);
+    for (const s of [305, 310, 315]) {
+      expect(c.combo.use[0][at(c, s)]).toBe(Use.Used);
+      expect(c.combo.use[2][at(c, s)]).toBe(Use.Idle);
+    }
+    // Where no trusted source has a fix, source 3 fills in as before.
+    const gap = combined([log(11, { keep: (s) => s < 200 || s >= 230 }), log(23, { keep: (s) => s < 200 || s >= 230 }), log(37)], [0.5, 0.5, 0]);
+    expect(gap.combo.use[2][at(gap, 215)]).toBe(Use.Used);
+  });
+
+  it('gives shares of the whole track, adding up to 100%: a source at 0% counts for the seconds it fills', () => {
+    // Each share was averaged over the seconds its source was used, so both sources here read 100%.
+    const main = walk({ seed: 4, gap: [120, 160] }), helper = walk({ seed: 5, offsetM: 4 });
+    const zero = combined([main, helper], [1, 0]), even = combined([main, helper]);
+    for (const c of [zero, even]) expect(c.combo.sources.reduce((a, s) => a + s.share, 0)).toBeCloseTo(1, 9);
+    const used = Array.from(zero.combo.use[1]).filter((u) => u === Use.Used).length;
+    expect(zero.combo.sources[1].share).toBeCloseTo(used / zero.cols.n, 9);
+    expect(used).toBe(40);
   });
 });
 
@@ -338,23 +450,25 @@ describe('combining logs: corner cases', () => {
     const a = idx(60), am = main.cols.t.findIndex((t) => t === T0 + 60_000);
     expect(metres(c.cols.lat[a], c.cols.lon[a], main.cols.lat[am], main.cols.lon[am])).toBeLessThan(0.01);
     expect(c.combo.use[1][a]).toBe(Use.Idle);
-    // In the main log's gap, the helper fills in.
+    // In the main log's gap, the helper fills in: where it is then, its clock moved by whatever GPS noise makes of two
+    // clocks that agree, so within a few tenths of a metre of its own fix at that second.
     const g = idx(140), gh = helper.cols.t.findIndex((t) => t === T0 + 140_000);
-    expect(metres(c.cols.lat[g], c.cols.lon[g], helper.cols.lat[gh], helper.cols.lon[gh])).toBeLessThan(0.01);
+    expect(metres(c.cols.lat[g], c.cols.lon[g], c.combo.srcLat[1][g], c.combo.srcLon[1][g])).toBeLessThan(0.01);
+    expect(metres(c.cols.lat[g], c.cols.lon[g], helper.cols.lat[gh], helper.cols.lon[gh])).toBeLessThan(0.5);
     expect(c.combo.use[1][g]).toBe(Use.Used);
   });
 
   it('calls two logs with the same fixes the same recording, even with one fix missing', () => {
     const a = walk({ seed: 6 }), b = walk({ seed: 6, drop: [150] });
     expect(checkCombine([a, b])).toEqual({ ok: true });
-    expect(combineTracks([a, b])).toEqual({ ok: false, reason: 'duplicate' });
+    expect(combineTracks([a, b])).toEqual({ ok: false, reason: 'duplicate', a: 0, b: 1 });
   });
 
   it('knows the same recording at a fix every 3, 5 or 10 s, and still combines two loggers 3 m apart at that pace', () => {
     // The fixes taken at the same instant were counted only where the fixes either side came within 4 s.
     for (const step of [3, 5, 10]) {
       const a = walk({ seed: 6, seconds: 900, step });
-      expect(combineTracks([a, walk({ seed: 6, seconds: 900, step, drop: [450] })])).toEqual({ ok: false, reason: 'duplicate' });
+      expect(combineTracks([a, walk({ seed: 6, seconds: 900, step, drop: [450] })])).toEqual({ ok: false, reason: 'duplicate', a: 0, b: 1 });
       expect(combineTracks([a, walk({ seed: 7, seconds: 900, step, offsetM: 3 })]).ok).toBe(true);
     }
   });
@@ -363,7 +477,7 @@ describe('combining logs: corner cases', () => {
     // Only the pairs with the log keeping its clock were checked: trusted most, the other log let the copies through.
     const other = walk({ seed: 9, offsetM: 3, seconds: 299 }), rec = walk({ seed: 6 }), copy = walk({ seed: 6, drop: [150] });
     expect(checkCombine([other, rec, copy])).toEqual({ ok: true });
-    for (const trust of [undefined, [1, 0, 0], [0, 1, 0], [0, 0, 1], [0.6, 0.2, 0.2]]) expect(combineTracks([other, rec, copy], { trust })).toEqual({ ok: false, reason: 'duplicate' });
+    for (const trust of [undefined, [1, 0, 0], [0, 1, 0], [0, 0, 1], [0.6, 0.2, 0.2]]) expect(combineTracks([other, rec, copy], { trust })).toEqual({ ok: false, reason: 'duplicate', a: 1, b: 2 });
   });
 
   it("never gives a position that isn't a number, whatever a log's accuracy says", () => {
@@ -398,7 +512,50 @@ describe('combining logs: corner cases', () => {
     expect(Math.abs(a[0] - 2 / 3)).toBeLessThan(0.05);
   });
 
-  it('corrects a clock a fraction of a second off, in tenths', () => {
+  it('finds a clock offset to the millisecond on logs without noise, however small or large: neither rounded nor skipped', () => {
+    for (const lead of [0.13, 2.37, 4.6]) {
+      const c = combined([walk({ seed: 9, noise: 0 }), walk({ seed: 10, noise: 0, offsetM: 2, shiftS: lead })]);
+      expect(Math.abs(c.combo.sources[1].clockS - lead), `${lead} s`).toBeLessThan(0.002);
+    }
+  });
+
+  it("can't line up the clocks of logs that barely move: there is nothing to time them by, so their times stay as recorded", () => {
+    // A fix every 1000 s, each a few metres on: the gap hardly changes with the clock.
+    const b = loop(300, { stepS: 1000, northM: 3, seed: 2 }), c = combined([loop(300, { stepS: 1000 }), b]);
+    expect(c.combo.sources[1].clockS).toBeNaN();
+    expect(c.cols.t[0]).toBe(b.cols.t[0]);
+  });
+
+  it("can't line up the clocks of loggers standing side by side, each with errors of its own, steady or wandering: noise times nothing", () => {
+    // Noise alone made dips the search took for a clock difference: shifts of up to 5 s, said to be the clocks'.
+    // (Errors the loggers share would time them, as a route does: the seeds give unrelated noise.)
+    const still = (seed: number, sd: number, wander: boolean, eastM: number) => {
+      const r = noiseFrom(seed), a = wander ? Math.exp(-1 / 30) : 0, b = sd * Math.sqrt(1 - a * a);
+      let ex = r() * sd, ey = r() * sd;
+      return logAt(600, () => { ex = a * ex + b * r(); ey = a * ey + b * r(); return [eastM + ex, ey]; });
+    };
+    const found: string[] = [];
+    for (const [sd, wander] of [[1, false], [3, false], [3, true]] as const) for (let seed = 1; seed <= 10; seed++) {
+      const c = combined([still(seed * 7 + 1, sd, wander, 0), still(seed * 13 + 1000, sd, wander, 3)]).combo.sources[1].clockS;
+      if (!Number.isNaN(c)) found.push(`${sd} m${wander ? ' wandering' : ''}, seed ${seed}: ${c.toFixed(2)} s`);
+    }
+    expect(found).toEqual([]);
+  });
+
+  it("can't line up the clocks of logs going straight at a steady speed: a clock off there looks the same as a log lying behind", () => {
+    const r = noiseFrom(4), s = noiseFrom(9);
+    const a = logAt(600, (i) => [1.4 * i + r(), r()]), b = logAt(600, (i) => [1.4 * i + s(), 3 + s()], { leadS: 2.4 });
+    expect(combined([a, b]).combo.sources[1].clockS).toBeNaN();
+  });
+
+  it("says a clock beyond the 5 s searched can't be lined up, rather than that it agrees", () => {
+    // The least spread lies at the end of the search, or past it: the shift found was 0, shown as clocks that agree.
+    for (const lead of [5.6, 8, 10]) expect(combined([walk({ seed: 9 }), walk({ seed: 10, offsetM: 2, shiftS: lead })]).combo.sources[1].clockS, `${lead} s`).toBeNaN();
+    const fast = { ...phone, cols: { ...phone.cols, t: phone.cols.t.map((v) => v + 4000) } };
+    expect(combined([car, fast]).combo.sources[1].clockS).toBeNaN();
+  });
+
+  it('corrects a clock a fraction of a second off', () => {
     const a = walk({ seed: 9 }), b = walk({ seed: 10, offsetM: 2, shiftS: 0.7 });
     const c = combined([a, b]);
     // A walk at 1.5 m/s: 0.7 s is about 1 m along the way, enough for the fit to see on 300 fixes.

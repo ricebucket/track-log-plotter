@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
-// The fix card on the map: where it goes near the timeline, and the motion
-// readings it lists for a second with very many of them.
+// The fix card on the map: where it goes near the timeline, that a phone has
+// none, and the motion readings it lists for a second with very many of them.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/preact';
 import { App } from '../../src/ui/App';
 import * as S from '../../src/state/store';
 import { tipXY } from '../../src/map/bridge';
 import { hint } from '../../src/ui/Computed';
+import { NARROW } from '../../src/ui/hooks';
 import type { LoadedTrack } from '../../src/model/types';
 import { load } from '../helpers/fixtures';
 
@@ -55,6 +56,21 @@ describe('fix card position', () => {
     act(() => { S.timelineMin.value = true; tipXY.value = { x: 400, y: 700 }; });
     expect(document.querySelector('.timeline')).toBeNull();
     expect(parseFloat(card().style.top)).toBe(window.innerHeight - 10 - 300);
+  });
+});
+
+describe('the fix card on a phone', () => {
+  it("isn't drawn at all, so the map's moves and playback don't redraw it: the timeline's graphs show the values", () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation((q: string) => ({
+      matches: q === NARROW, media: q, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    }) as unknown as MediaQueryList);
+    S.addLoaded([load('central-park-loop.nmea')]);
+    S.cursorT.value = S.items.value[0].track.cols.t[100];
+    tipXY.value = { x: 400, y: 300 };
+    render(<App Map={NoMap} />);
+    expect(card()).toBeNull();
+    expect(document.querySelector('.lane[data-role="color"] .lane-value')!.textContent).toMatch(/km\/h$/);
   });
 });
 

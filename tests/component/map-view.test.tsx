@@ -13,6 +13,7 @@ import { BASEMAPS, PLAIN, ZH_LABEL, basemapFailed, plainStyle } from '../../src/
 import { MapTools } from '../../src/ui/MapTools';
 import * as S from '../../src/state/store';
 import { tipXY } from '../../src/map/bridge';
+import { NARROW } from '../../src/ui/hooks';
 import { parseText } from '../../src/parse/index';
 import type { LoadedTrack } from '../../src/model/types';
 import { load, ROOT } from '../helpers/fixtures';
@@ -254,6 +255,31 @@ describe('cursor dots on the map', () => {
     expect(map.data['tlp-log-cursors'][off - 1]).toEqual({ type: 'FeatureCollection', features: [] });
     for (let k = 1; k <= 5; k++) act(() => { S.cursorT.value = c.t[200 + k]; });
     expect(sends('tlp-log-cursors')).toBe(off);
+  });
+});
+
+describe("the fix card's place on the map", () => {
+  it('is not worked out on a phone, which has no fix card, and is once the window is wider than a phone', async () => {
+    let phone = true;
+    const widened: (() => void)[] = [];
+    vi.spyOn(window, 'matchMedia').mockImplementation((q: string) => ({
+      get matches() { return q === NARROW && phone; }, media: q, onchange: null,
+      addEventListener: (_: string, fn: () => void) => { if (q === NARROW) widened.push(fn); },
+      removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    }) as unknown as MediaQueryList);
+    S.addLoaded([walk('a.gpx')]);
+    const map = await mount();
+    const project = vi.spyOn(map, 'project');
+    // The cursor moves (playback, the timeline) and the map moves: no place to work out.
+    act(() => { S.cursorT.value = S.items.value[0].track.cols.t[100]; });
+    act(() => map.fire('move'));
+    expect(project).not.toHaveBeenCalled();
+    expect(tipXY.value).toBeNull();
+    // A phone turned on its side, or a window widened: the card goes to its fix at once.
+    phone = false;
+    act(() => { for (const fn of widened) fn(); });
+    expect(project).toHaveBeenCalledTimes(1);
+    expect(tipXY.value).toEqual({ x: 300, y: 300 });
   });
 });
 

@@ -72,3 +72,65 @@ export async function openAs(page: Page, name: string, as: string) {
 export async function wideFont(page: Page) {
   await page.addStyleTag({ content: ":root { --font: 'DejaVu Sans', Verdana, sans-serif !important; }" });
 }
+
+/**
+ * The color Safari on an iPhone (26 and later) gives the strip behind its bar at the top or bottom of the page, by the
+ * rule read from WebKit (LocalFrameView::fixedContainerEdges): the element at the edge's middle, 4px in; the first
+ * fixed or sticky element there or above it; that one's background color, if it spans 90% of the width and is over
+ * 10px deep, blended over the page's background when under 75% opaque. With nothing fixed there, the strip is the
+ * page's background. These tests run in Chromium, so they check the rule's inputs rather than Safari's strip.
+ */
+export async function safariStrip(page: Page, edge: 'top' | 'bottom'): Promise<{ color: string; from: string }> {
+  return page.evaluate((side) => {
+    const pageColor = getComputedStyle(document.body).backgroundColor;
+    for (let el = document.elementFromPoint(innerWidth / 2, side === 'top' ? 4 : innerHeight - 4); el && el !== document.documentElement; el = el.parentElement) {
+      const cs = getComputedStyle(el);
+      if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
+      const r = el.getBoundingClientRect(), from = el.classList[0] ?? el.tagName;
+      if (r.width < 0.9 * (innerWidth - 8) || r.height <= 10) return { color: 'narrow', from };
+      const alpha = Number(cs.backgroundColor.match(/[\d.]+/g)?.[3] ?? 1);
+      return { color: alpha < 0.75 ? pageColor : cs.backgroundColor, from };
+    }
+    return { color: pageColor, from: 'body' };
+  }, edge);
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+
+/** The area two boxes share (px²): 0 when they don't overlap. */
+export function overlap(a: Box, b: Box): number {
+  const w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  return Math.max(0, w) * Math.max(0, h);
+}
+
+/**
+ * Touches the screen at (x, y) and slides the finger `up` px upwards, through the browser's own touch input
+ * (as a phone's screen sends it), so CSS touch-action decides whether it scrolls. Phone project only.
+ */
+export async function swipeUp(page: Page, x: number, y: number, up: number) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+  for (let k = 1; k <= 10; k++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y - (up * k) / 10 }] });
+    await page.waitForTimeout(16);
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+}
+
+/** Turns the map with two fingers twisting about (x, y), as on a phone. Phone project only. */
+export async function twist(page: Page, x: number, y: number, degrees = 60) {
+  const cdp = await page.context().newCDPSession(page);
+  const fingers = (deg: number) => [0, 180].map((a, id) => {
+    const r = ((a + deg) * Math.PI) / 180;
+    return { x: x + 70 * Math.cos(r), y: y + 70 * Math.sin(r), id };
+  });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: fingers(0) });
+  for (let k = 1; k <= 15; k++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: fingers((degrees * k) / 15) });
+    await page.waitForTimeout(16);
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+}

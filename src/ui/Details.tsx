@@ -13,6 +13,7 @@ import { explain } from './computedText';
 import { isCombined, type ComboTrack } from '../combine/combine';
 import { SourceBadge, sourceNames, sourceTitles } from './Combined';
 import { focusAfterRender, rowButton } from './hooks';
+import { PanelHideOnPhone } from './PanelHide';
 import { SPEED_UNITS } from '../parse/units';
 
 /**
@@ -80,6 +81,8 @@ function DetailsTop({ id }: { id: string }) {
     <div class="details-top">
       <button ref={back} type="button" class="btn-outline small" onClick={goBack}><IconBack />{t('common.back')}</button>
       <span class="eyebrow">{t('track.details')}</span>
+      <span class="grow" />
+      <PanelHideOnPhone />
     </div>
   );
 }
@@ -155,15 +158,7 @@ export function Details({ id }: { id: string }) {
       </section>
       {isCombined(tr) && <CombinedSections track={tr} names={sourceNames(tr)} titles={sourceTitles(item, tr)} />}
 
-      <section class="details-sec" aria-labelledby="d-fields">
-        <h3 id="d-fields">{t('details.fields')}</h3>
-        <ul class="chips">
-          {FIELDS.map((f) => {
-            const has = tr.fields.includes(f);
-            return <li key={f} class={has ? 'chip is-on' : 'chip'}><span aria-hidden="true">{has ? '✓' : '–'}</span>{t(`field.${f}`)}<span class="sr-only">{has ? t('details.present') : t('details.absent')}</span></li>;
-          })}
-        </ul>
-      </section>
+      <FieldChips tr={tr} />
 
       {tr.flags.length > 0 && (
         <section class="details-sec" aria-labelledby="d-flags">
@@ -191,6 +186,24 @@ export function Details({ id }: { id: string }) {
   );
 }
 
+/** Which fields the track has: its file's, or a combined track's own (what its sources give it). */
+function FieldChips({ tr }: { tr: TrackItem['track'] }) {
+  const [title, present, absent] = isCombined(tr)
+    ? [t('details.fieldsTrack'), t('details.presentTrack'), t('details.absentTrack')]
+    : [t('details.fields'), t('details.present'), t('details.absent')];
+  return (
+    <section class="details-sec" aria-labelledby="d-fields">
+      <h3 id="d-fields">{title}</h3>
+      <ul class="chips">
+        {FIELDS.map((f) => {
+          const has = tr.fields.includes(f);
+          return <li key={f} class={has ? 'chip is-on' : 'chip'}><span aria-hidden="true">{has ? '✓' : '–'}</span>{t(`field.${f}`)}<span class="sr-only">{has ? present : absent}</span></li>;
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function eleOffsetNote(o: { from: number; to: number; m: number }, names: readonly string[]): string {
   return t('details.eleOffset', { a: names[o.from], b: names[o.to], m: `${fmtEle(Math.abs(o.m), S.units.value, S.locale.value)} ${unitOf('ele')}`, dir: o.m < 0 ? t('details.lower') : t('details.higher') });
 }
@@ -201,7 +214,9 @@ function CombinedSections({ track, names, titles }: { track: ComboTrack; names: 
   const { sources, ref } = track.combo;
   const clock = (k: number, s: number) => {
     const p = { k: names[k], r: names[ref], s: fmtNum(Math.abs(s), loc, 1, 1) };
-    return s > 0 ? t('details.clockFast', p) : s < 0 ? t('details.clockSlow', p) : t('details.clockSame', p);
+    // Said in tenths of a second: a shift that rounds to 0.0 s reads as clocks that agree. NaN: it couldn't be lined up.
+    if (Number.isNaN(s)) return t('details.clockUnknown', p);
+    return Math.abs(s) < 0.05 ? t('details.clockSame', p) : s > 0 ? t('details.clockFast', p) : t('details.clockSlow', p);
   };
   return (
     <>

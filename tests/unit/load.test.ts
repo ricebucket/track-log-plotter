@@ -26,6 +26,17 @@ describe('loading files', () => {
     expect(parseText('x', 'big.gpx', MAX_BYTES + 1)).toEqual({ ok: false, file: 'big.gpx', error: 'tooBig' });
   });
 
+  it('says an NMEA log with positions but no times has no times, not merely no fixes', () => {
+    const sentence = (body: string) => `$${body}*${nmeaChecksum(body)}`;
+    // GLL as NMEA before version 2 writes it: a position, without a time.
+    const gll = (lat: string) => sentence(`GPGLL,${lat},N,07358.87242,W`);
+    expect(parseText([gll('4046.08572'), gll('4046.08600'), ''].join('\n'), 'old.nmea')).toEqual({ ok: false, file: 'old.nmea', error: 'noTimes' });
+    // Times without positions, and positions a sentence calls void, are no fixes.
+    const gga = sentence('GPGGA,130500.00,,,,,0,00,99.99,,,,,,');
+    const voidRmc = sentence('GPRMC,,V,4046.08572,N,07358.87242,W,,,140626,,,N');
+    expect(parseText([gga, voidRmc, ''].join('\n'), 'void.nmea')).toEqual({ ok: false, file: 'void.nmea', error: 'empty' });
+  });
+
   it('accepts a UTF-8 byte-order mark', () => {
     const r = parseText('﻿' + fixture('roosevelt-island-run.gpx'), 'bom.gpx');
     expect(r.ok).toBe(true);

@@ -11,6 +11,7 @@ import { tipXY } from '../../src/map/bridge';
 import { isCombined, type ComboTrack } from '../../src/combine/combine';
 import { parseText } from '../../src/parse/index';
 import type { LoadedTrack } from '../../src/model/types';
+import { walk as walkLog } from '../helpers/walks';
 import { load } from '../helpers/fixtures';
 
 const NoMap = () => <div data-testid="map" />;
@@ -157,6 +158,45 @@ describe('combining', () => {
     fireEvent.click(within(toast).getByRole('button', { name: 'Show properties' }));
     expect(S.page.value).toEqual({ kind: 'details', id: 'B' });
     expect(S.selecting.value).toBe(false);
+  });
+
+  it('combines anyway, once asked to check a time zone, logs that share some time: the zone may well be right', () => {
+    // The notice was a dead end: Combine asked again each time, whatever zone was picked.
+    // The same walk, the second log from 500 s on: they share its last 100 s.
+    const a = walkLog({ seed: 2, seconds: 600 }), b = { ...walkLog({ seed: 3, offsetM: 3, seconds: 1100, gap: [0, 500] }), clock: 'utc' as const };
+    S.addLoaded([a, b]);
+    render(<App Map={NoMap} />);
+    tick('A', 'B');
+    fireEvent.click(combineBtn());
+    const toast = document.querySelector('.toast[data-combo="zone"]') as HTMLElement;
+    expect(S.items.value).toHaveLength(2);
+    fireEvent.click(within(toast).getByRole('button', { name: 'Combine anyway' }));
+    expect(S.items.value).toHaveLength(3);
+    expect(isCombined(S.items.value[2].track)).toBe(true);
+    expect(S.comboNotice.value).toBeNull();
+  });
+
+  it("doesn't offer to combine anyway logs that share no time, or once the ticks change", () => {
+    S.addLoaded([load('stanford-drive-car.nmea'), load('stanford-drive-logger.csv')]);
+    render(<App Map={NoMap} />);
+    tick('A', 'B');
+    fireEvent.click(combineBtn());
+    expect(within(document.querySelector('.toast[data-combo="zone"]') as HTMLElement).queryByRole('button', { name: 'Combine anyway' })).toBeNull();
+    S.resetForTests();
+    S.addLoaded([walkLog({ seed: 2, seconds: 600 }), { ...walkLog({ seed: 3, offsetM: 3, seconds: 600, shiftS: 500 }), clock: 'utc' as const }, walkLog({ seed: 4, offsetM: 5 })]);
+    act(() => { S.startSelect(); S.toggleTick('A'); S.toggleTick('B'); S.combineTicked(); });
+    expect(S.comboNotice.value).toMatchObject({ kind: 'zone', ids: ['A', 'B'] });
+    act(() => S.toggleTick('C'));
+    expect(S.comboNotice.value).toMatchObject({ kind: 'zone', id: 'B', ids: null });
+  });
+
+  it('names the two tracks that are one recording, when three are ticked', () => {
+    // The same fixes at the same moments, but for one: found when lining the clocks up.
+    S.addLoaded([walkLog({ seed: 9, offsetM: 3, seconds: 299 }), walkLog({ seed: 6 }), walkLog({ seed: 6, drop: [150] })]);
+    render(<App Map={NoMap} />);
+    tick('A', 'B', 'C');
+    fireEvent.click(combineBtn());
+    expect(document.querySelector('.toast[data-combo="duplicate"]')?.textContent).toContain('Tracks B and C are the same recording');
   });
 
   it('warns about the same recording twice instead of combining it', () => {
@@ -344,12 +384,35 @@ describe("the combined track's card", () => {
     expect(tip.querySelector('.tip-amber')?.textContent).toMatch(/^source 2 reads 3\d m lower than source 1 throughout$/);
   });
 
+  it('says two clocks agree when the shift found rounds to 0.0 s', () => {
+    S.addLoaded([walkLog({ seed: 9, noise: 0 }), walkLog({ seed: 10, noise: 0, offsetM: 2, shiftS: 0.02 })]);
+    render(<App Map={NoMap} />);
+    tick('A', 'B');
+    fireEvent.click(combineBtn());
+    // The shift is found and applied, but said in tenths it's none.
+    expect(combo().combo.sources[1].clockS).toBeGreaterThan(0.01);
+    const row = document.querySelector('.track-row[data-track="C"]') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: /^Properties/ }));
+    expect(screen.getByText("Source 2's clock agrees with source 1's.")).toBeTruthy();
+  });
+
+  it("says a clock couldn't be lined up, rather than that it agrees, when nothing times it", () => {
+    // 8 s apart, past the 5 s searched: the shift found was 0, said as clocks that agree.
+    S.addLoaded([walkLog({ seed: 9 }), walkLog({ seed: 10, offsetM: 2, shiftS: 8 })]);
+    render(<App Map={NoMap} />);
+    tick('A', 'B');
+    fireEvent.click(combineBtn());
+    const row = document.querySelector('.track-row[data-track="C"]') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: /^Properties/ }));
+    expect(screen.getByText("Source 2's clock couldn't be lined up with source 1's: its times are as recorded.")).toBeTruthy();
+  });
+
   it('lists its sources, their clocks and the height difference on its Properties page', () => {
     const row = combinedCarAndPhone();
     fireEvent.click(within(row).getByRole('button', { name: /^Properties/ }));
     const logs = screen.getByRole('region', { name: 'Sources' });
     expect(within(logs).getAllByRole('listitem').map((li) => li.querySelector('.combo-file')!.textContent)).toEqual(['stanford-drive-car.nmea', 'stanford-drive-phone.gpx']);
-    expect(screen.getByText("Source 2's clock read 3.0 s ahead of source 1's: its times were made 3.0 s earlier to match.")).toBeTruthy();
+    expect(screen.getByText(/^Source 2's clock read (2\.9|3\.0|3\.1) s ahead of source 1's: its times were made \1 s earlier to match\.$/)).toBeTruthy();
     expect(document.querySelector('.amber-note')?.textContent).toMatch(/^Source 2 reads a steady 3\d m lower than source 1: one of them probably gives heights above the ellipsoid/);
   });
 });
@@ -360,12 +423,12 @@ describe('the timeline', () => {
     render(<App Map={NoMap} />);
     const t = S.items.value[0].track.cols.t, n = t.length;
     act(() => { S.timelineView.value = [t[0], t[Math.floor(n / 4)]]; });
-    expect(screen.queryByRole('button', { name: 'Show the cursor' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Go to the fix' })).toBeNull();
     act(() => { S.cursorT.value = t[Math.floor((n * 3) / 4)]; });
-    fireEvent.click(screen.getByRole('button', { name: 'Show the cursor' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Go to the fix' }));
     const [a, b] = S.timelineView.value!;
     expect(b - a).toBe(t[Math.floor(n / 4)] - t[0]);
     expect(Math.abs((a + b) / 2 - S.cursorT.value!)).toBeLessThan(1000);
-    expect(screen.queryByRole('button', { name: 'Show the cursor' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Go to the fix' })).toBeNull();
   });
 });

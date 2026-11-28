@@ -1,5 +1,5 @@
 import type { Columns, FieldKey, Flag, FixQuality, Note, ParsedTrack, Problem } from '../model/types';
-import { ColumnBuilder, keepFixes, present } from './columns';
+import { ColumnBuilder, isPosition, keepFixes, present } from './columns';
 import { scanXml } from './xml';
 import { inferSpeedUnit, UNIT_FACTOR } from './units';
 import { numAt } from './scan';
@@ -122,6 +122,8 @@ export function parseGpx(text: string): ParsedTrack {
   let points = 0;
   let timeless = 0;
   let timelessWpt = 0;
+  /** A track or route point had a position but no time (a planned route has nothing else). */
+  let untimed = false;
   let noZone = false;
   let voidCount = 0;
   let anyKnownSpeed = false;
@@ -195,7 +197,11 @@ export function parseGpx(text: string): ParsedTrack {
         pt = null;
         if (!q) return;
         if (q.fixq === -1) { if (!ptRoute) voidCount++; return; }
-        if (!Number.isFinite(q.t)) { if (!ptRoute) timeless++; return; }
+        if (!Number.isFinite(q.t)) {
+          if (!ptRoute) timeless++;
+          if (isPosition(q.lat, q.lon)) untimed = true;
+          return;
+        }
         const speed = Number.isFinite(q.speedKnown) ? q.speedKnown : q.speedVendor;
         (ptRoute ? rb : b).push({
           t: q.t, lat: q.lat, lon: q.lon, ele: q.ele, hdop: q.hdop, vdop: q.vdop, pdop: q.pdop, sats: q.sats,
@@ -280,7 +286,7 @@ export function parseGpx(text: string): ParsedTrack {
   else if (!result.complete || stack.length > 0) problems.push({ kind: 'unclosed', kept: cols.n });
   if (src.counts.backwards) problems.push({ kind: 'backwards', count: src.counts.backwards, line: src.counts.backwardsLine });
   if (src.counts.jumps) problems.push({ kind: 'jump', count: src.counts.jumps, line: src.counts.jumpLine });
-  if (cols.n === 0) problems.push({ kind: 'noFixes' });
+  if (cols.n === 0) problems.push(untimed ? { kind: 'noFixes', timeless: true } : { kind: 'noFixes' });
 
   if (noZone) notes.push({ kind: 'noZone' });
   const noPosition = voidCount + src.counts.noPosition;

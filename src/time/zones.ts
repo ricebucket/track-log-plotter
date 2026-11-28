@@ -1,4 +1,4 @@
-/** 'local' (this computer's zone), 'utc', or any IANA zone id. */
+/** 'local' (this device's zone), 'utc', or any IANA zone id. */
 export type ZoneSel = string;
 
 const cache = new Map<string, Intl.DateTimeFormat>();
@@ -13,7 +13,7 @@ function dtf(locale: string, zone: ZoneSel, opts: Intl.DateTimeFormatOptions): I
   return f;
 }
 
-/** The IANA id to pass to Intl, or undefined for this computer's zone. */
+/** The IANA id to pass to Intl, or undefined for this device's zone. */
 export function zoneId(z: ZoneSel): string | undefined {
   if (z === 'local') return undefined;
   if (z === 'utc') return 'UTC';
@@ -90,10 +90,26 @@ export function clockShift(t: number, from: ZoneSel, to: ZoneSel): number {
   return u - t;
 }
 
-/** "America/New_York" → "New York". */
+/**
+ * Zones a browser may list under a place's old name (Chromium keeps the ids
+ * its time zone data started with), and the ids they have now.
+ */
+const RENAMED: Record<string, string> = {
+  'Asia/Calcutta': 'Asia/Kolkata', 'Europe/Kiev': 'Europe/Kyiv', 'Asia/Saigon': 'Asia/Ho_Chi_Minh',
+  'Asia/Katmandu': 'Asia/Kathmandu', 'Asia/Rangoon': 'Asia/Yangon', 'America/Godthab': 'America/Nuuk',
+  'Atlantic/Faeroe': 'Atlantic/Faroe', 'Pacific/Truk': 'Pacific/Chuuk', 'Pacific/Ponape': 'Pacific/Pohnpei',
+  'Pacific/Enderbury': 'Pacific/Kanton',
+};
+
+/** A zone's id as it is written now: "Asia/Kolkata" for the "Asia/Calcutta" a browser may list. */
+export function zoneName(id: string): string {
+  return RENAMED[id] ?? id;
+}
+
+/** "America/New_York" → "New York"; a place's current name, "Kolkata" for "Asia/Calcutta". */
 export function zoneCity(id: string): string {
   if (id === 'UTC' || id === 'utc') return 'UTC';
-  const last = id.split('/').pop() ?? id;
+  const last = zoneName(id).split('/').pop() ?? id;
   return last.replace(/_/g, ' ');
 }
 
@@ -123,17 +139,20 @@ export function allZones(): string[] {
   }
 }
 
-export interface ZoneOption { id: string; city: string; offset: string; minutes: number }
+/** A zone in the list: `id` is the browser's, `name` the id as written now (see zoneName). */
+export interface ZoneOption { id: string; name: string; city: string; offset: string; minutes: number }
 
-/** Zones matching a search, sorted by offset, with offsets on the given date. */
+/** Zones matching a search (by the browser's id or the current one, or by offset), sorted by offset, with offsets on the given date. */
 export function searchZones(query: string, t: number): ZoneOption[] {
   const q = query.trim().toLowerCase().replace(/\s+/g, ' ');
+  const has = (s: string) => s.toLowerCase().replace(/_/g, ' ').includes(q);
   const out: ZoneOption[] = [];
   for (const id of allZones()) {
+    const name = zoneName(id);
     const city = zoneCity(id);
     const offset = offsetLabel(t, id);
-    if (q && !id.toLowerCase().replace(/_/g, ' ').includes(q) && !offset.toLowerCase().replace('−', '-').includes(q.replace('−', '-'))) continue;
-    out.push({ id, city, offset, minutes: offsetMinutes(t, id) });
+    if (q && !has(id) && !(name !== id && has(name)) && !offset.toLowerCase().replace('−', '-').includes(q.replace('−', '-'))) continue;
+    out.push({ id, name, city, offset, minutes: offsetMinutes(t, id) });
   }
   return out.sort((a, b) => a.minutes - b.minutes || a.city.localeCompare(b.city));
 }

@@ -258,9 +258,9 @@ dmg.splice(46, 1);
 dmg[60] = '\u0000ÿ' + dmg[60]; // stray bytes before a sentence
 const back = toNmea([{ ...ride[10], t: ride[10].t }], { rand: rng(107), gsv: false });
 dmg.splice(90, 0, ...back.slice(0, 2)); // a fix from earlier: time runs backwards
-const spike = toNmea([{ ...ride[100], lat: ride[100].lat + 0.2 }], { rand: rng(108), gsv: false });
+const spike = toNmea([{ ...ride[100], lat: ride[100].lat - 0.2 }], { rand: rng(108), gsv: false });
 const k = dmg.findIndex((l) => l.includes(new Date(ride[100].t).toISOString().slice(11, 19).replace(/:/g, '')));
-dmg.splice(k, 3, ...spike.slice(0, 3)); // one fix jumps 22 km away
+dmg.splice(k, 3, ...spike.slice(0, 3)); // one fix jumps 22 km south (still in New York City)
 write('tests/fixtures/damaged.nmea', dmg.join('\n') + '\n' + dmg[5].slice(0, 30));
 
 // A GPX file that stops in the middle of a track point.

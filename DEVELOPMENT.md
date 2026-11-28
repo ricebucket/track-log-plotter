@@ -26,12 +26,13 @@ You need a current Node.js: the minimum is `engines` in package.json.
 | `npm run preview` | Serves the production build |
 | `npm test` | Unit and component tests (Vitest) |
 | `npm run test:watch` | The same, rerunning on every change |
-| `npm run test:coverage` | Unit and component tests with coverage |
+| `npm run test:coverage` | Unit and component tests with coverage (without the timing tests) |
+| `npm run test:perf` | The timing tests alone, without coverage (as CI runs them) |
 | `npm run test:e2e` | Browser tests (Playwright), desktop and phone |
 | `npm run lint` | oxlint |
 | `npm run typecheck` | TypeScript |
 | `npm run check` | Lint, type check, tests, build and browser tests, in that order |
-| `npm run fixtures` | Regenerates the test fixtures and the sample ride |
+| `npm run fixtures` | Regenerates the sample tracks and the New York City fixtures that `scripts/make-fixtures.mjs` makes (see [Tests](#tests)) |
 | `npm run screenshots` | Regenerates the README screenshots (see [Screenshots](#screenshots)) |
 | `npm run video` | Records the README demo videos (see [Demo videos](#demo-videos)) |
 
@@ -66,7 +67,7 @@ GitHub runs the same checks on every push to `main`. The Pages deploy, though, r
 4. **Keep personal data out:**
 
    - `git status` must show nothing from `local-tracks/`, and no other track files of your own.
-   - Test data must be synthetic. Every coordinate must lie in New York City. The privacy test fails the run otherwise, so step 1 already checks this.
+   - Test data must be synthetic, and every coordinate must lie in New York City; only the synthetic Stanford drive's files may lie at Stanford. The privacy test fails the run otherwise, so step 1 already checks this.
 
 5. **Review the change:** run `git status` and `git diff --stat`, and read the diff.
 
@@ -85,15 +86,16 @@ GitHub runs the same checks on every push to `main`. The Pages deploy, though, r
 - **Unit tests:** `tests/unit/`.
 - **Component tests:** `tests/component/`. They run in happy-dom, with a stand-in for the map.
 - **Performance tests:** `tests/unit/performance.test.ts` and a browser test in `tests/e2e/app.spec.ts` time a synthetic 10-hour Columbus Fusion log with motion data (36,000 fixes, 360,000 readings, about 10 MB). They time reading it, drawing its acceleration timeline, zooming, and the fix card's lookup. Each test fails if the work takes longer than its time limit. The limits are several times what a laptop needs, so a slow CI machine passes, but a change that makes the work grow out of hand fails. A slowdown of two or three times still passes, so compare the printed timings before and after changing that code. They print their timings when run with `npx vitest run tests/unit/performance.test.ts --silent=false`.
-- **Fixtures:** `tests/fixtures/`. They are synthetic New York City tracks made by `scripts/make-fixtures.mjs`, as is the sample ride in `public/sample/`. A privacy test fails the run if any coordinate in the repository falls outside New York City.
-- **Browser tests:** `tests/e2e/`. They run against the built site at http://localhost:4173/track-log-plotter/, in two Playwright projects: `desktop` (Desktop Chrome) and `phone` (Pixel 7).
+- **Fixtures:** `tests/fixtures/`, all synthetic. Most are New York City tracks made by `scripts/make-fixtures.mjs`, which also makes the sample tracks in `public/sample/`. The Lower Manhattan walk and the Stanford drive come from generators in the git-ignored `track-generator/` folder; only the tracks they write are committed.
+- **Privacy test:** `tests/unit/privacy.test.ts` reads every file git would commit, the fixtures and sample tracks included, and fails the run if a coordinate in any of them falls outside New York City. It reads the text itself, so a waypoint without a time, a file's bounds or a skipped line counts too, in each notation: GPX attributes, `lat:` and `lon:` names, NMEA, N/S/E/W letters and number pairs. Only the Stanford drive's fixtures and its test may lie at Stanford.
+- **Browser tests:** `tests/e2e/`. They run against the built site at http://localhost:4621/track-log-plotter/, in two Playwright projects: `desktop` (Desktop Chrome) and `phone` (Pixel 7).
   - Every request to another host (tiles, styles, fonts) is answered locally, so no test touches a real server.
   - Chromium gets WebGL through SwiftShader; `playwright.config.ts` sets the flags.
   - After a failure, `npx playwright show-report` shows what went wrong, and traces are saved in `test-results/`.
 
 ## Screenshots
 
-Each README shows a desktop screenshot from `docs/screenshots/`, in its own language. Screenshots always show the synthetic sample ride.
+Each README shows a desktop screenshot from `docs/screenshots/`, in its own language. Screenshots always show the synthetic sample tracks.
 
 When the interface changes visibly:
 
@@ -117,7 +119,7 @@ The recording draws the pointer, the rings where it clicks, the red boxes and th
 
 Two GitHub Actions workflows run on GitHub:
 
-- **CI** (`.github/workflows/ci.yml`) runs on every push and pull request: install, lint, type check, tests with coverage, build, then the browser tests.
+- **CI** (`.github/workflows/ci.yml`) runs on every push and pull request: install, lint, type check, tests with coverage, the timing tests, build, then the browser tests.
 - **Deploy to GitHub Pages** (`.github/workflows/pages.yml`) runs on every push to `main`: install, unit and component tests, build, then publishes `dist/`.
 
 The deploy doesn't wait for CI. That's why every check has to pass locally first (see [Before every push](#before-every-push)).
@@ -144,6 +146,10 @@ Keep your own track logs in `local-tracks/` to try them in the app.
 
 1. Copy `src/i18n/en-US.json` to a new file and translate it.
 2. Register it in `src/i18n/i18n.ts` (`LANGS`, `LOCALE` and `MESSAGES`).
-3. Add a README and a development guide in that language.
+3. Teach the places that are set up for Chinese alone about the new language:
+   - `initialLang()` in `src/i18n/i18n.ts`, which picks the first language from the address, the saved choice or the browser's languages;
+   - the clock format, `fmtClock()` in `src/time/zones.ts`: 24-hour in Chinese, 12-hour otherwise;
+   - the map labels, `applyLabels()` in `src/map/MapView.tsx`, which switches the vector basemaps' place names to Chinese.
+4. Add a README and a development guide in that language.
 
 The tests check that every message exists in every language with the same placeholders.

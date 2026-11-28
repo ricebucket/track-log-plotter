@@ -1,5 +1,5 @@
 import type { ParseResult } from '../model/types';
-import { MAX_BYTES, parseText } from './index';
+import { MAX_BYTES, parseText, readText } from './index';
 
 // A small pool of parsing workers, so several files are read at the same time.
 interface PoolWorker { w: Worker; busy: number }
@@ -54,12 +54,18 @@ function pickWorker(): PoolWorker | null {
   return best;
 }
 
-/** Parses one file in a worker, or on this thread where workers aren't available. */
+/**
+ * Parses one file in a worker, or on this thread where workers aren't
+ * available. Either way it always resolves: a file that can't be read, or
+ * that the reader fails on, is 'unreadable', and the other files still load.
+ */
 export function parseFile(file: File): Promise<ParseResult> {
   const pw = pickWorker();
   if (!pw) {
     if (file.size > MAX_BYTES) return Promise.resolve({ ok: false, file: file.name, error: 'tooBig' });
-    return file.text().then((t) => parseText(t, file.name, file.size), () => ({ ok: false, file: file.name, error: 'unreadable' }));
+    return readText(file)
+      .then((t) => parseText(t, file.name, file.size))
+      .catch((): ParseResult => ({ ok: false, file: file.name, error: 'unreadable' }));
   }
   const id = nextId++;
   pw.busy++;

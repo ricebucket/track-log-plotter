@@ -38,10 +38,16 @@ type F32Key = 'ele' | 'speed' | 'course' | 'hdop' | 'vdop' | 'pdop' | 'sats' | '
 /** A value for a measurement column: NaN for anything missing or not finite. */
 const val = (v: number | undefined): number => (Number.isFinite(v) ? (v as number) : NaN);
 
-function grown<T extends Float64Array | Float32Array | Int32Array | Int8Array | Uint8Array>(a: T, cap: number): T {
+/** A copy of a typed array with room for `cap` values. */
+export function grown<T extends Float64Array | Float32Array | Int32Array | Int8Array | Uint8Array>(a: T, cap: number): T {
   const b = new (a.constructor as new (n: number) => T)(cap);
   b.set(a);
   return b;
+}
+
+/** A position on the Earth, and not the 0, 0 some loggers write without a fix (NaN fails both comparisons). */
+export function isPosition(lat: number, lon: number): boolean {
+  return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(lat === 0 && lon === 0);
 }
 
 /**
@@ -87,8 +93,7 @@ export class ColumnBuilder {
 
   push(f: FixInput): boolean {
     if (!Number.isFinite(f.t)) return false;
-    // Not finite or off the Earth (NaN fails both comparisons), or the 0, 0 some loggers write without a fix.
-    if (!(Math.abs(f.lat) <= 90 && Math.abs(f.lon) <= 180) || (f.lat === 0 && f.lon === 0)) { this.counts.noPosition++; return false; }
+    if (!isPosition(f.lat, f.lon)) { this.counts.noPosition++; return false; }
     const n = this.n;
     if (n > 0) {
       const lastT = this.t[n - 1];

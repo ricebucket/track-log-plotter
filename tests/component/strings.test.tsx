@@ -103,3 +103,22 @@ describe("the fix card's readings of a crowded second", () => {
     expect(readings.parentElement!.querySelector('dt')!.textContent).toBe('All 10 readings in this second, lowest first, with the median and the strongest highlighted');
   });
 });
+
+describe("a combined track's properties", () => {
+  it("name its fields as the track's own, not a file's, in each language", () => {
+    S.addLoaded([load('stanford-drive-car.nmea'), load('stanford-drive-phone.gpx')]);
+    render(<App Map={NoMap} />);
+    act(() => { S.startSelect(); S.toggleTick('A'); S.toggleTick('B'); S.combineTicked(); });
+    act(() => S.openDetails('C'));
+    const said = () => new Set([...document.querySelectorAll('#d-fields + .chips .sr-only')].map((s) => s.textContent));
+    expect(screen.getByRole('heading', { name: 'Fields in this track' })).toBeTruthy();
+    expect(said()).toEqual(new Set(['in this track', 'not in this track']));
+    act(() => { S.lang.value = 'zh'; });
+    expect(screen.getByRole('heading', { name: '此轨迹中的字段' })).toBeTruthy();
+    expect(said()).toEqual(new Set(['此轨迹中有', '此轨迹中没有']));
+    // A track read from a file still names the file.
+    act(() => { S.lang.value = 'en'; S.openDetails('A'); });
+    expect(screen.getByRole('heading', { name: 'Fields in this file' })).toBeTruthy();
+    expect(said()).toEqual(new Set(['in this file', 'not in this file']));
+  });
+});

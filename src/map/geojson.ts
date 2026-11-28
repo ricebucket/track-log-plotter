@@ -3,6 +3,7 @@
 import type { Columns, LoadedTrack, MeasureKey } from '../model/types';
 import type { TrackItem } from '../state/logic';
 import { nearestIndex } from '../state/logic';
+import { hasFixNear } from '../state/inspect';
 import { haversine } from '../derive/geo';
 import { FORMAT_SHAPE } from '../color/shapes';
 import { stepOf, valueAt, type Scale } from '../color/scale';
@@ -224,7 +225,9 @@ export function buildCursors(items: TrackItem[], offsets: Record<string, number>
       const k = drawnSteps(it.track, it.color, ctx.scaleFor(it.track, it.color))[i];
       col = k >= 0 ? colors[Math.min(k, colors.length - 1)] : ctx.dark ? UNKNOWN.dark : UNKNOWN.light;
     }
-    out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lon[i], c.lat[i]] }, properties: { id: it.id, i, c: col, z: it.id === ctx.selectedId ? 2 : 1 } });
+    // In a gap (no fix near, as the fix card says), hollow at the nearest fix: h 1.
+    const h = hasFixNear(it.track, tt) ? 0 : 1;
+    out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lon[i], c.lat[i]] }, properties: { id: it.id, i, c: col, z: it.id === ctx.selectedId ? 2 : 1, h } });
   }
   return fc(out);
 }

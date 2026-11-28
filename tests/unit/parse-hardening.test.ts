@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { scanXml } from '../../src/parse/xml';
 import { parseGpx } from '../../src/parse/gpx';
 import { nmeaChecksum, parseNmea } from '../../src/parse/nmea';
+import { parseText } from '../../src/parse/index';
 import type { ParseResult } from '../../src/model/types';
 
 const gpxDoc = (body: string) => `<?xml version="1.0"?><gpx version="1.1" creator="Test" xmlns="http://www.topografix.com/GPX/1/1"><trk>${body}</trk></gpx>`;
@@ -80,7 +81,68 @@ describe('the reading workers', () => {
     await listeners[0]({ data: { id: 7, file: new File([gpxDoc(`<trkseg>${trkpt(0)}${trkpt(1)}</trkseg>`)], 'walk.gpx') } });
     expect(posted).toEqual([[{ id: 7, res: { ok: false, file: 'walk.gpx', error: 'unreadable' } }, []]]);
   });
+
+  it('read a file saved as UTF-16, either byte order, as the text it holds', async () => {
+    const listeners: ((e: { data: unknown }) => Promise<void>)[] = [];
+    const posted: { id: number; res: ParseResult }[] = [];
+    vi.stubGlobal('self', {
+      addEventListener: (_type: string, fn: (e: { data: unknown }) => Promise<void>) => listeners.push(fn),
+      postMessage: (m: { id: number; res: ParseResult }) => posted.push(m),
+    });
+    vi.resetModules();
+    await import('../../src/parse/worker');
+    const gpx = gpxDoc(`<trkseg>${trkpt(0)}${trkpt(1)}${trkpt(2)}</trkseg>`);
+    await listeners[0]({ data: { id: 1, file: utf16(gpx, 'walk.gpx') } });
+    await listeners[0]({ data: { id: 2, file: utf16(NMEA_TEXT, 'walk.nmea', true) } });
+    expect(posted.map((m) => (m.res.ok ? m.res.track.cols.n : m.res.error))).toEqual([3, 6]);
+    expect(posted.map((m) => m.res.ok && m.res.track.format)).toEqual(['gpx', 'nmea']);
+    // The same file in UTF-8 reads the same.
+    const plain = parseText(gpx, 'walk.gpx');
+    expect(posted[0].res.ok && plain.ok && Array.from(posted[0].res.track.cols.t)).toEqual(plain.ok && Array.from(plain.track.cols.t));
+  });
+
+  it('read a UTF-16 file on this thread too, where there are no workers', async () => {
+    vi.stubGlobal('Worker', undefined);
+    vi.resetModules();
+    const { parseFile } = await import('../../src/parse/client');
+    const r = await parseFile(utf16(NMEA_TEXT, 'walk.nmea'));
+    expect(r.ok && r.track.cols.n).toBe(6);
+    const be = await parseFile(utf16(gpxDoc(`<trkseg>${trkpt(0)}${trkpt(1)}</trkseg>`), 'walk.gpx', true));
+    expect(be.ok && be.track.cols.n).toBe(2);
+  });
+
+  it('count a file the reader fails on as unreadable on this thread too, and read the others', async () => {
+    // As a worker does: one file's failure doesn't lose every file opened with it.
+    vi.stubGlobal('Worker', undefined);
+    vi.doMock('../../src/parse/index', async (importOriginal) => {
+      const real = await importOriginal<typeof import('../../src/parse/index')>();
+      return { ...real, parseText: (text: string, file: string, size?: number) => { if (file === 'bad.gpx') throw new Error('the reader failed'); return real.parseText(text, file, size); } };
+    });
+    vi.resetModules();
+    try {
+      const { parseFile } = await import('../../src/parse/client');
+      const gpx = gpxDoc(`<trkseg>${trkpt(0)}${trkpt(1)}</trkseg>`);
+      const results = await Promise.all([parseFile(new File([gpx], 'walk.gpx')), parseFile(new File([gpx], 'bad.gpx'))]);
+      expect(results[0].ok && results[0].track.cols.n).toBe(2);
+      expect(results[1]).toEqual({ ok: false, file: 'bad.gpx', error: 'unreadable' });
+    } finally {
+      vi.doUnmock('../../src/parse/index');
+    }
+  });
 });
+
+/** A text saved as UTF-16 with its byte-order mark: little-endian (FF FE) or big-endian (FE FF). */
+function utf16(text: string, name: string, bigEndian = false): File {
+  const bytes = new Uint8Array(2 + text.length * 2);
+  bytes[0] = bigEndian ? 0xfe : 0xff;
+  bytes[1] = bigEndian ? 0xff : 0xfe;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i), lo = c & 0xff, hi = c >> 8;
+    bytes[2 + 2 * i] = bigEndian ? hi : lo;
+    bytes[3 + 2 * i] = bigEndian ? lo : hi;
+  }
+  return new File([bytes], name);
+}
 
 /** The scanner's events, as short strings. */
 function events(src: string) {
@@ -133,6 +195,8 @@ const fixes = (text: string) => {
   const c = parseNmea(text).cols;
   return [c.t, c.lat, c.lon, c.ele, c.sats, c.hdop, c.speed, c.course].map((a) => Array.from(a));
 };
+/** The six seconds as a file, with CRLF line breaks. */
+const NMEA_TEXT = SENTENCES.join('\r\n') + '\r\n';
 
 describe('NMEA line breaks', () => {
   it('end a line at CR, LF or CRLF, so files with any of them read alike and without problems', () => {
@@ -195,5 +259,66 @@ describe('NMEA fixes without a usable position', () => {
     const p = parseNmea([zero, north, rmc(2), ''].join('\n'));
     expect(p.cols.n).toBe(1);
     expect(p.notes).toContainEqual({ kind: 'void', count: 2 });
+  });
+});
+
+describe('NMEA stray bytes', () => {
+  const clean = SENTENCES.join('\n') + '\n';
+  /** The file with `stray` put into line 7 (the RMC of the fourth second) at `at`. */
+  const withStray = (at: number, stray: string) => SENTENCES.map((l, i) => (i === 6 ? l.slice(0, at) + stray + l.slice(at) : l)).join('\n') + '\n';
+
+  it('take a stray byte out wherever it is, and count its line as garbage', () => {
+    // A byte that can never be in NMEA, in the sentence's name, a field, the checksum or after it: the line
+    // is read without it. Inside a sentence, a tab or another kind of space is one too.
+    const line = SENTENCES[6], star = line.lastIndexOf('*');
+    for (const at of [1, 9, star - 1, star + 1, star + 2]) {
+      for (const stray of ['\u0000', '\u007f', '\u00ff', '\u0085', '\t', '\u00a0', '\u2028', '\ud83d\ude00']) {
+        const where = `${JSON.stringify(stray)} at ${at}`;
+        expect(parseNmea(withStray(at, stray)).problems, where).toEqual([{ kind: 'garbage', count: 1, line: 7 }]);
+        expect(fixes(withStray(at, stray)), where).toEqual(fixes(clean));
+      }
+    }
+    // Before the $, any byte but space; after the checksum, any byte but a plain space, a tab too, as the
+    // reader has always read them.
+    const outside: [number, string[]][] = [[0, ['\u0000', '\u007f', '\u00ff', '\u0085']], [line.length, ['\u0000', '\u007f', '\u00ff', '\u0085', '\t', '\u00a0']]];
+    for (const [at, strays] of outside) {
+      for (const stray of strays) {
+        const where = `${JSON.stringify(stray)} at ${at}`;
+        expect(parseNmea(withStray(at, stray)).problems, where).toEqual([{ kind: 'garbage', count: 1, line: 7 }]);
+        expect(fixes(withStray(at, stray)), where).toEqual(fixes(clean));
+      }
+    }
+  });
+
+  it('take a stray byte out of sentences glued together, and read the lines around them as they are', () => {
+    for (const glue of ['\u0000', ' \u00ff ', '\t']) {
+      const lines = [...SENTENCES.slice(0, 6), SENTENCES[6] + glue + SENTENCES[7], ...SENTENCES.slice(8)];
+      const p = parseNmea(lines.join('\n') + '\n');
+      expect(p.problems, JSON.stringify(glue)).toEqual([{ kind: 'glued', count: 1, line: 7 }, { kind: 'garbage', count: 1, line: 7 }]);
+      expect(fixes(lines.join('\n') + '\n')).toEqual(fixes(clean));
+      expect(Array.from(p.cols.line)).toEqual([1, 3, 5, 7, 8, 10]);
+    }
+  });
+});
+
+describe('NMEA fix quality', () => {
+  /** One second: RMC with a mode letter and GGA with a fix quality ('' for none). */
+  const second = (i: number, q: number | '', mode: string) => [
+    s(`GNRMC,${hms(i)},A,${lat(i)},N,07358.87242,W,1.0,45.0,140626,,,${mode},V`),
+    s(`GNGGA,${hms(i)},${lat(i)},N,07358.87242,W,${q},09,0.9,25.4,M,-32.6,M,,`),
+  ];
+  const quality = (...seconds: string[][]) => Array.from(parseNmea(seconds.flat().join('\n') + '\n').cols.fixq);
+
+  it('counts estimated, manual and simulated positions as of unknown quality, not as GPS fixes', () => {
+    // GGA quality 6 (estimated, dead reckoning), 7 (entered by hand) and 8 (simulated); 1 is a GPS fix.
+    expect(quality(second(0, 6, 'A'), second(1, 7, 'A'), second(2, 8, 'A'), second(3, 1, 'A'))).toEqual([0, 0, 0, 1]);
+    // The RMC modes E, M and S say the same.
+    expect(quality(second(0, '', 'E'), second(1, '', 'M'), second(2, '', 'S'), second(3, '', 'A'))).toEqual([0, 0, 0, 1]);
+    // Whichever of the two sentences says so.
+    expect(quality(second(0, 1, 'E'), second(1, 2, 'S'), second(2, 2, 'D'))).toEqual([0, 0, 2]);
+    // They are positions all the same: kept, without a fix quality to color by.
+    const p = parseNmea(second(0, 6, 'E').join('\n') + '\n');
+    expect(p.cols.n).toBe(1);
+    expect(p.fields).not.toContain('fix');
   });
 });

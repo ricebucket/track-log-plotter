@@ -11,6 +11,7 @@ import { boundsIn, boundsOf, buildCursors, buildFixPoints, buildFlags, buildGaps
 import { CASING, GAP, LEFT_OUT } from '../color/palettes';
 import { traceShape, type BadgeShape } from '../color/shapes';
 import { mapApi, mapFailed, tipXY } from './bridge';
+import { NARROW } from '../ui/hooks';
 
 export { mapApi, mapFailed, tipXY };
 
@@ -110,8 +111,10 @@ function addOwnLayers(map: MlMap) {
   // Dots for tracks too small to see at this zoom; clicking one zooms to it.
   map.addLayer({ id: 'tlp-mark', type: 'symbol', source: 'tlp-marks', layout: { 'icon-image': ['get', 'icon'], 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
   map.addLayer({ id: 'tlp-mark-text', type: 'symbol', source: 'tlp-marks', layout: { 'text-field': ['get', 'id'], 'text-font': TEXT_FONT, 'text-size': 12, 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#ffffff' } });
-  map.addLayer({ id: 'tlp-cursor-ring', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 10, 'circle-color': '#ffffff' } });
-  map.addLayer({ id: 'tlp-cursor', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 7, 'circle-color': ['get', 'c'], 'circle-stroke-color': '#101820', 'circle-stroke-width': 3 } });
+  // Each shown track's dot at the cursor; hollow (h) at its nearest fix where it has no fix near then, in a gap.
+  const hollow = ['==', ['get', 'h'], 1];
+  map.addLayer({ id: 'tlp-cursor-ring', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 10, 'circle-color': '#ffffff', 'circle-opacity': ['case', hollow, 0, 1] as never, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': ['case', hollow, 2, 0] as never } });
+  map.addLayer({ id: 'tlp-cursor', type: 'circle', source: 'tlp-cursors', layout: { 'circle-sort-key': ['get', 'z'] }, paint: { 'circle-radius': 7, 'circle-color': ['get', 'c'], 'circle-opacity': ['case', hollow, 0, 1] as never, 'circle-stroke-color': '#101820', 'circle-stroke-width': 3 } });
   // The logs' dots at the cursor: hollow with a red ring where a log was left out.
   map.addLayer({
     id: 'tlp-log-cursor', type: 'circle', source: 'tlp-log-cursors',
@@ -240,10 +243,12 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     countStale = true;
   };
 
+  // A phone has no fix card (see App): where it would go isn't worked out at every move of the map either.
+  const narrow = typeof matchMedia === 'function' ? matchMedia(NARROW) : null;
   const placeTip = () => {
     const sel = S.cursorItem.value;
     const t = S.cursorT.value;
-    if (!sel || !sel.vis || t === null) { tipXY.value = null; return; }
+    if (narrow?.matches || !sel || !sel.vis || t === null) { tipXY.value = null; return; }
     const cols = sel.track.cols;
     const tt = S.trackTime(sel.id, t);
     if (tt < cols.t[0] - 5000 || tt > cols.t[cols.n - 1] + 5000) { tipXY.value = null; return; }
@@ -275,6 +280,9 @@ function start(ml: MapLibre, container: HTMLDivElement): () => void {
     ready.value = true;
   });
   map.on('move', placeTip);
+  // From a phone's width to a wider one (a phone turned, a window widened): the card shows at once, at its fix.
+  narrow?.addEventListener?.('change', placeTip);
+  disposers.push(() => narrow?.removeEventListener?.('change', placeTip));
   map.on('zoomend', () => {
     zoomedIn.value = map.getZoom() >= FIX_DATA_ZOOM;
     zoomStep.value = Math.round(map.getZoom() * 4) / 4;

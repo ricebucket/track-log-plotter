@@ -9,6 +9,7 @@ import { hint } from '../../src/ui/Computed';
 import { drawnSteps } from '../../src/map/geojson';
 import { palette } from '../../src/color/palettes';
 import { load } from '../helpers/fixtures';
+import { NARROW } from '../../src/ui/hooks';
 
 const NoMap = () => <div data-testid="map" />;
 
@@ -29,14 +30,18 @@ describe('empty state', () => {
     expect(screen.getByRole('heading', { name: 'Plot your GPS track logs' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Open tracks/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try the samples' })).toBeTruthy();
-    expect(screen.getByText('GPX')).toBeTruthy();
-    expect(screen.getByText('NMEA')).toBeTruthy();
   });
 
-  it('shows each file format\'s badge shape as a key', () => {
+  it('doesn\'t say which file types it reads, in either language', () => {
+    // The start card used to end with a "Supports GPX · NMEA · Columbus Fusion" row and name them in its text.
     render(<App Map={NoMap} />);
-    const pills = [...document.querySelectorAll('.supports .pill')];
-    expect(pills.map((p) => [p.textContent, p.querySelector('.badge-shape')!.classList[1]])).toEqual([['GPX', 'circle'], ['NMEA', 'square'], ['Columbus Fusion', 'hexagon']]);
+    const card = () => document.querySelector('.empty-card')!.textContent!;
+    expect(card()).toContain('Open your GPS track logs');
+    expect(card()).not.toMatch(/GPX|NMEA|Fusion|CSV|Supports/);
+    fireEvent.click(screen.getByRole('button', { name: /Options/ }));
+    fireEvent.click(screen.getByRole('button', { name: '中文' }));
+    expect(card()).toContain('打开你的 GPS 轨迹记录');
+    expect(card()).not.toMatch(/GPX|NMEA|Fusion|CSV|支持/);
   });
 
   it('switches the whole interface to Chinese from the Options menu', () => {
@@ -51,6 +56,33 @@ describe('empty state', () => {
 });
 
 describe('tracks panel', () => {
+  it("gives a phone's whole sheet to the list: no title bar, and Minimize at the right of each page's top row", () => {
+    // The dark title bar took a row of a small screen, and its icon didn't read as Minimize.
+    vi.spyOn(window, 'matchMedia').mockImplementation((q: string) => ({
+      matches: q === NARROW, media: q, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    }) as unknown as MediaQueryList);
+    try {
+      loadFixtures('central-park-loop.nmea');
+      render(<App Map={NoMap} />);
+      expect(document.querySelector('.panel-head')).toBeNull();
+      // The app's name stays the page's heading, for screen readers.
+      expect(screen.getByRole('heading', { level: 1, name: 'Track Log Plotter' }).classList.contains('sr-only')).toBe(true);
+      const hide = () => screen.getByRole('button', { name: 'Minimize the panel' });
+      expect(hide().closest('.sec-head')).toBeTruthy();
+      expect(hide().previousElementSibling?.id).toBe('tlp-add');
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+      expect(hide().previousElementSibling?.textContent).toBe('Done');
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      fireEvent.click(screen.getByRole('button', { name: /^Properties/ }));
+      expect(hide().closest('.details-top')).toBeTruthy();
+      fireEvent.click(hide());
+      expect(S.panelMin.value).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('lists loaded tracks and flags the damaged one', () => {
     loadFixtures('central-park-loop-truncated.nmea', 'central-park-loop-vendor.gpx');
     render(<App Map={NoMap} />);
@@ -206,7 +238,7 @@ describe('tracks panel', () => {
       S.setMeasure('A', 'color', 'none');
       S.setMeasure('A', 'halo', 'off');
     });
-    expect(apply.getAttribute('title')).toBe('Every track: plain lines, no halo');
+    expect(apply.getAttribute('title')).toBe('Every track: one color, no halo');
   });
 
   it('shows dates for a log that spans two days', () => {

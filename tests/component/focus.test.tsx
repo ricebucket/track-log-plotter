@@ -40,6 +40,20 @@ describe('the focus after an action', () => {
     expect(document.activeElement!.closest('.track-row')!.getAttribute('data-track')).toBe('B');
   });
 
+  it('starts on the color measure as the settings sheet opens, even with the halo measure listed above it', () => {
+    S.addLoaded([load('central-park-loop.nmea')]);
+    render(<App Map={NoMap} />);
+    // Speed, on the halo, is the first row; Elevation, on the color, comes after it.
+    act(() => { S.setMeasure('A', 'color', 'ele'); S.setMeasure('A', 'halo', 'speed'); });
+    press(screen.getByRole('button', { name: /^Color/ }));
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Elevation as the line color' }));
+    // A one-color line: None, in the last row.
+    act(() => { S.picker.value = null; });
+    act(() => { S.setMeasure('A', 'color', 'none'); });
+    act(() => { S.picker.value = { id: 'A' }; });
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'One color for the line' }));
+  });
+
   it('goes to the next row after a track is removed from its card, the one before after the last, then to Open tracks', () => {
     S.addLoaded([load('central-park-loop.nmea'), load('roosevelt-island-run.gpx'), load('lower-manhattan-walk.gpx')]);
     render(<App Map={NoMap} />);

@@ -43,6 +43,18 @@ describe('time zones', () => {
     const sorted = searchZones('', t);
     for (let i = 1; i < sorted.length; i++) expect(sorted[i].minutes).toBeGreaterThanOrEqual(sorted[i - 1].minutes);
   });
+
+  it('names places as they are called now, and finds them by either name', () => {
+    // Chromium (and Node) list these zones under the place's old name: Asia/Calcutta, Europe/Kiev…
+    const renamed = [
+      ['Calcutta', 'Kolkata'], ['Kiev', 'Kyiv'], ['Saigon', 'Ho Chi Minh'], ['Katmandu', 'Kathmandu'], ['Rangoon', 'Yangon'],
+      ['Godthab', 'Nuuk'], ['Faeroe', 'Faroe'], ['Truk', 'Chuuk'], ['Ponape', 'Pohnpei'], ['Enderbury', 'Kanton'],
+    ];
+    for (const [old, now] of renamed) for (const q of [old, now]) expect(searchZones(q, t).map((z) => z.city), q).toEqual([now]);
+    const listed = allZones().find((z) => z === 'Asia/Calcutta' || z === 'Asia/Kolkata');
+    expect(searchZones('kolkata', t).map((z) => [z.id, z.name])).toEqual([[listed, 'Asia/Kolkata']]);
+    expect([zoneCity('Asia/Calcutta'), zoneCity('Asia/Kolkata'), zoneCity('Europe/Kiev')]).toEqual(['Kolkata', 'Kolkata', 'Kyiv']);
+  });
 });
 
 describe('formatting', () => {

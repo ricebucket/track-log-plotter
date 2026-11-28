@@ -1,6 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const port = 4173;
+// Not Vite's preview port (4173), which other projects on the same computer use: with a server already on the
+// port, the tests below would run against it (reuseExistingServer).
+const port = 4621;
 const base = `http://localhost:${port}/track-log-plotter/`;
 
 export default defineConfig({

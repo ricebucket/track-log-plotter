@@ -26,12 +26,13 @@
 | `npm run preview` | 预览正式版本 |
 | `npm test` | 单元测试和组件测试（Vitest） |
 | `npm run test:watch` | 同上，每次修改后自动重新运行 |
-| `npm run test:coverage` | 单元测试和组件测试，并统计覆盖率 |
+| `npm run test:coverage` | 单元测试和组件测试，并统计覆盖率（不含计时测试） |
+| `npm run test:perf` | 单独运行计时测试，不统计覆盖率（CI 也是这样运行） |
 | `npm run test:e2e` | 浏览器测试（Playwright），包括桌面和手机 |
 | `npm run lint` | oxlint 代码检查 |
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm run check` | 依次运行代码检查、类型检查、测试、构建和浏览器测试 |
-| `npm run fixtures` | 重新生成测试数据和示例骑行 |
+| `npm run fixtures` | 重新生成示例轨迹，以及由 `scripts/make-fixtures.mjs` 生成的纽约市测试数据（见[测试](#测试)） |
 | `npm run screenshots` | 重新生成 README 中的截图（见[截图](#截图)） |
 | `npm run video` | 重新录制 README 中的演示视频（见[演示视频](#演示视频)） |
 
@@ -66,7 +67,7 @@
 4. **不要提交个人数据：**
 
    - `git status` 中不能出现 `local-tracks/` 里的任何文件，也不能有你自己的其他轨迹文件。
-   - 测试数据必须是合成的，所有坐标都必须位于纽约市内。否则隐私测试会失败，所以第 1 步已经包含这项检查。
+   - 测试数据必须是合成的，所有坐标都必须位于纽约市内；只有合成的斯坦福行车数据可以位于斯坦福。否则隐私测试会失败，所以第 1 步已经包含这项检查。
 
 5. **检查改动：** 运行 `git status` 和 `git diff --stat`，并阅读改动内容。
 
@@ -84,16 +85,17 @@
 
 - **单元测试：** `tests/unit/`。
 - **组件测试：** `tests/component/`。在 happy-dom 中运行，地图用替身代替。
-- **性能测试：** `tests/unit/performance.test.ts` 以及 `tests/e2e/app.spec.ts` 中的一个浏览器测试，用一个合成的 10 小时 Columbus Fusion 运动数据记录（36,000 个定位点、360,000 次读数，约 10 MB）计时：读取文件、绘制加速度时间轴、缩放，以及定位点信息卡查找读数。每项时限都是笔记本电脑所需时间的数倍，因此较慢的 CI 机器也能通过，但如果改动让耗时失控就会失败。运行 `npx vitest run tests/unit/performance.test.ts --silent=false` 可以看到计时结果。
-- **测试数据：** `tests/fixtures/`。都是由 `scripts/make-fixtures.mjs` 生成的纽约市合成轨迹，`public/sample/` 中的示例骑行也是。如果仓库中有任何坐标落在纽约市以外，隐私测试就会失败。
-- **浏览器测试：** `tests/e2e/`。针对 http://localhost:4173/track-log-plotter/ 上构建好的网站运行，分为两个 Playwright 项目：`desktop`（Desktop Chrome）和 `phone`（Pixel 7）。
+- **性能测试：** `tests/unit/performance.test.ts` 以及 `tests/e2e/app.spec.ts` 中的一个浏览器测试，用一个合成的 10 小时 Columbus Fusion 运动数据记录（36,000 个定位点、360,000 次读数，约 10 MB）计时：读取文件、绘制加速度时间轴、缩放，以及定位点信息卡查找读数。每项测试的耗时超过其时限就会失败。这些时限都是笔记本电脑所需时间的数倍，因此较慢的 CI 机器也能通过，但如果改动让耗时失控就会失败。慢两三倍仍能通过，所以修改这部分代码时，请比较修改前后打印出的计时。运行 `npx vitest run tests/unit/performance.test.ts --silent=false` 可以看到计时结果。
+- **测试数据：** `tests/fixtures/`，全部是合成的。大部分是由 `scripts/make-fixtures.mjs` 生成的纽约市轨迹，`public/sample/` 中的示例轨迹也由它生成。曼哈顿下城的步行轨迹和斯坦福行车来自被 Git 忽略的 `track-generator/` 文件夹中的生成脚本，只提交它们写出的轨迹。
+- **隐私测试：** `tests/unit/privacy.test.ts` 会读取 Git 将要提交的每个文件（包括测试数据和示例轨迹），只要其中有坐标落在纽约市以外，测试就会失败。它读取的是文件文本本身，所以没有时间的航点、文件中的范围（bounds）或被跳过的行也都算在内，每种写法都会检查：GPX 属性、`lat:` 和 `lon:` 名称、NMEA、N/S/E/W 字母以及数字对。只有斯坦福行车的测试数据及其测试可以位于斯坦福。
+- **浏览器测试：** `tests/e2e/`。针对 http://localhost:4621/track-log-plotter/ 上构建好的网站运行，分为两个 Playwright 项目：`desktop`（Desktop Chrome）和 `phone`（Pixel 7）。
   - 对其他主机的请求（瓦片、样式、字体）都在本地应答，所以测试不会访问真实的服务器。
   - Chromium 通过 SwiftShader 使用 WebGL，相关参数已在 `playwright.config.ts` 中设置。
   - 测试失败后，`npx playwright show-report` 会显示出错的地方，跟踪记录保存在 `test-results/` 中。
 
 ## 截图
 
-每个 README 都展示一张电脑截图，存放在 `docs/screenshots/`，语言与该 README 相同。截图只展示合成的示例骑行。
+每个 README 都展示一张电脑截图，存放在 `docs/screenshots/`，语言与该 README 相同。截图只展示合成的示例轨迹。
 
 界面有明显变化时：
 
@@ -117,7 +119,7 @@
 
 GitHub 上运行两个 GitHub Actions 工作流：
 
-- **CI**（`.github/workflows/ci.yml`）在每次推送和拉取请求时运行：安装依赖、代码检查、类型检查、带覆盖率的测试、构建，然后运行浏览器测试。
+- **CI**（`.github/workflows/ci.yml`）在每次推送和拉取请求时运行：安装依赖、代码检查、类型检查、带覆盖率的测试、计时测试、构建，然后运行浏览器测试。
 - **Deploy to GitHub Pages**（`.github/workflows/pages.yml`）在每次推送到 `main` 时运行：安装依赖、单元测试和组件测试、构建，然后发布 `dist/`。
 
 发布流程不会等待 CI。正因如此，推送前必须先在本地通过全部检查（见[每次推送之前](#每次推送之前)）。
@@ -144,6 +146,10 @@ GitHub 上运行两个 GitHub Actions 工作流：
 
 1. 复制 `src/i18n/en-US.json` 为新文件并翻译。
 2. 在 `src/i18n/i18n.ts` 中注册（`LANGS`、`LOCALE` 和 `MESSAGES`）。
-3. 添加该语言的 README 和开发指南。
+3. 有几处只为中文做了设置，需要让它们也认识新语言：
+   - `src/i18n/i18n.ts` 中的 `initialLang()`：根据网址、保存的选择或浏览器的语言列表选出最初的语言；
+   - 时钟格式：`src/time/zones.ts` 中的 `fmtClock()`，中文用 24 小时制，其他语言用 12 小时制；
+   - 地图上的地名：`src/map/MapView.tsx` 中的 `applyLabels()`，把矢量底图的地名换成中文。
+4. 添加该语言的 README 和开发指南。
 
 测试会检查每条消息在每种语言中都存在，且占位符一致。

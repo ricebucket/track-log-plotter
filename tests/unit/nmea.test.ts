@@ -10,7 +10,8 @@ const gga = (tod: string, q = 1, sats = '09', hdop = '0.9', alt = '25.4', geoid 
 
 describe('NMEA checksum', () => {
   it('matches a known sentence', () => {
-    expect(nmeaChecksum('GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,')).toBe('47');
+    // The NMEA standard's example GGA (checksum 47), moved to New York City: worked out by hand, every byte XORed.
+    expect(nmeaChecksum('GPGGA,123519,4046.113,N,07358.806,W,1,08,0.9,545.4,M,46.9,M,,')).toBe('55');
   });
 });
 

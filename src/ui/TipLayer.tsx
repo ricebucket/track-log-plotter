@@ -4,7 +4,7 @@
 // in its own bubble after a short pause; moving on to the next element while a
 // bubble is up shows the next one at once. Touch and keyboard use the labels,
 // which keep the text.
-import { useEffect } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 
 /** How long the pointer rests on an element before its hover text shows (ms). */
@@ -108,6 +108,20 @@ export function TipLayer() {
   }, []);
 
   const t = tip.value;
+  const bubble = useRef<HTMLDivElement>(null);
+  // The box around the bubble is as wide as the longest text may be, kept inside the window, and the
+  // bubble is centered in it: near the window's edge the box stops short of centering on the element,
+  // and a short bubble would stand far from it. Once drawn, the bubble moves back over the element,
+  // as far as the window allows.
+  useLayoutEffect(() => {
+    const el = bubble.current;
+    if (!el || !t) return;
+    el.style.transform = '';
+    const r = el.getBoundingClientRect();
+    if (!r.width) return;
+    const left = Math.max(8, Math.min(window.innerWidth - 8 - r.width, t.x - r.width / 2));
+    if (Math.abs(left - r.left) >= 0.5) el.style.transform = `translateX(${Math.round(left - r.left)}px)`;
+  }, [t]);
   if (!t) return null;
   const vw = typeof window === 'undefined' ? 1440 : window.innerWidth;
   const vh = typeof window === 'undefined' ? 900 : window.innerHeight;
@@ -117,7 +131,7 @@ export function TipLayer() {
   const below = t.bottom + 64 < vh;
   return (
     <div class="tip-bubble-wrap" style={{ left: `${left}px`, width: `${W}px`, ...(below ? { top: `${t.bottom + 6}px` } : { bottom: `${vh - t.top + 6}px` }) }} aria-hidden="true">
-      <div class="tip-bubble">{t.text}</div>
+      <div class="tip-bubble" ref={bubble}>{t.text}</div>
     </div>
   );
 }

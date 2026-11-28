@@ -185,8 +185,10 @@ export const selecting = signal(false);
 export const ticked = signal<string[]>([]);
 /** What pressing Combine ran into, shown as a notice: a time zone to check, the same recording twice, logs that may not be one trip. */
 export type ComboNotice =
-  | { kind: 'zone'; id: string; file: string }
-  | { kind: 'duplicate' }
+  /** ids: the tracks ticked, while they share some time as they are: "Combine anyway" combines them. */
+  | { kind: 'zone'; id: string; file: string; ids: string[] | null }
+  /** pair: of three tracks ticked, the two that are one recording. */
+  | { kind: 'duplicate'; pair: [string, string] | null }
   | { kind: 'apart'; track: ComboTrack; ids: string[] }
   | { kind: 'full' }
   | { kind: 'empty' }
@@ -336,7 +338,7 @@ export function applyAll(id: string) {
 function forgetNotices(gone: readonly string[]) {
   if (loadNotice.value && gone.includes(loadNotice.value.id)) loadNotice.value = null;
   const c = comboNotice.value;
-  if (c?.kind === 'zone' && gone.includes(c.id)) comboNotice.value = null;
+  if (c?.kind === 'zone' && (gone.includes(c.id) || c.ids?.some((id) => gone.includes(id)))) comboNotice.value = null;
 }
 
 export function remove(id: string) {
@@ -364,14 +366,20 @@ export function endSelect() {
   batch(() => {
     selecting.value = false;
     ticked.value = [];
-    if (comboNotice.value?.kind === 'apart') comboNotice.value = null;
+    const c = comboNotice.value;
+    if (c?.kind === 'apart') comboNotice.value = null;
+    // Still worth checking, but nothing is ticked to combine anyway.
+    else if (c?.kind === 'zone' && c.ids) comboNotice.value = { ...c, ids: null };
   });
 }
 
 export function toggleTick(id: string) {
   batch(() => {
     ticked.value = ticked.value.includes(id) ? ticked.value.filter((x) => x !== id) : [...ticked.value, id];
-    if (comboNotice.value?.kind === 'apart') comboNotice.value = null;
+    // What Combine ran into was about the tracks ticked before: the time zone is still worth checking.
+    const c = comboNotice.value;
+    if (c?.kind === 'apart') comboNotice.value = null;
+    else if (c?.kind === 'zone' && c.ids) comboNotice.value = { ...c, ids: null };
   });
 }
 
@@ -424,17 +432,29 @@ function combinedName(ids: readonly string[]): string {
  * letter once it is added, else null.
  */
 export function combineTicked(): string | null {
-  const ids = ticked.value;
+  return combineIds(ticked.value, false);
+}
+
+/** "Combine anyway" on the time zone notice: combines the tracks it was about, their clocks as they are. Returns the letter, else null. */
+export function confirmZone(): string | null {
+  const n = comboNotice.value;
+  return n?.kind === 'zone' && n.ids ? combineIds(n.ids, true) : null;
+}
+
+function combineIds(ids: string[], zoneChecked: boolean): string | null {
   const its = ids.map((id) => items.value.find((x) => x.id === id)).filter((x): x is TrackItem => !!x);
-  const c = checkCombine(its.map((x) => x.track));
+  if (its.length !== ids.length) { comboNotice.value = null; return null; }
+  const c = checkCombine(its.map((x) => x.track), zoneChecked);
+  // Of three tracks, the two that are one recording.
+  const pair = (a: number, b: number): [string, string] | null => (its.length > 2 ? [its[a].id, its[b].id] : null);
   if (!c.ok) {
-    if (c.reason === 'zone') comboNotice.value = { kind: 'zone', id: its[c.log].id, file: its[c.log].track.file };
-    else if (c.reason === 'duplicate') comboNotice.value = { kind: 'duplicate' };
+    if (c.reason === 'zone') comboNotice.value = { kind: 'zone', id: its[c.log].id, file: its[c.log].track.file, ids: c.overlap ? [...ids] : null };
+    else if (c.reason === 'duplicate') comboNotice.value = { kind: 'duplicate', pair: pair(c.a, c.b) };
     return null;
   }
   if (items.value.length >= LOAD_LIMIT) { comboNotice.value = { kind: 'full' }; return null; }
   const r = combineTracks(its.map((x) => x.track), { name: combinedName(its.map((x) => x.id)) });
-  if (!r.ok) { comboNotice.value = { kind: r.reason === 'duplicate' || r.reason === 'tooLong' ? r.reason : 'empty' }; return null; }
+  if (!r.ok) { comboNotice.value = r.reason === 'duplicate' ? { kind: 'duplicate', pair: pair(r.a, r.b) } : { kind: r.reason === 'tooLong' ? 'tooLong' : 'empty' }; return null; }
   if (r.apart) { comboNotice.value = { kind: 'apart', track: r.track, ids }; return null; }
   return addCombo(r.track, ids);
 }

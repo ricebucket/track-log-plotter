@@ -282,6 +282,9 @@ export function Timeline() {
   // The room at which the full header last didn't fit after all (a wider font than the estimates allow for):
   // compact at that room or less, until what the header holds changes.
   const [overflowAt, setOverflowAt] = useState(0);
+  // The room at which the compact header last didn't fit: it then drops the date and the track's badge (the ticks
+  // still show the date), at that room or less, until what the header holds changes.
+  const [shortAt, setShortAt] = useState(0);
   useLayoutEffect(() => {
     const el = head.current;
     if (!el) return;
@@ -341,8 +344,10 @@ export function Timeline() {
     return () => ro.disconnect();
   }, [LW]);
 
+  // Every track hidden: nothing to play, and the button (disabled then) says Play again.
+  useEffect(() => { if (none) setPlaying(false); }, [none]);
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || none) return;
     let raf = 0;
     let last = performance.now();
     const step = (now: number) => {
@@ -360,7 +365,7 @@ export function Timeline() {
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [playing, t0, t1]);
+  }, [playing, none, t0, t1]);
 
   // Pointer events can come faster than frames: apply at most one per frame.
   // The cursor snaps to the nearest fix of any shown track, so it never rests
@@ -385,7 +390,7 @@ export function Timeline() {
     });
   };
   // The keyboard steps from fix to fix of any shown track (gaps skipped), a minute with Page Up and Down,
-  // and to either end with Home and End; the slider's own steps of one interval stall at gaps.
+  // and to either end with Home and End; the slider's own steps of one interval would stall at gaps.
   const onScrubKey = (e: KeyboardEvent) => {
     const shown = S.visible.peek(), offs = S.offsets.peek();
     let to: number | null = null;
@@ -400,6 +405,20 @@ export function Timeline() {
     }
     e.preventDefault();
     if (to !== null) moveCursor(Math.min(t1, Math.max(t0, to)));
+  };
+  /**
+   * A new value of the slider other than from its keys (handled above): a screen reader's swipe
+   * (VoiceOver, TalkBack) moves it a step, which near a gap would snap straight back to the fix it
+   * left, so a step goes on to the next fix that way instead, as an arrow key does. The slider keeps
+   * its value on its steps, so one step can come to up to a step and a half from the cursor.
+   */
+  const onScrubInput = (value: number) => {
+    const d = value - cursor;
+    if (d !== 0 && Math.abs(d) <= step * 1.5) {
+      const to = stepFix(cursor, d > 0 ? 1 : -1, S.visible.peek(), S.offsets.peek());
+      if (to !== null) { moveCursor(Math.min(t1, Math.max(t0, to))); return; }
+    }
+    moveCursor(value);
   };
   const moveCursor = (time: number, lane?: string | null) => {
     const shown = S.visible.peek();
@@ -431,15 +450,25 @@ export function Timeline() {
     });
     return best;
   };
-  /** A press on a collapsed lane makes its track the selected one. */
-  const pick = (lane: string | null) => {
-    if (lane && lane !== S.selected.peek()?.id) S.select(lane);
+  /**
+   * A press on a lane moves the cursor there; on a collapsed lane it also makes its track the selected
+   * one. Tracks from different days line up at the selected one's start, so selecting another moves
+   * them all along the timeline: the time pressed is taken in the lane's own clock, and put back on
+   * the timeline as lined up after the selection.
+   */
+  const press = (time: number, lane: string | null) => {
+    if (!lane || lane === S.selected.peek()?.id) { moveCursor(time, lane); return; }
+    const own = time - (S.offsets.peek()[lane] ?? 0);
+    S.select(lane);
+    moveCursor(own + (S.offsets.peek()[lane] ?? 0), lane);
   };
   // A mouse drag across the lanes picks a range to zoom into; a click moves
-  // the cursor. Touch keeps dragging the cursor along.
+  // the cursor. Touch keeps dragging the cursor along. With every track hidden
+  // the lanes have no times on them: they take no input.
   const drag = useRef<{ x0: number; moved: boolean } | null>(null);
   const [band, setBand] = useState<[number, number] | null>(null);
   const onDown = (e: PointerEvent) => {
+    if (none) return;
     if (e.pointerType === 'mouse') {
       if (e.button !== 0 || timeAt(e.clientX) === null) return;
       drag.current = { x0: e.clientX, moved: false };
@@ -448,11 +477,10 @@ export function Timeline() {
     }
     const time = timeAt(e.clientX);
     if (time === null) return;
-    const lane = laneAt(e.clientY);
-    pick(lane);
-    moveCursor(time, lane);
+    press(time, laneAt(e.clientY));
   };
   const onMove = (e: PointerEvent) => {
+    if (none) return;
     const d = drag.current;
     if (d) {
       if (Math.abs(e.clientX - d.x0) > 4) d.moved = true;
@@ -475,7 +503,7 @@ export function Timeline() {
   // labels the page scrolls as usual.
   const onWheel = (e: WheelEvent) => {
     const el = lanesRef.current;
-    if (!el) return;
+    if (!el || none) return;
     const r = el.getBoundingClientRect();
     const at = (e.clientX - r.left - LW) / Math.max(1, r.width - LW);
     if (at < 0 || at > 1) return;
@@ -495,13 +523,11 @@ export function Timeline() {
     const d = drag.current;
     drag.current = null;
     setBand(null);
-    if (!d) return;
+    if (!d || none) return;
     if (!d.moved) {
       const time = timeAt(e.clientX);
       if (time === null) return;
-      const lane = laneAt(e.clientY);
-      pick(lane);
-      moveCursor(time, lane);
+      press(time, laneAt(e.clientY));
       return;
     }
     const a = timeAt(Math.min(d.x0, e.clientX), true)!, b = timeAt(Math.max(d.x0, e.clientX), true)!;
@@ -536,11 +562,17 @@ export function Timeline() {
     if (el && !compact && measured && el.scrollWidth > el.clientWidth + 1) setOverflowAt(room);
   });
   useEffect(() => setOverflowAt(0), [cityShown, multiDay, zoomed, away, loc]);
+  const short = compact && measured && room <= shortAt;
+  useLayoutEffect(() => {
+    const el = head.current;
+    if (el && compact && !short && measured && el.scrollWidth > el.clientWidth + 1) setShortAt(room);
+  });
+  useEffect(() => setShortAt(0), [compact, cityShown, multiDay, zoomed, away, loc]);
   const tight = measured && room < TIGHT_ROOM;
   // The time the readout shows, which the slider reads out too, and its zone's offset then:
   // a track lined up at its start shows its own date, maybe in another season.
   const shownT = selFix ? selFix.t : cursor;
-  const timeText = (multiDay ? fmtDateClock : fmtClock)(shownT, z, loc);
+  const timeText = (multiDay && !short ? fmtDateClock : fmtClock)(shownT, z, loc);
   // Each tick on a round time of the zone's clock at its own time, so a daylight-saving change in
   // view keeps them round. Worked out when the view changes, not on every move of the cursor.
   const tickMarks = useMemo(() => {
@@ -554,11 +586,11 @@ export function Timeline() {
 
   return (
     <section class="timeline" ref={pane} aria-label={t('timeline.label')}>
-      <div class={`tl-head${tight ? ' is-tight' : ''}${tight && room < TIGHTEST_ROOM ? ' is-tightest' : ''}`} ref={head}>
+      <div class={`tl-head${tight ? ' is-tight' : ''}${tight && room < TIGHTEST_ROOM ? ' is-tightest' : ''}${short ? ' is-short' : ''}`} ref={head}>
         <button type="button" class="round-btn" disabled={none} aria-label={playing ? t('timeline.pause') : t('timeline.play')} title={playing ? t('timeline.pause') : t('timeline.play')} onClick={() => setPlaying(!playing)}>
           {playing ? <IconPause /> : <IconPlay />}
         </button>
-        {cur && <Badge item={cur} size="small" />}
+        {!none && cur && !short && <Badge item={cur} size="small" />}
         {/* Read out as it changes, but not during playback, when it changes all the time. */}
         {none ? <span class="muted tl-none" role="status">{t('timeline.noTrack')}</span> : (
           <>
@@ -587,7 +619,7 @@ export function Timeline() {
             <button type="button" class="icon-btn outline" aria-label={zoomed ? t('map.fitZoomed') : t('map.fit')} title={zoomed ? t('map.fitZoomed') : t('map.fit')} onClick={() => mapApi.fit(zoomed ? [t0, t1] : undefined)}>
               <IconFit size={15} />
             </button>
-            <ZoneButton iconOnly={multiDay || (measured && room < ZONE_NAME_ROOM)} />
+            <ZoneButton iconOnly={multiDay || short || (measured && room < ZONE_NAME_ROOM)} />
           </>
         ) : (
           <>
@@ -637,7 +669,7 @@ export function Timeline() {
         {!none && (
           <input
             class="sr-only" type="range" aria-label={t('timeline.scrub')} aria-valuetext={timeText} min={t0} max={t1} step={step} value={cursor}
-            onInput={(e) => moveCursor(Number((e.currentTarget as HTMLInputElement).value))}
+            onInput={(e) => onScrubInput(Number((e.currentTarget as HTMLInputElement).value))}
             onKeyDown={onScrubKey}
           />
         )}

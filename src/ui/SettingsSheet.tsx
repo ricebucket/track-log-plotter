@@ -23,14 +23,17 @@ export function SettingsSheet() {
   const ref = useRef<HTMLDivElement>(null);
   const close = () => { S.picker.value = null; };
   useDismiss(ref, close, '[data-picker-trigger]');
-  // Start on the measure that colors the track, so the arrow keys move from there.
-  useEffect(() => { ref.current?.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.focus(); }, [p?.id]);
-  // Escape (and Done) put the focus back on the card that opened the sheet.
+  // Start on the measure that colors the track (not the halo's, which may be listed above it), so the arrow keys move from there.
+  useEffect(() => { if (p) ref.current?.querySelector<HTMLInputElement>(`input[name="color-${p.id}"]:checked`)?.focus(); }, [p?.id]);
+  // When the sheet closes with the focus inside (Escape; Done does it itself), the focus goes back to the card that
+  // opened it. Not on an Escape that only closes an explanation over it.
   useEffect(() => {
     if (!p) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') document.getElementById(`sc-${p.id}-btn`)?.focus(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    const sheet = ref.current, id = p.id;
+    return () => {
+      const at = document.activeElement;
+      if (!at || at === document.body || sheet?.contains(at)) document.getElementById(`sc-${id}-btn`)?.focus();
+    };
   }, [p?.id]);
   if (!item) return null;
 

@@ -202,6 +202,27 @@ test("shows a track's name in full on hover, with its file's line from the prope
   expect((await tip.innerText()).split('\n')).toEqual(['short.gpx', expect.stringMatching(/^GPX · \d+ KB · /)]);
 });
 
+test('keeps a hover bubble over its button by the edges of the window', async ({ page }) => {
+  await open(page, 'central-park-loop.nmea');
+  await mapSettled(page);
+  await page.getByRole('button', { name: 'Minimize the panel' }).click();
+  const vw = page.viewportSize()!.width;
+  const tip = page.locator('.tip-bubble');
+  // The map's buttons and the timeline's minimize button by the right edge, the panel's button by the left.
+  for (const name of ['Zoom in', 'Zoom out', 'Minimize the timeline', 'Show the panel']) {
+    const b = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
+    const x = b.x + b.width / 2;
+    await page.mouse.move(x, b.y + b.height / 2);
+    await expect(tip).toHaveText(name);
+    const t = (await tip.boundingBox())!;
+    // Across the button's middle, and inside the window.
+    expect(t.x, name).toBeLessThanOrEqual(x + 2);
+    expect(t.x + t.width, name).toBeGreaterThanOrEqual(x - 2);
+    expect(t.x, name).toBeGreaterThanOrEqual(0);
+    expect(t.x + t.width, name).toBeLessThanOrEqual(vw);
+  }
+});
+
 test('renames a track in place: a text box right where its name was, and the new name wherever the track is named', async ({ page }) => {
   await open(page, 'central-park-loop.nmea', 'central-park-loop-vendor.gpx');
   const row = page.locator('.track-row[data-track="B"]');
@@ -383,12 +404,12 @@ test('closes the fix card with its button and with a click on an empty spot', as
 });
 
 test("keeps the timeline's Fit label on one line in Chinese at every width: the readout gives way instead", async ({ page }) => {
-  // "缩放" may break between its two characters, where "Fit" can't break at all. The walk's readout is long.
+  // "全览" may break between its two characters, where "Fit" can't break at all. The walk's readout is long.
   await page.evaluate(() => localStorage.setItem('tlp.prefs.v1', JSON.stringify({ lang: 'zh' })));
   await page.reload();
   await open(page, 'lower-manhattan-walk.gpx');
   await mapSettled(page);
-  const fit = page.locator('.tl-head .btn-outline', { hasText: '缩放' });
+  const fit = page.locator('.tl-head .btn-outline', { hasText: '全览' });
   let seen = 0;
   for (const width of [1440, 1280, 1120, 1024, 960, 900, 860, 820, 780, 740]) {
     await page.setViewportSize({ width, height: 1000 });

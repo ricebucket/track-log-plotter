@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Component, createElement, type FunctionComponent, type RefObject } from 'preact';
 
 /** Phone-sized screens. */
@@ -18,34 +18,45 @@ export function useMedia(query: string): boolean {
   return on;
 }
 
+/** The popovers open, oldest first: an Escape closes only the newest. */
+const openPopovers: object[] = [];
+
 /**
  * Calls close() on Escape or on a pointer press outside the element.
  * `except` is the button that opens the popover, as a ref or a CSS selector:
  * a press on it is left to the button's own click, which closes the popover.
  * Otherwise the press would close it and the click would open it again.
- * The Escape that closes it is marked as used (its default prevented), so
- * what Escape does otherwise, such as ending select mode, waits for the next.
+ * One layer per Escape: it closes this popover only when no newer one is open
+ * and nothing on top (an explanation) has used it. The Escape that closes it
+ * is marked as used (its default prevented), so what Escape does otherwise,
+ * such as ending select mode, waits for the next.
  */
 export function useDismiss(ref: RefObject<HTMLElement | null>, close: () => void, except?: RefObject<HTMLElement | null> | string) {
+  // Read when needed, so the popover keeps its place among those open however often it renders.
+  const latest = useRef({ close, except });
+  latest.current = { close, except };
   useEffect(() => {
+    const me = {};
+    openPopovers.push(me);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || e.defaultPrevented || openPopovers[openPopovers.length - 1] !== me) return;
       e.preventDefault();
-      close();
+      latest.current.close();
     };
     const onDown = (e: PointerEvent) => {
-      const target = e.target as Node;
+      const target = e.target as Node, skip = latest.current.except;
       if (ref.current?.contains(target)) return;
-      if (typeof except === 'string' ? (target as Element).closest?.(except) : except?.current?.contains(target)) return;
-      close();
+      if (typeof skip === 'string' ? (target as Element).closest?.(skip) : skip?.current?.contains(target)) return;
+      latest.current.close();
     };
     document.addEventListener('keydown', onKey);
     document.addEventListener('pointerdown', onDown, true);
     return () => {
+      openPopovers.splice(openPopovers.indexOf(me), 1);
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('pointerdown', onDown, true);
     };
-  }, [ref, close, except]);
+  }, [ref]);
 }
 
 /**

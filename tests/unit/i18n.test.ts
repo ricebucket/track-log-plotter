@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { initialLang, MESSAGES, placeholders, translate } from '../../src/i18n/i18n';
+import { initialLang, LANGS, LOCALE, MESSAGES, placeholders, translate, type Lang } from '../../src/i18n/i18n';
 import { MEASURES, type FieldKey, type Note, type ParseResult, type Problem, type SpeedUnit } from '../../src/model/types';
 import { BASEMAP_IDS } from '../../src/map/basemaps';
 import type { Units } from '../../src/format';
 import type { scaleBar } from '../../src/ui/scaleBar';
 import { ROOT } from '../helpers/fixtures';
 import * as S from '../../src/state/store';
-import { labeled, noteText } from '../../src/ui/labels';
+import { labeled, noteText, problemBody, problemTitle } from '../../src/ui/labels';
 import { searchZones } from '../../src/time/zones';
 
-const en = MESSAGES.en, zh = MESSAGES.zh;
+const en = MESSAGES.en;
 
 /** Every value of a string union, checked by the compiler: one missing, or one too many, doesn't compile. */
 const every = <K extends string>(values: Record<K, true>) => Object.keys(values) as K[];
@@ -31,7 +31,7 @@ function builtKeys(): Set<string> {
   const unused = ['satsInView', 'heartRate', 'cadence', 'temperature', 'power', 'depth', 'distance'];
   const speedUnits = every<SpeedUnit>({ ms: true, kmh: true, knots: true, mph: true });
   const scaleUnits = every<ReturnType<typeof scaleBar>['unit']>({ m: true, km: true, ft: true, mi: true });
-  const errors = every<Extract<ParseResult, { ok: false }>['error']>({ unknownFormat: true, empty: true, tooBig: true, unreadable: true });
+  const errors = every<Extract<ParseResult, { ok: false }>['error']>({ unknownFormat: true, empty: true, noTimes: true, tooBig: true, unreadable: true });
   const units = every<Units>({ metric: true, imperial: true });
   return new Set([
     ...[...MEASURES, 'none'].map((k) => `measure.${k}`), ...MEASURES.map((k) => `measure.${k}.long`),
@@ -57,18 +57,19 @@ function files(dir: string, out: string[] = []): string[] {
 
 describe('translations', () => {
   it('defines each key once in each file (a second one would quietly replace the first)', () => {
-    for (const f of ['en-US.json', 'zh-CN.json']) {
+    for (const lang of LANGS) {
+      const f = `${LOCALE[lang]}.json`;
       const keys = [...readFileSync(join(ROOT, 'src', 'i18n', f), 'utf8').matchAll(/^\s*"([^"]+)"\s*:/gm)].map((m) => m[1]);
       expect(keys.filter((k, i) => keys.indexOf(k) !== i), f).toEqual([]);
     }
   });
 
-  it('has every key in both languages', () => {
-    expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());
+  it('has every key in every language', () => {
+    for (const lang of LANGS) expect(Object.keys(MESSAGES[lang]).sort(), lang).toEqual(Object.keys(en).sort());
   });
 
-  it('uses the same placeholders in both languages', () => {
-    for (const k of Object.keys(en)) expect(placeholders(zh[k]), k).toEqual(placeholders(en[k]));
+  it('uses the same placeholders in every language', () => {
+    for (const lang of LANGS) for (const k of Object.keys(en)) expect(placeholders(MESSAGES[lang][k]), `${lang}: ${k}`).toEqual(placeholders(en[k]));
   });
 
   it('picks plural forms', () => {
@@ -103,6 +104,47 @@ describe('translations', () => {
     S.lang.value = 'en';
   });
 
+  it('words a reading problem for one and for several', () => {
+    const body = (lang: Lang, kind: 'checksum' | 'backwards' | 'jump', count: number) => { S.lang.value = lang; return problemBody({ kind, count, line: 7 }); };
+    expect(body('en', 'checksum', 1)).toBe("At line 7. It was skipped, since its numbers can't be trusted.");
+    expect(body('en', 'checksum', 3)).toBe("Starting at line 7. They were skipped, since their numbers can't be trusted.");
+    expect(body('en', 'backwards', 1)).toBe('At line 7. It was left out, so the track only moves forward in time.');
+    expect(body('en', 'backwards', 3)).toBe('Starting at line 7. They were left out, so the track only moves forward in time.');
+    expect(body('en', 'jump', 1)).toBe('At line 7, a fix sits farther from its neighbors than anything could travel. It was left out.');
+    expect(body('en', 'jump', 3)).toBe('Starting at line 7, fixes sit farther from their neighbors than anything could travel. They were left out.');
+    // Chinese has one form, worded to fit any count.
+    expect(body('zh', 'checksum', 1)).toBe('从第 7 行开始。这类语句的数值不可信，已跳过。');
+    expect(body('zh', 'jump', 3)).toBe('从第 7 行开始，有定位点离前后的定位点太远，任何移动都不可能这么快。已略去。');
+    S.lang.value = 'en';
+  });
+
+  it('groups large counts in notes and problems, and still picks the plural form by the count', () => {
+    const note = (lang: Lang, n: Note) => { S.lang.value = lang; return noteText(n); };
+    const title = (lang: Lang, p: Problem) => { S.lang.value = lang; return problemTitle(p); };
+    expect(note('en', { kind: 'void', count: 1 })).toBe('1 fix without a position was skipped.');
+    expect(note('en', { kind: 'void', count: 12_345 })).toBe('12,345 fixes without a position were skipped.');
+    expect(note('zh', { kind: 'void', count: 12_345 })).toBe('跳过了 12,345 个没有位置的定位点。');
+    expect(note('en', { kind: 'zeroSats', count: 2000, stale: 1 })).toBe('2,000 fixes report 0 satellites used; 1 of them repeats the previous position.');
+    expect(note('en', { kind: 'zeroSats', count: 2000, stale: 1500 })).toBe('2,000 fixes report 0 satellites used; 1,500 of them repeat the previous position.');
+    expect(note('en', { kind: 'repeatsDropped', count: 1200, long: 1 })).toMatch(/^1,200 fixes that only repeated .* 1 stretch longer than 2 minutes counts as a gap\.$/);
+    expect(title('en', { kind: 'checksum', count: 1, line: 7 })).toBe('1 sentence failed its checksum');
+    expect(title('en', { kind: 'checksum', count: 1500, line: 7 })).toBe('1,500 sentences failed their checksums');
+    expect(title('zh', { kind: 'backwards', count: 1500, line: 7 })).toBe('1,500 个定位点时间倒退');
+    // Line numbers stay as an editor shows them.
+    S.lang.value = 'en';
+    expect(problemBody({ kind: 'truncated', line: 12_001, chars: 12, kept: 12_000 })).toBe(
+      'Line 12001 stops after 12 characters, without a line break: the logger probably stopped mid-write. That line was skipped; the 12,000 fixes before it loaded.');
+  });
+
+  it('says how long the longest gap lasts, as the Duration row writes a time', () => {
+    const note = (lang: Lang, count: number, longestS: number) => { S.lang.value = lang; return noteText({ kind: 'gaps', count, longestS }); };
+    expect(note('en', 1, 45)).toBe('1 gap without fixes, lasting 0:45.');
+    expect(note('en', 2, 43_210.4)).toBe('2 gaps without fixes; the longest lasts 12:00:10.');
+    expect(note('en', 1500, 600)).toBe('1,500 gaps without fixes; the longest lasts 10:00.');
+    expect(note('zh', 2, 43_210.4)).toBe('有 2 段没有定位的中断，最长 12:00:10。');
+    S.lang.value = 'en';
+  });
+
   it("says whether a speed unit is the file's own, the one its numbers match, a guess, or picked", () => {
     const text = (lang: 'en' | 'zh', n: Note) => { S.lang.value = lang; return noteText(n); };
     const unit = (u: SpeedUnit, inferred: boolean, more: { unsure?: true; chosen?: true } = {}): Note => ({ kind: 'speedUnit', unit: u, inferred, ...more });
@@ -117,6 +159,32 @@ describe('translations', () => {
     // The guess names the properties page's section by its heading.
     for (const lang of ['en', 'zh'] as const) expect(text(lang, unit('ms', true, { unsure: true }))).toContain(`“${translate(lang, 'details.speedUnit')}”`);
     S.lang.value = 'en';
+  });
+
+  it('never lists the file types the app reads: not on the start card, the drop overlay or the unknown-file notice', () => {
+    // A file's own format still shows on its badge, and the Google hints name the files Google takes.
+    for (const lang of LANGS) {
+      const keys = Object.keys(MESSAGES[lang]).filter((k) => k.startsWith('empty.') || k === 'drop.overlay' || k === 'toast.error.unknownFormat');
+      expect(keys.length, lang).toBeGreaterThan(5);
+      for (const k of keys) expect(`${k}: ${JSON.stringify(MESSAGES[lang][k])}`).not.toMatch(/GPX|NMEA|Fusion|CSV/);
+    }
+    expect(translate('en', 'toast.error.unknownFormat', { file: 'a.kml' })).toBe("a.kml isn't a track log this app can read.");
+    expect(translate('zh', 'drop.overlay')).toBe('松开即可打开轨迹记录');
+    // Nor do the READMEs (they had "Supports GPX…, NMEA and Columbus Fusion (CSV)" and named them in four more places).
+    for (const f of ['README.md', 'README.zh-CN.md']) expect(readFileSync(join(ROOT, f), 'utf8'), f).not.toMatch(/GPX|NMEA|Fusion|CSV/);
+  });
+
+  it('says "this device" rather than "this computer", which reads oddly on a phone (Chinese has 本机)', () => {
+    expect(JSON.stringify(MESSAGES.en)).not.toMatch(/computer/i);
+    expect([translate('en', 'empty.privacy'), translate('en', 'clock.thisDevice'), translate('zh', 'clock.thisDevice')]).toEqual(['Your files stay on this device. Nothing is uploaded.', "This device's time zone", '本机的时区']);
+  });
+
+  it('calls Fit 全览 in Chinese, not 缩放 (zoom), and the button that centers the picked fix "Go to the fix"', () => {
+    // 缩放 sat beside 重置缩放 (Reset zoom) and the map's 放大 and 缩小; nothing else in the app says cursor (光标).
+    expect(['map.fit', 'map.fitShort', 'map.fitZoomed'].map((k) => translate('zh', k))).toEqual(['全览轨迹', '全览', '在地图上全览时间轴放大的部分']);
+    expect([translate('en', 'timeline.toPoint'), translate('zh', 'timeline.toPoint')]).toEqual(['Go to the fix', '转到定位点']);
+    expect(JSON.stringify(MESSAGES.en)).not.toMatch(/cursor/i);
+    expect(JSON.stringify(MESSAGES.zh)).not.toMatch(/光标/);
   });
 
   it('joins a label and its text with each language\'s own colon', () => {

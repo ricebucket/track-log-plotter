@@ -213,6 +213,14 @@ describe('Columbus Fusion logs', () => {
     const r = parseText(HEAD + 'T,260614,130500,40.7681,-73.9812,25,10,90\r\n,,130501,40.7682,-73.9811,25,10,90\r\n', 'log.CSV');
     expect(r.ok && r.track.format).toBe('fusion');
   });
+
+  it('says a log with positions but no times has no times, not merely no fixes', () => {
+    const timeless = parseText(HEAD + 'T,,,40.7681,-73.9812,25,10,90\r\n,,,40.7682,-73.9811,25,10,90\r\n', 'log.CSV');
+    expect(timeless).toEqual({ ok: false, file: 'log.CSV', error: 'noTimes' });
+    // A time that can't be read counts as none; times without positions are no fixes.
+    expect(parseText(HEAD + 'T,260614,1305,40.7681,-73.9812,25,10,90\r\n', 'log.CSV')).toEqual({ ok: false, file: 'log.CSV', error: 'noTimes' });
+    expect(parseText(HEAD + 'T,260614,130500,,,25,10,90\r\n,,130501,,,25,10,90\r\n', 'log.CSV')).toEqual({ ok: false, file: 'log.CSV', error: 'empty' });
+  });
 });
 
 describe('GPX routes with times', () => {
